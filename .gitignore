@@ -1,0 +1,11 @@
+node_modules
+.env
+.env.*
+!.env.example
+dist
+build
+.svelte-kit
+.DS_Store
+uploads
+*.log
+apps/web/static/models

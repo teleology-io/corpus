@@ -1,0 +1,30 @@
+{
+	"name": "@corpus/db",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./schema": "./src/schema/index.ts",
+		"./notify": "./src/notify.ts",
+		"./access": "./src/access.ts",
+		"./connections": "./src/connections.ts",
+		"./apps": "./src/apps.ts"
+	},
+	"scripts": {
+		"generate": "drizzle-kit generate",
+		"migrate": "drizzle-kit migrate",
+		"studio": "drizzle-kit studio",
+		"check": "tsc -p ."
+	},
+	"dependencies": {
+		"drizzle-orm": "^0.45.4",
+		"postgres": "^3.4.9",
+		"dotenv": "^17.2.0",
+		"@corpus/core": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/node": "^22",
+		"drizzle-kit": "^0.31.11",
+		"typescript": "^6.0.3"
+	}
+}

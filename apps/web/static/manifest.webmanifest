@@ -1,0 +1,9 @@
+{
+	"name": "Corpus",
+	"short_name": "Corpus",
+	"start_url": "/dashboard",
+	"display": "standalone",
+	"background_color": "#f7f8fa",
+	"theme_color": "#2C87F2",
+	"icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

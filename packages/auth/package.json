@@ -1,0 +1,25 @@
+{
+	"name": "@corpus/auth",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./client": "./src/client.ts"
+	},
+	"scripts": {
+		"check": "tsc -p .",
+		"generate-schema": "auth generate --config src/index.ts --output ../db/src/schema/auth.ts -y"
+	},
+	"dependencies": {
+		"@corpus/db": "workspace:*",
+		"better-auth": "^1.7.11",
+		"drizzle-orm": "^0.45.4",
+		"nodemailer": "^10.1.7"
+	},
+	"devDependencies": {
+		"@types/node": "^22",
+		"@types/nodemailer": "^7.0.12",
+		"auth": "latest",
+		"typescript": "^6.0.3"
+	}
+}

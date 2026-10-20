@@ -22,11 +22,16 @@
 		onpick: (i: number) => void;
 		kind: 'slash' | 'mention';
 	} = $props();
+
+	let buttons: HTMLButtonElement[] = $state([]);
+	// Keep the keyboard-selected item visible when arrowing past the menu's scroll height.
+	$effect(() => buttons[selected]?.scrollIntoView({ block: 'nearest' }));
 </script>
 
 <div class="menu max-h-80 w-64 overflow-y-auto">
 	{#each items as item, i (item.id)}
 		<button
+			bind:this={buttons[i]}
 			class="menu-item {i === selected ? 'bg-canvas' : ''}"
 			onmousedown={(e) => (e.preventDefault(), onpick(i))}
 		>

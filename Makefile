@@ -37,7 +37,7 @@ env: $(INSTALLED) ## Create .env with generated secrets (never overwrites existi
 	@node scripts/setup-env.mjs
 
 models: ## Download the speech model for note dictation (skips if present)
-	@node scripts/fetch-vosk-model.mjs
+	@node scripts/fetch-asr-model.mjs
 
 services: ## Start Postgres + Mailpit and wait until healthy
 	docker compose up -d --wait

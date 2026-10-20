@@ -255,7 +255,7 @@ export function SlashCommand(opts: SlashOpts) {
 					pluginKey: new PluginKey('slash'),
 					startOfLine: false,
 					items: ({ query }) =>
-						all.filter((i) => i.title.toLowerCase().includes(query.toLowerCase())).slice(0, 12),
+						all.filter((i) => i.title.toLowerCase().includes(query.toLowerCase())),
 					command: ({ editor, range, props }) => props.run(editor, range),
 					render: menuRenderer<SlashItem>('slash')
 				})

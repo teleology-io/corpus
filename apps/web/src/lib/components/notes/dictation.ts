@@ -1,28 +1,45 @@
 import { Extension, type Editor } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import type { Model, KaldiRecognizer } from 'vosk-browser';
+/** Keep in sync with VERSION in scripts/fetch-asr-model.mjs (`make models`). */
+const ASR_VERSION = 'v1.13.7';
+const ASR_BASE = `/sherpa/${ASR_VERSION}/`;
 
-/** Served from static/; fetched by `make models` (see scripts/fetch-vosk-model.mjs). */
-export const MODEL_PATH = '/models/vosk-model-small-en-us-0.15.tar.gz';
+type WorkerMsg =
+	| { type: 'progress'; loaded: number; total: number }
+	| { type: 'ready' | 'flushed' }
+	| { type: 'partial' | 'final'; text: string }
+	| { type: 'error'; message: string };
 
-// The model (~40MB, decoded into a WASM worker) is loaded once per tab and reused.
-let modelPromise: Promise<Model> | null = null;
+/**
+ * sherpa-onnx streaming Zipformer in a worker (static/asr-worker.js). Single-threaded WASM,
+ * so no cross-origin isolation headers are needed. Loaded once per tab and reused.
+ */
+let engine: Promise<Worker> | null = null;
+let progressListener: ((fraction: number) => void) | null = null;
 
-function loadModel() {
-	modelPromise ??= (async () => {
-		// Vosk runs in a blob worker, so the URL must be absolute. Probe first: a missing
-		// model makes the worker error without ever resolving createModel.
-		const url = new URL(MODEL_PATH, location.origin).href;
-		const probe = await fetch(url, { method: 'HEAD' });
-		if (!probe.ok) throw new Error('Speech model not installed — run `make models`');
-		const { createModel } = await import('vosk-browser');
-		return createModel(url);
-	})().catch((e) => {
-		modelPromise = null;
+function loadEngine() {
+	engine ??= new Promise<Worker>((resolve, reject) => {
+		const worker = new Worker('/asr-worker.js');
+		const onInit = ({ data }: MessageEvent<WorkerMsg>) => {
+			if (data.type === 'progress' && data.total) progressListener?.(data.loaded / data.total);
+			if (data.type === 'ready') {
+				worker.removeEventListener('message', onInit);
+				resolve(worker);
+			}
+			if (data.type === 'error') {
+				worker.terminate();
+				reject(new Error(data.message));
+			}
+		};
+		worker.addEventListener('message', onInit);
+		worker.onerror = (e) => (worker.terminate(), reject(new Error(e.message)));
+		worker.postMessage({ type: 'init', base: ASR_BASE });
+	}).catch((e) => {
+		engine = null;
 		throw e;
 	});
-	return modelPromise;
+	return engine;
 }
 
 // Batches 128-frame render quanta into ~4k-sample chunks before posting to the main thread.
@@ -53,20 +70,42 @@ export interface DictationHandlers {
 	onstatus: (s: DictationStatus) => void;
 	onpartial: (text: string) => void;
 	onresult: (text: string) => void;
+	/** 0..1 model download progress (first use only) */
+	onprogress?: (fraction: number) => void;
 	/** 0..1 input level, for the meter */
 	onlevel?: (level: number) => void;
 	onerror: (message: string) => void;
 }
 
-/** One mic → Vosk streaming session. Call start() once, stop() to flush and release. */
+/** The model emits upper-case text; normalise to sentence-ready lower case. */
+const tidy = (text: string) => text.toLowerCase().replace(/\bi\b/g, 'I');
+
+/** One mic → sherpa-onnx streaming session. Call start() once, stop() to flush and release. */
 export class Dictation {
 	private stream: MediaStream | null = null;
 	private ctx: AudioContext | null = null;
-	private recognizer: KaldiRecognizer | null = null;
+	private worker: Worker | null = null;
 	private flushed: (() => void) | null = null;
 	private cancelled = false;
 
 	constructor(private h: DictationHandlers) {}
+
+	private onMessage = ({ data }: MessageEvent<WorkerMsg>) => {
+		if (data.type === 'partial') this.h.onpartial(tidy(data.text));
+		else if (data.type === 'final') {
+			this.h.onresult(tidy(data.text));
+			this.h.onpartial('');
+		} else if (data.type === 'flushed') this.flushed?.();
+		else if (data.type === 'error') {
+			// A WASM abort leaves the engine unusable; drop it so the next start reloads it.
+			this.worker?.terminate();
+			engine = null;
+			this.h.onerror(data.message);
+			// Mid-stop: let stop() finish releasing; mid-listen: release now.
+			if (this.flushed) this.flushed();
+			else this.release();
+		}
+	};
 
 	async start() {
 		this.h.onstatus('loading');
@@ -75,7 +114,9 @@ export class Dictation {
 			this.stream = await navigator.mediaDevices.getUserMedia({
 				audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
 			});
-			const model = await loadModel();
+			progressListener = this.h.onprogress ?? null;
+			const worker = await loadEngine();
+			progressListener = null;
 			if (this.cancelled) return this.release();
 
 			this.ctx = new AudioContext();
@@ -84,35 +125,24 @@ export class Dictation {
 			URL.revokeObjectURL(blob);
 			if (this.cancelled) return this.release();
 
-			const rec = new model.KaldiRecognizer(this.ctx.sampleRate);
-			this.recognizer = rec;
-			rec.on('partialresult', (m) => {
-				if (m.event === 'partialresult') this.h.onpartial(m.result.partial);
-			});
-			rec.on('result', (m) => {
-				if (m.event !== 'result') return;
-				if (m.result.text) this.h.onresult(m.result.text);
-				this.h.onpartial('');
-				this.flushed?.();
-			});
-			rec.on('error', (m) => {
-				if (m.event === 'error') this.h.onerror(m.error);
-			});
-
+			this.worker = worker;
+			worker.addEventListener('message', this.onMessage);
 			const source = this.ctx.createMediaStreamSource(this.stream);
 			const tap = new AudioWorkletNode(this.ctx, 'dictation-tap');
 			const sampleRate = this.ctx.sampleRate;
 			tap.port.onmessage = (e: MessageEvent<Float32Array>) => {
-				rec.acceptWaveformFloat(e.data, sampleRate);
 				if (this.h.onlevel) {
 					let sum = 0;
 					for (const s of e.data) sum += s * s;
 					this.h.onlevel(Math.min(1, Math.sqrt(sum / e.data.length) * 6));
 				}
+				// sherpa-onnx resamples to 16kHz itself.
+				worker.postMessage({ type: 'audio', samples: e.data, sampleRate }, [e.data.buffer]);
 			};
 			source.connect(tap);
 			this.h.onstatus('listening');
 		} catch (e) {
+			progressListener = null;
 			this.release();
 			const err = e as Error;
 			this.h.onerror(
@@ -125,16 +155,16 @@ export class Dictation {
 
 	async stop() {
 		this.cancelled = true;
-		if (!this.recognizer) return this.release();
+		if (!this.worker) return this.release();
 		this.h.onstatus('stopping');
-		// Stop feeding audio, then ask Vosk for whatever's left in its buffer.
+		// Stop feeding audio, then have the recognizer finish the utterance in flight.
 		this.stream?.getTracks().forEach((t) => t.stop());
 		await this.ctx?.close();
 		this.ctx = null;
 		await new Promise<void>((resolve) => {
-			const timer = setTimeout(resolve, 1500);
+			const timer = setTimeout(resolve, 3000);
 			this.flushed = () => (clearTimeout(timer), resolve());
-			this.recognizer!.retrieveFinalResult();
+			this.worker!.postMessage({ type: 'flush' });
 		});
 		this.release();
 	}
@@ -142,10 +172,10 @@ export class Dictation {
 	private release() {
 		this.stream?.getTracks().forEach((t) => t.stop());
 		void this.ctx?.close();
-		this.recognizer?.remove();
+		this.worker?.removeEventListener('message', this.onMessage);
 		this.stream = null;
 		this.ctx = null;
-		this.recognizer = null;
+		this.worker = null;
 		this.flushed = null;
 		this.h.onpartial('');
 		this.h.onlevel?.(0);

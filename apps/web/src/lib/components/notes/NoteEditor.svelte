@@ -11,6 +11,7 @@
 	import BubbleMenu from '@tiptap/extension-bubble-menu';
 	import DragHandle from '@tiptap/extension-drag-handle';
 	import Collaboration from '@tiptap/extension-collaboration';
+	import { Markdown } from '@tiptap/markdown';
 	import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 	import { HocuspocusProvider } from '@hocuspocus/provider';
 	import * as Y from 'yjs';
@@ -35,6 +36,7 @@
 		setPartial,
 		type DictationStatus
 	} from './dictation.js';
+	import { markdownFromPaste } from './markdown-paste.js';
 	import type { MenuItem } from './SuggestionMenu.svelte';
 	import { toast } from '#lib/stores/toast.svelte.js';
 
@@ -76,6 +78,7 @@
 	let dictation: Dictation | null = null;
 	let dictStatus = $state<DictationStatus>('idle');
 	let dictLevel = $state(0);
+	let dictProgress = $state<number | null>(null);
 	const dictating = $derived(dictStatus !== 'idle');
 	const hasSelection = $derived((void tick, editor ? !editor.state.selection.empty : false));
 
@@ -86,6 +89,7 @@
 		dictation = new Dictation({
 			onstatus: (s) => {
 				dictStatus = s;
+				if (s !== 'loading') dictProgress = null;
 				if (s === 'idle') dictation = null;
 				// The bubble doubles as the dictation control, so keep it up (at the caret) while live.
 				if (!ed.isDestroyed)
@@ -98,6 +102,7 @@
 			},
 			onpartial: (t) => setPartial(ed, t),
 			onresult: (t) => insertTranscript(ed, t),
+			onprogress: (f) => (dictProgress = f),
 			onlevel: (l) => (dictLevel = l),
 			onerror: (message) => toast('Dictation failed', { tone: 'error', body: message })
 		});
@@ -200,6 +205,7 @@
 				}),
 				SlashCommand({ onImage: () => fileInput.click(), onDictate: toggleDictation }),
 				DictationPreview,
+				Markdown,
 				BubbleMenu.configure({
 					element: bubble,
 					// Starts invisible (see markup); the plugin toggles visibility and positions it.
@@ -228,8 +234,13 @@
 				},
 				handlePaste: (_view, event) => {
 					const files = [...(event.clipboardData?.files ?? [])];
-					if (!files.some((f) => f.type.startsWith('image/'))) return false;
-					void insertFiles(files);
+					if (files.some((f) => f.type.startsWith('image/'))) {
+						void insertFiles(files);
+						return true;
+					}
+					const md = editor && markdownFromPaste(editor, event.clipboardData);
+					if (!md || !editor?.markdown) return false;
+					editor.chain().focus().insertContent(editor.markdown.parse(md)).run();
 					return true;
 				},
 				handleDrop: (view, event) => {
@@ -351,7 +362,9 @@
 		{#if dictating}
 			<span class="text-[11px] font-medium">
 				{dictStatus === 'loading'
-					? 'Loading…'
+					? dictProgress !== null && dictProgress < 1
+						? `Downloading model ${Math.round(dictProgress * 100)}%`
+						: 'Loading…'
 					: dictStatus === 'stopping'
 						? 'Finishing…'
 						: 'Listening'}

@@ -1,36 +1,36 @@
 {
-	"repos": [
-		{
-			"id": "corpus",
-			"name": "corpus",
-			"path": "/Users/csullivan/Desktop/corpus",
-			"mainBranch": "main",
-			"dependsOn": [],
-			"worktreeIn": "/Users/csullivan/Desktop",
-			"prefix": "corpus-",
-			"overrides": "",
-			"setup": "",
-			"link": [],
-			"copy": [],
-			"env": {},
-			"steps": [],
-			"services": []
-		},
-		{
-			"id": ".",
-			"name": ".",
-			"path": ".",
-			"mainBranch": "main",
-			"dependsOn": [],
-			"worktreeIn": ".",
-			"prefix": ".-",
-			"overrides": "",
-			"setup": "",
-			"link": [],
-			"copy": [],
-			"env": {},
-			"steps": [],
-			"services": []
-		}
-	]
+  "repos": [
+    {
+      "id": "corpus",
+      "name": "corpus",
+      "path": "/Users/csullivan/Desktop/corpus",
+      "mainBranch": "main",
+      "dependsOn": [],
+      "worktreeIn": "/Users/csullivan/Desktop",
+      "prefix": "corpus-",
+      "overrides": "",
+      "setup": "",
+      "link": [],
+      "copy": [],
+      "env": {},
+      "steps": [],
+      "services": []
+    },
+    {
+      "id": ".",
+      "name": ".",
+      "path": ".",
+      "mainBranch": "main",
+      "dependsOn": [],
+      "worktreeIn": ".",
+      "prefix": ".-",
+      "overrides": "",
+      "setup": "",
+      "link": [],
+      "copy": [],
+      "env": {},
+      "steps": [],
+      "services": []
+    }
+  ]
 }

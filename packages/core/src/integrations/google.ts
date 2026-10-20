@@ -1,3 +1,4 @@
+import { createSign } from 'node:crypto';
 import { atLocal, localDate, toWallClock } from '../time';
 import { ruleUntil } from '../recurrence';
 import type { Provider, TokenSet } from './types';
@@ -145,6 +146,14 @@ export const gcal = {
 			method: 'PATCH',
 			body,
 			query: { sendUpdates: 'none' }
+		});
+	},
+
+	/** Adds a calendar shared with this account to its calendar list (service accounts start empty). */
+	subscribe(token: string, calendarId: string) {
+		return call<GCalendar>(token, '/users/me/calendarList', {
+			method: 'POST',
+			body: { id: calendarId }
 		});
 	},
 
@@ -362,6 +371,75 @@ async function tokenRequest(params: Record<string, string>): Promise<TokenSet> {
 		expiresAt: body.expires_in ? new Date(Date.now() + body.expires_in * 1000) : null,
 		scopes: body.scope ?? null
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Service accounts (JWT bearer grant, no OAuth app needed)
+// ---------------------------------------------------------------------------
+
+export interface ServiceAccountKey {
+	client_email: string;
+	private_key: string;
+	token_uri?: string;
+}
+
+/** What we store (encrypted) for a service-account connection. */
+export interface ServiceAccountCredential {
+	key: ServiceAccountKey;
+	/** Workspace user to impersonate via domain-wide delegation; omitted = act as the SA itself. */
+	subject?: string | null;
+}
+
+/** Validates a downloaded service account key file. Throws Error with a user-facing message. */
+export function parseServiceAccount(json: string): ServiceAccountKey {
+	let data: Record<string, unknown>;
+	try {
+		data = JSON.parse(json);
+	} catch {
+		throw new Error('That isn’t valid JSON');
+	}
+	if (data.type !== 'service_account')
+		throw new Error('Not a service account key (expected "type": "service_account")');
+	if (typeof data.client_email !== 'string' || typeof data.private_key !== 'string')
+		throw new Error('Key file is missing client_email or private_key');
+	return {
+		client_email: data.client_email,
+		private_key: data.private_key,
+		token_uri: typeof data.token_uri === 'string' ? data.token_uri : undefined
+	};
+}
+
+const b64url = (v: string | Buffer) => Buffer.from(v).toString('base64url');
+
+/** Signed RS256 assertion for the JWT bearer grant (RFC 7523). */
+export function serviceAccountAssertion(cred: ServiceAccountCredential, now = Date.now()): string {
+	const iat = Math.floor(now / 1000);
+	const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+	const claims = b64url(
+		JSON.stringify({
+			iss: cred.key.client_email,
+			scope: SCOPES.join(' '),
+			aud: 'https://oauth2.googleapis.com/token',
+			iat,
+			exp: iat + 3600,
+			...(cred.subject ? { sub: cred.subject } : {})
+		})
+	);
+	const signature = createSign('RSA-SHA256')
+		.update(`${header}.${claims}`)
+		.sign(cred.key.private_key, 'base64url');
+	return `${header}.${claims}.${signature}`;
+}
+
+/** Mints a fresh 1h access token from a service account key. */
+export function serviceAccountToken(cred: ServiceAccountCredential): Promise<TokenSet> {
+	let assertion: string;
+	try {
+		assertion = serviceAccountAssertion(cred);
+	} catch {
+		throw new ProviderAuthError('Service account private key is invalid');
+	}
+	return tokenRequest({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion });
 }
 
 export const googleCalendar: Provider = {

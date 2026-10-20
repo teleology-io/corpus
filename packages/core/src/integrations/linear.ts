@@ -14,6 +14,8 @@ const QUERY = `query {
 	}
 }`;
 
+const PREVIEW = `query($id: String!) { issue(id: $id) { description } }`;
+
 interface Issue {
 	id: string;
 	identifier: string;
@@ -28,7 +30,11 @@ interface Issue {
 	project: { name: string } | null;
 }
 
-async function gql<T>(token: string, query: string): Promise<T> {
+async function gql<T>(
+	token: string,
+	query: string,
+	variables?: Record<string, unknown>
+): Promise<T> {
 	const res = await fetch('https://api.linear.app/graphql', {
 		method: 'POST',
 		headers: {
@@ -36,7 +42,7 @@ async function gql<T>(token: string, query: string): Promise<T> {
 			Authorization: token.startsWith('lin_api_') ? token : `Bearer ${token}`,
 			'Content-Type': 'application/json'
 		},
-		body: JSON.stringify({ query })
+		body: JSON.stringify({ query, variables })
 	});
 	if (res.status === 401) throw new ProviderAuthError('Linear token rejected');
 	const body = (await res.json()) as {
@@ -140,5 +146,10 @@ export const linear: Provider = {
 			cursor: { ...cursor, polledAt: new Date().toISOString() },
 			pollIntervalSec: 60
 		};
+	},
+	async preview(token, externalId) {
+		const id = externalId.slice(externalId.indexOf(':') + 1);
+		const data = await gql<{ issue: { description: string | null } }>(token, PREVIEW, { id });
+		return { format: 'markdown', body: data.issue.description?.trim() || null };
 	}
 };

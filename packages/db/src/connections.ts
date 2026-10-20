@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { decrypt, encrypt } from '@corpus/core/crypto';
-import { getProvider } from '@corpus/core/integrations';
+import { getProvider, serviceAccountToken } from '@corpus/core/integrations';
 import { encryptionKey, oauthConfig } from './apps';
 import { db } from './index';
 import { integrationConnection as conn } from './schema/index';
@@ -15,10 +15,16 @@ export async function accessToken(c: Conn): Promise<string> {
 	const token = decrypt(c.accessToken, key);
 	const expiring = c.tokenExpiresAt && c.tokenExpiresAt.getTime() < Date.now() + 60_000;
 	if (!expiring || !c.refreshToken) return token;
-	const provider = getProvider(c.provider);
-	const cfg = await oauthConfig(c.provider);
-	if (!provider?.refresh || !cfg) return token;
-	const next = await provider.refresh(cfg, decrypt(c.refreshToken, key));
+	let next;
+	if (c.authType === 'service_account') {
+		// refreshToken holds the encrypted service account credential; mint a new token from it.
+		next = await serviceAccountToken(JSON.parse(decrypt(c.refreshToken, key)));
+	} else {
+		const provider = getProvider(c.provider);
+		const cfg = await oauthConfig(c.provider);
+		if (!provider?.refresh || !cfg) return token;
+		next = await provider.refresh(cfg, decrypt(c.refreshToken, key));
+	}
 	await db
 		.update(conn)
 		.set({

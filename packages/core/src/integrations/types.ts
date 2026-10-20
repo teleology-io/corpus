@@ -15,6 +15,12 @@ export interface ExternalItem {
 	payload?: Record<string, unknown>;
 }
 
+/** Full description of one item, fetched when the user opens a preview. */
+export interface ItemPreview {
+	format: 'html' | 'markdown';
+	body: string | null;
+}
+
 export interface TokenSet {
 	accessToken: string;
 	refreshToken?: string | null;
@@ -58,6 +64,8 @@ export interface Provider {
 	account(token: string): Promise<AccountInfo>;
 	/** Item-feed providers (GitHub, Linear). Sync providers (Google, Slack) have workers of their own. */
 	poll?(token: string, cursor: Record<string, string>): Promise<PollResult>;
+	/** Description of one polled item (externalId as returned by poll). */
+	preview?(token: string, externalId: string): Promise<ItemPreview>;
 }
 
 export class ProviderAuthError extends Error {}

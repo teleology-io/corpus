@@ -22,8 +22,11 @@
 	import TokenConnectModal, {
 		type TokenTarget
 	} from '#lib/components/integrations/TokenConnectModal.svelte';
+	import ServiceAccountModal from '#lib/components/integrations/ServiceAccountModal.svelte';
+	import ItemPreviewModal from '#lib/components/integrations/ItemPreviewModal.svelte';
 	import { api } from '#lib/api.js';
 	import { attempt, toast } from '#lib/stores/toast.svelte.js';
+	import type { IntegrationItemDTO } from '#lib/types.js';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -34,6 +37,11 @@
 	let tokenOpen = $state(false);
 	let tokenTarget = $state<TokenTarget | null>(null);
 
+	let saOpen = $state(false);
+	let previewOpen = $state(false);
+	let previewItem = $state<IntegrationItemDTO | null>(null);
+
+	const preview = (i: IntegrationItemDTO) => ((previewItem = i), (previewOpen = true));
 	const setupApp = (p: AppTarget) => ((appTarget = p), (appOpen = true));
 	function connectToken(p: (typeof data.catalog)[number]) {
 		if (!p.personalToken) return;
@@ -157,7 +165,13 @@
 								>
 							{/if}
 							{#if p.id === 'google-calendar' && c.status === 'active'}
-								<GoogleCalendars connectionId={c.id} />
+								<GoogleCalendars
+									connectionId={c.id}
+									shareWith={c.authType === 'service_account' &&
+									c.accountLogin?.endsWith('.gserviceaccount.com')
+										? c.accountLogin
+										: null}
+								/>
 							{/if}
 							<label class="flex items-center justify-between"
 								>{NOTIFY_LABEL[p.id] ?? 'Notify me about new items'}
@@ -179,7 +193,11 @@
 							>
 						{/if}
 						<div class="mt-2 flex gap-2">
-							{#if c.status === 'error' && c.authType === 'token'}
+							{#if c.status === 'error' && c.authType === 'service_account'}
+								<button class="btn-primary h-8 flex-1 text-xs" onclick={() => (saOpen = true)}
+									>Update key</button
+								>
+							{:else if c.status === 'error' && c.authType === 'token'}
 								<button class="btn-primary h-8 flex-1 text-xs" onclick={() => connectToken(p)}
 									>Update token</button
 								>
@@ -212,8 +230,17 @@
 									<button class="btn-ghost h-8 w-full text-xs" onclick={() => connectToken(p)}
 										>Use a {p.personalToken.label.toLowerCase()} instead</button
 									>
+								{:else if p.id === 'google-calendar'}
+									<button class="btn-ghost h-8 w-full text-xs" onclick={() => (saOpen = true)}
+										>Use a service account instead</button
+									>
 								{/if}
 							{:else}
+								{#if p.id === 'google-calendar'}
+									<button class="btn-primary h-9 w-full" onclick={() => (saOpen = true)}
+										>Connect with a service account</button
+									>
+								{/if}
 								{#if p.personalToken}
 									<button class="btn-primary h-9 w-full" onclick={() => connectToken(p)}
 										>Connect with {p.personalToken.label.toLowerCase()}</button
@@ -221,11 +248,13 @@
 								{/if}
 								{#if data.isAdmin}
 									<button
-										class="h-9 w-full {p.personalToken ? 'btn-ghost text-xs' : 'btn-outline'}"
+										class="h-9 w-full {p.personalToken || p.id === 'google-calendar'
+											? 'btn-ghost text-xs'
+											: 'btn-outline'}"
 										onclick={() => setupApp(p)}
 										><Settings2 class="size-3.5" /> Set up OAuth app</button
 									>
-								{:else if !p.personalToken}
+								{:else if !p.personalToken && p.id !== 'google-calendar'}
 									<p class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
 										An admin needs to set up {p.name} before you can connect it.
 									</p>
@@ -267,12 +296,12 @@
 				<ul class="divide-y divide-line">
 					{#each items as i (i.id)}
 						{@const k = KIND[i.kind as keyof typeof KIND]}
-						<li>
+						<li class="flex items-center hover:bg-canvas/60">
 							<a
 								href={i.url}
 								target="_blank"
 								rel="noreferrer"
-								class="flex items-center gap-3 px-4 py-3 hover:bg-canvas/60"
+								class="flex min-w-0 flex-1 items-center gap-3 py-3 pl-4"
 							>
 								<BrandIcon name={i.provider} class="size-4 shrink-0" />
 								{#if k}<span class="chip shrink-0 bg-canvas text-muted"
@@ -287,6 +316,12 @@
 								<span class="hidden shrink-0 text-xs text-muted sm:block">{ago(i.updatedAt)}</span>
 								<ExternalLink class="size-3.5 shrink-0 text-muted" />
 							</a>
+							<button
+								class="mx-2 btn-icon size-8 shrink-0"
+								aria-label="Preview"
+								title="Preview"
+								onclick={() => preview(i)}><Eye class="size-3.5" /></button
+							>
 						</li>
 					{/each}
 				</ul>
@@ -306,3 +341,5 @@
 
 <AppSetupModal bind:open={appOpen} target={appTarget} />
 <TokenConnectModal bind:open={tokenOpen} target={tokenTarget} />
+<ServiceAccountModal bind:open={saOpen} />
+<ItemPreviewModal bind:open={previewOpen} item={previewItem} />

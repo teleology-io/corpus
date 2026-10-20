@@ -18,6 +18,13 @@ const SEARCH_FIELDS = `
 		}
 	}`;
 
+const PREVIEW = `query($id: ID!) {
+	node(id: $id) {
+		... on PullRequest { bodyHTML }
+		... on Issue { bodyHTML }
+	}
+}`;
+
 const QUERY = `query {
 	viewer { login }
 	reviews: search(type: ISSUE, first: 50, query: "is:open is:pr review-requested:@me archived:false") { ${SEARCH_FIELDS} }
@@ -40,7 +47,11 @@ interface Node {
 	labels?: { nodes: { name: string; color: string }[] };
 }
 
-async function gql<T>(token: string, query: string): Promise<T> {
+async function gql<T>(
+	token: string,
+	query: string,
+	variables?: Record<string, unknown>
+): Promise<T> {
 	const res = await fetch('https://api.github.com/graphql', {
 		method: 'POST',
 		headers: {
@@ -48,7 +59,7 @@ async function gql<T>(token: string, query: string): Promise<T> {
 			'Content-Type': 'application/json',
 			'User-Agent': 'corpus-app'
 		},
-		body: JSON.stringify({ query })
+		body: JSON.stringify({ query, variables })
 	});
 	if (res.status === 401) throw new ProviderAuthError('GitHub token rejected');
 	if (!res.ok) throw new Error(`GitHub ${res.status}: ${await res.text()}`);
@@ -172,5 +183,10 @@ export const github: Provider = {
 			cursor: { ...cursor, polledAt: new Date().toISOString() },
 			pollIntervalSec: 60
 		};
+	},
+	async preview(token, externalId) {
+		const id = externalId.slice(externalId.indexOf(':') + 1);
+		const data = await gql<{ node: { bodyHTML?: string } | null }>(token, PREVIEW, { id });
+		return { format: 'html', body: data.node?.bodyHTML?.trim() || null };
 	}
 };

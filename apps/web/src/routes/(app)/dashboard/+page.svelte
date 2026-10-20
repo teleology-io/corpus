@@ -23,6 +23,7 @@
 	import AvatarStack from '#lib/components/ui/AvatarStack.svelte';
 	import BrandIcon from '#lib/components/ui/BrandIcon.svelte';
 	import EmptyState from '#lib/components/ui/EmptyState.svelte';
+	import ItemPreviewModal from '#lib/components/integrations/ItemPreviewModal.svelte';
 	import { api } from '#lib/api.js';
 	import { attempt, toast } from '#lib/stores/toast.svelte.js';
 	import { formatDay, formatTime, tint } from '#lib/calendar.js';
@@ -83,6 +84,9 @@
 
 	const isPast = (iso: string) => new Date(iso) < now;
 	const isNow = (start: string, end: string) => new Date(start) <= now && now < new Date(end);
+	let previewOpen = $state(false);
+	let previewItem = $state<IntegrationItemDTO | null>(null);
+	const preview = (i: IntegrationItemDTO) => ((previewItem = i), (previewOpen = true));
 	const itemMeta = (i: IntegrationItemDTO) => [i.subtitle, i.state].filter(Boolean).join(' · ');
 </script>
 
@@ -344,12 +348,12 @@
 							</p>
 							<ul class="divide-y divide-line/70">
 								{#each g.items.slice(0, 6) as i (i.id)}
-									<li>
+									<li class="group flex items-center hover:bg-canvas/60">
 										<a
 											href={i.url}
 											target="_blank"
 											rel="noreferrer"
-											class="flex items-start gap-2.5 py-2 hover:bg-canvas/60"
+											class="flex min-w-0 flex-1 items-start gap-2.5 py-2"
 										>
 											<BrandIcon name={i.provider} class="mt-0.5 size-4 shrink-0 text-ink" />
 											<span class="min-w-0">
@@ -357,6 +361,12 @@
 												<span class="block truncate text-[11px] text-muted">{itemMeta(i)}</span>
 											</span>
 										</a>
+										<button
+											class="btn-icon size-7 shrink-0 group-hover:opacity-100 focus-visible:opacity-100 sm:opacity-0 pointer-coarse:opacity-100"
+											aria-label="Preview"
+											title="Preview"
+											onclick={() => preview(i)}><Eye class="size-3.5" /></button
+										>
 									</li>
 								{/each}
 							</ul>
@@ -438,3 +448,5 @@
 		</section>
 	</div>
 </div>
+
+<ItemPreviewModal bind:open={previewOpen} item={previewItem} />

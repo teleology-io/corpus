@@ -1,8 +1,10 @@
+import { generateKeyPairSync, createVerify } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { decrypt, encrypt } from '../src/crypto';
 import { dedupeKey, inQuietHours, resolvePrefs } from '../src/notify';
 import { diffItems, itemHash } from '../src/integrations/diff';
 import type { ExternalItem } from '../src/integrations/types';
+import { parseServiceAccount, serviceAccountAssertion } from '../src/integrations/google';
 
 describe('crypto', () => {
 	it('round-trips and rejects tampering', () => {
@@ -68,5 +70,41 @@ describe('signed tokens', async () => {
 		expect(verifyToken(t, 's')).toMatchObject({ u: '1' });
 		expect(verifyToken(t, 'other')).toBeNull();
 		expect(verifyToken(signToken({ u: '1' }, 's', -1), 's')).toBeNull();
+	});
+});
+
+describe('google service account', () => {
+	const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+	const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+	const file = JSON.stringify({
+		type: 'service_account',
+		client_email: 'sync@proj.iam.gserviceaccount.com',
+		private_key: pem
+	});
+
+	it('validates key files', () => {
+		expect(parseServiceAccount(file).client_email).toBe('sync@proj.iam.gserviceaccount.com');
+		expect(() => parseServiceAccount('nope')).toThrow(/valid JSON/);
+		expect(() => parseServiceAccount('{"type":"authorized_user"}')).toThrow(/service account/);
+	});
+
+	it('signs a verifiable RS256 assertion with optional subject', () => {
+		const key = parseServiceAccount(file);
+		const jwt = serviceAccountAssertion({ key, subject: 'me@corp.com' }, 1_700_000_000_000);
+		const [h, c, sig] = jwt.split('.');
+		const claims = JSON.parse(Buffer.from(c!, 'base64url').toString());
+		expect(claims).toMatchObject({
+			iss: key.client_email,
+			sub: 'me@corp.com',
+			aud: 'https://oauth2.googleapis.com/token',
+			iat: 1_700_000_000,
+			exp: 1_700_003_600
+		});
+		const ok = createVerify('RSA-SHA256').update(`${h}.${c}`).verify(publicKey, sig!, 'base64url');
+		expect(ok).toBe(true);
+		const noSub = serviceAccountAssertion({ key });
+		expect(
+			JSON.parse(Buffer.from(noSub.split('.')[1]!, 'base64url').toString())
+		).not.toHaveProperty('sub');
 	});
 });

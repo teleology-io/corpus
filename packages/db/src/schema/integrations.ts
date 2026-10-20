@@ -35,7 +35,10 @@ export const integrationConnection = pgTable(
 		refreshToken: text('refresh_token'),
 		tokenExpiresAt: tstz('token_expires_at'),
 		scopes: text('scopes'),
-		/** oauth (via the instance's OAuth app) | token (user-pasted personal token / API key) */
+		/**
+		 * oauth (via the instance's OAuth app) | token (user-pasted personal token / API key) |
+		 * service_account (Google key file; refresh_token holds the encrypted credential)
+		 */
 		authType: text('auth_type').notNull().default('oauth'),
 		/** Provider-specific poll cursor (etag, last-modified, updatedAt...) */
 		cursor: jsonb('cursor').$type<Record<string, string>>().notNull().default({}),

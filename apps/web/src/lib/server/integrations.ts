@@ -10,7 +10,11 @@ import {
 	envPrefix,
 	gcal,
 	getProvider,
+	googleCalendar,
+	parseServiceAccount,
+	serviceAccountToken,
 	type OAuthConfig,
+	type ServiceAccountCredential,
 	type Provider
 } from '@corpus/core/integrations';
 import type { IntegrationItemDTO } from '#lib/types.js';
@@ -50,6 +54,40 @@ export async function connectWithToken(userId: string, providerId: string, token
 	return saveConnection(userId, providerId, { accessToken: token }, account, 'token');
 }
 
+/**
+ * Connects Google Calendar with a service account key file. With `subject` the SA impersonates
+ * that Workspace user (domain-wide delegation); without, it sees calendars shared with its email.
+ */
+export async function connectServiceAccount(userId: string, json: string, subject?: string | null) {
+	let cred: ServiceAccountCredential;
+	try {
+		cred = { key: parseServiceAccount(json), subject: subject || null };
+	} catch (e) {
+		error(400, (e as Error).message);
+	}
+	let tokens, account;
+	try {
+		tokens = await serviceAccountToken(cred);
+		account = await googleCalendar.account(tokens.accessToken);
+	} catch (e) {
+		if (e instanceof ProviderAuthError || e instanceof GoogleApiError)
+			error(
+				400,
+				`Google rejected the service account: ${e.message}${
+					cred.subject ? ' — check domain-wide delegation for the calendar scope.' : ''
+				}`
+			);
+		throw e;
+	}
+	return saveConnection(
+		userId,
+		'google-calendar',
+		{ ...tokens, refreshToken: JSON.stringify(cred) },
+		{ login: cred.subject || account.login, avatarUrl: null },
+		'service_account'
+	);
+}
+
 /** Integrations are per user (workspace_id stays null until org integrations exist). */
 export async function listConnections(userId: string) {
 	return db
@@ -80,7 +118,7 @@ export async function saveConnection(
 		scopes?: string | null;
 	},
 	account: { login: string; avatarUrl?: string | null },
-	authType: 'oauth' | 'token' = 'oauth'
+	authType: 'oauth' | 'token' | 'service_account' = 'oauth'
 ) {
 	const key = encryptionKey();
 	const values = {
@@ -157,6 +195,23 @@ export async function googleCalendars(userId: string, id: string) {
 		.sort((a, b) => Number(b.primary) - Number(a.primary) || a.name.localeCompare(b.name));
 }
 
+/** Adds a calendar shared with a service account to its list and starts syncing it. */
+export async function addGoogleCalendar(userId: string, id: string, calendarId: string) {
+	const row = await ownConnection(userId, id);
+	if (row.provider !== 'google-calendar') error(400, 'Not a Google Calendar connection');
+	try {
+		await gcal.subscribe(await accessToken(row), calendarId);
+	} catch (e) {
+		if (e instanceof GoogleApiError && (e.status === 404 || e.status === 403))
+			error(400, `Calendar not found — share it with ${row.accountLogin} first.`);
+		if (e instanceof ProviderAuthError)
+			error(401, 'Google rejected the connection — reconnect it.');
+		throw e;
+	}
+	const calendars = [...new Set([...(row.settings.calendars ?? []), calendarId])];
+	await updateConnectionSettings(userId, id, { calendars });
+}
+
 export async function disconnect(userId: string, id: string) {
 	await ownConnection(userId, id);
 	await db.delete(conn).where(eq(conn.id, id));
@@ -190,4 +245,24 @@ export async function openItems(
 		.orderBy(desc(item.externalUpdatedAt))
 		.limit(opts.limit ?? 100);
 	return rows.map((r) => ({ ...r, updatedAt: r.updatedAt?.toISOString() ?? null }));
+}
+
+/** Live description of one open item, fetched from the provider on demand. */
+export async function itemPreview(userId: string, itemId: string) {
+	const [row] = await db
+		.select({ externalId: item.externalId, connection: conn })
+		.from(item)
+		.innerJoin(conn, eq(item.connectionId, conn.id))
+		.where(and(eq(item.id, itemId), eq(conn.userId, userId)))
+		.limit(1);
+	if (!row) error(404, 'Item not found');
+	const provider = getProvider(row.connection.provider);
+	if (!provider?.preview) error(404, 'Preview not available');
+	try {
+		return await provider.preview(await accessToken(row.connection), row.externalId);
+	} catch (e) {
+		if (e instanceof ProviderAuthError)
+			error(401, `${provider.name} rejected the connection — reconnect it to preview.`);
+		throw e;
+	}
 }

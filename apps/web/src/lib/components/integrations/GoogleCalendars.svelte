@@ -13,19 +13,48 @@
 		selected: boolean;
 	}
 
-	let { connectionId }: { connectionId: string } = $props();
+	let {
+		connectionId,
+		shareWith = null
+	}: {
+		connectionId: string;
+		/** Service account email: its calendars must be shared with it and added by ID. */
+		shareWith?: string | null;
+	} = $props();
 
 	let list = $state<GoogleCalendar[] | null>(null);
 	let failed = $state<string | null>(null);
 	let saving = $state(false);
+	let newId = $state('');
 
-	onMount(async () => {
+	async function load() {
 		try {
 			list = await api<GoogleCalendar[]>(`/api/integrations/${connectionId}/calendars`);
 		} catch (e) {
 			failed = (e as Error).message;
 		}
-	});
+	}
+
+	onMount(load);
+
+	async function add(e: SubmitEvent) {
+		e.preventDefault();
+		const calendarId = newId.trim();
+		if (!calendarId) return;
+		saving = true;
+		const ok = await attempt(
+			() =>
+				api(`/api/integrations/${connectionId}/calendars`, { body: { calendarId } }).then(
+					() => true
+				),
+			'Could not add calendar'
+		);
+		saving = false;
+		if (!ok) return;
+		newId = '';
+		toast('Calendar added', { body: 'Events appear in My Calendar shortly.' });
+		await load();
+	}
 
 	async function toggle(cal: GoogleCalendar) {
 		if (!list) return;
@@ -78,5 +107,20 @@
 				</li>
 			{/each}
 		</ul>
+	{/if}
+	{#if shareWith && !failed}
+		<p class="text-muted">
+			Share a calendar with <span class="font-medium break-all text-ink">{shareWith}</span>, then
+			add its ID (Google Calendar → Settings → Integrate calendar).
+		</p>
+		<form class="flex gap-1.5" onsubmit={add}>
+			<input
+				class="input h-7 min-w-0 flex-1 text-xs"
+				placeholder="Calendar ID (e.g. team@group.calendar.google.com)"
+				bind:value={newId}
+				disabled={saving}
+			/>
+			<button class="btn-outline h-7 text-xs" disabled={saving || !newId.trim()}>Add</button>
+		</form>
 	{/if}
 </div>

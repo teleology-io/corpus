@@ -8,7 +8,8 @@
 		"./notify": "./src/notify.ts",
 		"./access": "./src/access.ts",
 		"./connections": "./src/connections.ts",
-		"./apps": "./src/apps.ts"
+		"./apps": "./src/apps.ts",
+		"./storage": "./src/storage.ts"
 	},
 	"scripts": {
 		"generate": "drizzle-kit generate",
@@ -17,10 +18,12 @@
 		"check": "tsc -p ."
 	},
 	"dependencies": {
-		"drizzle-orm": "^0.45.4",
-		"postgres": "^3.4.9",
+		"@aws-sdk/client-s3": "^3.1154.0",
+		"@aws-sdk/s3-request-presigner": "^3.1154.0",
+		"@corpus/core": "workspace:*",
 		"dotenv": "^17.2.0",
-		"@corpus/core": "workspace:*"
+		"drizzle-orm": "^0.45.4",
+		"postgres": "^3.4.9"
 	},
 	"devDependencies": {
 		"@types/node": "^22",

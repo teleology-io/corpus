@@ -5,7 +5,8 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./integrations": "./src/integrations/index.ts",
-		"./crypto": "./src/crypto.ts"
+		"./crypto": "./src/crypto.ts",
+		"./telescope": "./src/telescope.ts"
 	},
 	"scripts": {
 		"check": "tsc -p .",

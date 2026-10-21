@@ -4,6 +4,7 @@ import { DELIVERY_CHANNEL } from '@corpus/db/notify';
 import { tick } from './scheduler';
 import { cleanup, deliverPending } from './delivery';
 import { pollDue } from './integrations';
+import { purgeStaleRecordings } from './telescope';
 
 const POLL_CHANNEL = 'corpus_poll';
 
@@ -37,11 +38,13 @@ boss.on('error', (e) => console.error('[pg-boss]', e));
 await boss.start();
 
 // Cron-driven jobs: pg-boss guarantees one run per minute across all worker instances.
-for (const q of ['tick', 'cleanup']) await boss.createQueue(q);
+for (const q of ['tick', 'cleanup', 'telescope-cleanup']) await boss.createQueue(q);
 await boss.schedule('tick', '* * * * *');
 await boss.schedule('cleanup', '17 3 * * *');
+await boss.schedule('telescope-cleanup', '41 * * * *');
 await boss.work('tick', async () => tick());
 await boss.work('cleanup', async () => cleanup());
+await boss.work('telescope-cleanup', async () => purgeStaleRecordings());
 
 // Deliveries: woken by NOTIFY from notify(), with a periodic sweep for retries.
 const deliver = serial('deliver', deliverPending);

@@ -4,3 +4,4 @@ export * from './planner';
 export * from './notes';
 export * from './notifications';
 export * from './integrations';
+export * from './telescope';

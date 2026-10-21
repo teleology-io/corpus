@@ -10,6 +10,7 @@ const PUBLIC_PATHS = [
 	'/sign-up',
 	'/two-factor',
 	'/share/',
+	'/v/',
 	'/uploads/',
 	'/api/auth/',
 	'/calendar/feed/',

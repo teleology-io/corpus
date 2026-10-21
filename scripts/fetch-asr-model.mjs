@@ -1,5 +1,6 @@
 // Downloads the sherpa-onnx WebAssembly build (streaming Zipformer, English) used by note
-// dictation into apps/web/static/sherpa/<version>. Skips the download when already present.
+// dictation and Telescope transcripts into apps/web/static/sherpa/<version>. Skips the
+// download when already present.
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';

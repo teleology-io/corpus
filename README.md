@@ -47,6 +47,37 @@ Create OAuth apps and set the env vars:
 
 Connected accounts are polled about every 60 s; review requests and assigned issues become tasks in your personal workspace and show live on the dashboard.
 
+### Telescope (screen recordings)
+
+**Telescope** in the sidebar records your whole desktop, a window, or a browser tab, plus an optional mic and camera bubble. It runs in any desktop browser on any OS.
+
+- **Browser support:** tab capture and tab audio need Chrome or Edge. Whole-desktop system audio works in Chrome/Edge on Windows only; elsewhere, share a tab for audio. Phones can watch recordings but can't record a screen.
+- **Transcription:** after you stop, the browser transcribes the recording with the same sherpa-onnx model dictation uses (`make models`). No audio is sent to a server. It is English only, with one timestamp per phrase.
+- **Sharing:** videos start private. Under **Share**, turn on _Anyone with the link_ to get a `/v/<token>` URL. Turning it off disables the URL; _Reset link_ swaps it for a new one.
+- **Views:** each viewer counts once, after 2 seconds of playback. Signed-in viewers are counted by account and anonymous viewers by a cookie. The owner's own plays don't count.
+
+Every storage setting starts with `STORAGE_` (see `.env.example`). `STORAGE_DRIVER=local` keeps files in `STORAGE_VIDEO_DIR`, which is fine for dev. For production, use Cloudflare R2:
+
+1. In the Cloudflare dashboard, go to **R2** → **Create bucket** and name it `corpus-telescope` (or set `STORAGE_BUCKET`). Leave public access **off**; all access goes through short-lived presigned URLs.
+2. Go to **R2 → Manage API tokens** and create a token with **Object Read & Write**, limited to that bucket. Copy the Access Key ID and Secret into `STORAGE_ACCESS_KEY_ID` / `STORAGE_SECRET_ACCESS_KEY`, and your account ID into `STORAGE_ACCOUNT_ID`.
+3. Go to **Bucket → Settings → CORS policy**. Browsers upload directly to the bucket, so this step is required:
+   ```json
+   [
+   	{
+   		"AllowedOrigins": ["http://localhost:5173", "https://your-domain"],
+   		"AllowedMethods": ["PUT", "GET", "HEAD"],
+   		"AllowedHeaders": ["content-type"],
+   		"ExposeHeaders": ["ETag"],
+   		"MaxAgeSeconds": 3600
+   	}
+   ]
+   ```
+   `ExposeHeaders: ETag` is required; without it every upload fails at the last step.
+4. Go to **Bucket → Settings → Object lifecycle rules** and add _Abort incomplete multipart uploads after 1 day_.
+5. Set `STORAGE_DRIVER=r2` and restart. Missing `STORAGE_*` values cause a descriptive error on the first Telescope request.
+
+The worker removes recordings that never finished uploading (24 h old) every hour.
+
 ## Scripts
 
 `pnpm check` (typecheck all) · `pnpm test` (core unit tests) · `pnpm lint` · `pnpm format` · `pnpm db:generate` (after schema changes) · `pnpm db:studio`

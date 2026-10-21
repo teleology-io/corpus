@@ -7,22 +7,22 @@ const ASR_BASE = `/sherpa/${ASR_VERSION}/`;
 
 type WorkerMsg =
 	| { type: 'progress'; loaded: number; total: number }
-	| { type: 'ready' | 'flushed' }
-	| { type: 'partial' | 'final'; text: string }
+	| { type: 'ready' | 'flushed' | 'ack' }
+	| { type: 'partial'; text: string }
+	| { type: 'final'; text: string; start: number; end: number }
 	| { type: 'error'; message: string };
+export type AsrMessage = WorkerMsg;
 
 /**
- * sherpa-onnx streaming Zipformer in a worker (static/asr-worker.js). Single-threaded WASM,
- * so no cross-origin isolation headers are needed. Loaded once per tab and reused.
+ * Spins up a sherpa-onnx streaming Zipformer worker (static/asr-worker.js) and resolves once
+ * the model is loaded. Single-threaded WASM, so no cross-origin isolation headers are needed;
+ * the model files come from the Cache API after the first download.
  */
-let engine: Promise<Worker> | null = null;
-let progressListener: ((fraction: number) => void) | null = null;
-
-function loadEngine() {
-	engine ??= new Promise<Worker>((resolve, reject) => {
+export function createAsrWorker(onprogress?: (fraction: number) => void) {
+	return new Promise<Worker>((resolve, reject) => {
 		const worker = new Worker('/asr-worker.js');
 		const onInit = ({ data }: MessageEvent<WorkerMsg>) => {
-			if (data.type === 'progress' && data.total) progressListener?.(data.loaded / data.total);
+			if (data.type === 'progress' && data.total) onprogress?.(data.loaded / data.total);
 			if (data.type === 'ready') {
 				worker.removeEventListener('message', onInit);
 				resolve(worker);
@@ -35,7 +35,15 @@ function loadEngine() {
 		worker.addEventListener('message', onInit);
 		worker.onerror = (e) => (worker.terminate(), reject(new Error(e.message)));
 		worker.postMessage({ type: 'init', base: ASR_BASE });
-	}).catch((e) => {
+	});
+}
+
+/** Dictation shares one worker per tab. */
+let engine: Promise<Worker> | null = null;
+let progressListener: ((fraction: number) => void) | null = null;
+
+function loadEngine() {
+	engine ??= createAsrWorker((f) => progressListener?.(f)).catch((e) => {
 		engine = null;
 		throw e;
 	});

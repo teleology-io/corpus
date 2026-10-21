@@ -4,8 +4,13 @@
 // in:  { type: 'init', base }            base = '/sherpa/<version>/'
 //      { type: 'audio', samples, sampleRate }
 //      { type: 'flush' }                  finish the current utterance
+//      { type: 'reset' }                  start over at t=0 (next recorded file)
 // out: { type: 'progress', loaded, total } | { type: 'ready' } | { type: 'error', message }
-//      { type: 'partial', text } | { type: 'final', text } | { type: 'flushed' }
+//      { type: 'partial', text } | { type: 'final', text, start, end } | { type: 'flushed' }
+//      { type: 'ack' }                    after an audio message sent with ack: true
+//
+// start/end are seconds of audio fed since init/reset — dictation ignores them, Telescope uses
+// them to timestamp transcript segments while it feeds a recorded file faster than real time.
 
 const DATA = 'sherpa-onnx-wasm-main-asr.data';
 const WASM = 'sherpa-onnx-wasm-main-asr.wasm';
@@ -15,6 +20,9 @@ let stream = null;
 let last = '';
 // sherpa-onnx aborts if the sample rate changes mid-stream, so padding must match the input.
 let sampleRate = 16000;
+// Seconds of audio accepted so far, and where the utterance in flight started.
+let fed = 0;
+let segStart = null;
 
 /** Fetches through the Cache API so the ~190MB model survives reloads, reporting progress. */
 async function cachedFetch(url, cacheName, onProgress) {
@@ -116,8 +124,9 @@ function decode() {
 }
 
 function finish(text) {
-	if (text) postMessage({ type: 'final', text });
+	if (text) postMessage({ type: 'final', text, start: segStart ?? fed, end: fed });
 	last = '';
+	segStart = null;
 }
 
 self.onmessage = async ({ data: msg }) => {
@@ -127,8 +136,11 @@ self.onmessage = async ({ data: msg }) => {
 			postMessage({ type: 'ready' });
 		} else if (msg.type === 'audio' && stream) {
 			sampleRate = msg.sampleRate;
+			const chunkStart = fed;
 			stream.acceptWaveform(sampleRate, msg.samples);
+			fed += msg.samples.length / sampleRate;
 			const text = decode();
+			if (text && segStart === null) segStart = chunkStart;
 			if (text !== last) {
 				last = text;
 				postMessage({ type: 'partial', text });
@@ -137,6 +149,7 @@ self.onmessage = async ({ data: msg }) => {
 				finish(text);
 				recognizer.reset(stream);
 			}
+			if (msg.ack) postMessage({ type: 'ack' });
 		} else if (msg.type === 'flush' && stream) {
 			// Pad with silence so the model emits the tail, then start a fresh stream.
 			stream.acceptWaveform(sampleRate, new Float32Array(sampleRate / 2));
@@ -145,6 +158,12 @@ self.onmessage = async ({ data: msg }) => {
 			stream.free();
 			stream = recognizer.createStream();
 			postMessage({ type: 'flushed' });
+		} else if (msg.type === 'reset' && stream) {
+			stream.free();
+			stream = recognizer.createStream();
+			last = '';
+			fed = 0;
+			segStart = null;
 		}
 	} catch (e) {
 		postMessage({ type: 'error', message: e?.message ?? String(e) });

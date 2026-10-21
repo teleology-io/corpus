@@ -1,6 +1,6 @@
 import { and, eq, gt, isNull, or } from 'drizzle-orm';
 import { db, sql } from './index';
-import { noteLink } from './schema/index';
+import { noteLink, telescopeVideo } from './schema/index';
 
 export type NoteRole = 'owner' | 'edit' | 'comment' | 'view';
 
@@ -71,4 +71,30 @@ export async function isWithin(noteId: string, rootId: string) {
 		select id from chain where id = ${rootId}
 	`;
 	return rows.length > 0;
+}
+
+/** Telescope videos are owner-only in the app; everyone else watches through a link. */
+export async function videoRole(userId: string, videoId: string): Promise<'owner' | null> {
+	const [row] = await db
+		.select({ ownerId: telescopeVideo.ownerId })
+		.from(telescopeVideo)
+		.where(eq(telescopeVideo.id, videoId))
+		.limit(1);
+	return row?.ownerId === userId ? 'owner' : null;
+}
+
+/** The video a share token opens — only while its link is switched on and the upload finished. */
+export async function videoLinkRole(token: string) {
+	const [row] = await db
+		.select()
+		.from(telescopeVideo)
+		.where(
+			and(
+				eq(telescopeVideo.linkToken, token),
+				eq(telescopeVideo.visibility, 'link'),
+				eq(telescopeVideo.status, 'ready')
+			)
+		)
+		.limit(1);
+	return row ? { video: row, role: 'view' as const } : null;
 }

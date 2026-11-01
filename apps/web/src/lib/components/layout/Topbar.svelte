@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { DropdownMenu } from 'bits-ui';
@@ -12,13 +13,15 @@
 		Sun,
 		Moon,
 		Monitor,
-		Check
+		Check,
+		Search
 	} from '@lucide/svelte';
 	import { theme, type ThemePref } from '#lib/stores/theme.svelte.js';
 	import { authClient } from '@corpus/auth/client';
 	import Avatar from '../ui/Avatar.svelte';
 	import NotificationBell from './NotificationBell.svelte';
 	import { toast } from '#lib/stores/toast.svelte.js';
+	import { openSearch } from '#lib/stores/search.svelte.js';
 
 	let { onmenu }: { onmenu: () => void } = $props();
 	const themes = [
@@ -27,6 +30,9 @@
 		['system', 'System', Monitor]
 	] as const satisfies readonly (readonly [ThemePref, string, unknown])[];
 	const user = $derived(page.data.user);
+	// Client-only: the server can't know the platform, so SSR renders Ctrl and hydration swaps it.
+	let mac = $state(false);
+	onMount(() => (mac = /Mac|iP(hone|ad)/.test(navigator.platform)));
 
 	async function share() {
 		await navigator.clipboard.writeText(page.url.href);
@@ -50,6 +56,17 @@
 	</h1>
 
 	<div class="ml-auto flex items-center gap-1.5">
+		<button
+			class="mr-1 hidden h-9 w-56 items-center gap-2 rounded-lg border border-line bg-canvas px-3 text-sm text-gray-400 transition-colors hover:border-gray-300 hover:text-muted md:flex"
+			onclick={openSearch}
+			aria-label="Search Corpus"
+		>
+			<Search class="size-4" /><span class="flex-1 text-left">Search…</span>
+			<kbd class="text-[10px]">{mac ? '⌘' : 'Ctrl'} K</kbd>
+		</button>
+		<button class="btn-icon md:hidden" onclick={openSearch} aria-label="Search Corpus"
+			><Search class="size-5" /></button
+		>
 		<button class="btn-icon" onclick={share} aria-label="Copy link to this page"
 			><Share2 class="size-5" /></button
 		>

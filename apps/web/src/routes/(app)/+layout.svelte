@@ -3,6 +3,7 @@
 	import { afterNavigate } from '$app/navigation';
 	import Sidebar from '#lib/components/layout/Sidebar.svelte';
 	import Topbar from '#lib/components/layout/Topbar.svelte';
+	import GlobalSearch from '#lib/components/layout/GlobalSearch.svelte';
 	import { live } from '#lib/stores/live.svelte.js';
 	import type { LayoutProps } from './$types';
 
@@ -51,3 +52,5 @@
 		</main>
 	</div>
 </div>
+
+<GlobalSearch />

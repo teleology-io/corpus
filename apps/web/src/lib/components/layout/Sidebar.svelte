@@ -10,7 +10,8 @@
 		Settings,
 		ShieldCheck,
 		CircleHelp,
-		Telescope
+		Telescope,
+		SquareTerminal
 	} from '@lucide/svelte';
 	import Logo from '../ui/Logo.svelte';
 	import WorkspaceCard from './WorkspaceCard.svelte';
@@ -22,6 +23,7 @@
 		{ href: '/calendar', label: 'My Calendar', icon: CalendarDays },
 		{ href: '/cycles', label: 'Cycles', icon: Pill },
 		{ href: '/notes', label: 'My Notes', icon: NotebookText },
+		{ href: '/workbench', label: 'Workbench', icon: SquareTerminal },
 		{ href: '/telescope', label: 'Telescope', icon: Telescope },
 		{ href: '/teams', label: 'Teams', icon: Users },
 		{ href: '/integrations', label: 'Integrations', icon: Puzzle }

@@ -4,6 +4,8 @@ import { listOccurrences } from './calendar.js';
 import { openItems } from './integrations.js';
 import { listThreads } from './slack.js';
 import { completedBetween, doses, listCycles, listTasks, reminderOccurrences } from './planner.js';
+import { workbenchAllowed } from './wrx/access.js';
+import { workbenchTasks } from './wrx/index.js';
 
 export function dayBounds(tz: string, now = new Date()) {
 	const today = localDate(now, tz);
@@ -57,20 +59,41 @@ export async function dashboard(ctx: Ctx) {
 		listThreads(ctx.userId, 50)
 	]);
 
-	const openToday = tasksToday.filter((t) => !t.completedAt).length;
+	// Workbench boards have no due dates: everything open is on today's list, plus what got done today.
+	const doneIn = (at: string | null, from: Date, to: Date) =>
+		!!at && new Date(at) >= from && new Date(at) < to;
+	const allWorkbench = workbenchAllowed(ctx.user.email) ? workbenchTasks(ctx.userId) : [];
+	const workbench = allWorkbench
+		.filter((t) => t.status !== 'done' || doneIn(t.completedAt, b.todayStart, b.tomorrowStart))
+		.sort(
+			(a, c) =>
+				+(a.status === 'done') - +(c.status === 'done') || a.createdAt.localeCompare(c.createdAt)
+		);
+	const workbenchDone = (from: Date, to: Date) =>
+		allWorkbench.filter((t) => t.status === 'done' && doneIn(t.completedAt, from, to)).length;
+
+	const openToday =
+		tasksToday.filter((t) => !t.completedAt).length +
+		workbench.filter((t) => t.status !== 'done').length;
 	const dosesTaken = dosesToday.filter((d) => d.status === 'taken').length;
 
 	return {
 		date: b.today,
 		tomorrowDate: b.tomorrow,
 		stats: {
-			completedToday,
-			completedYesterday,
+			completedToday: completedToday + workbenchDone(b.todayStart, b.tomorrowStart),
+			completedYesterday: completedYesterday + workbenchDone(b.yesterdayStart, b.todayStart),
 			openToday,
 			eventsToday: eventsToday.length,
 			doses: { taken: dosesTaken, total: dosesToday.length }
 		},
-		today: { events: eventsToday, tasks: tasksToday, reminders: remindersToday, doses: dosesToday },
+		today: {
+			events: eventsToday,
+			tasks: tasksToday,
+			workbench,
+			reminders: remindersToday,
+			doses: dosesToday
+		},
 		tomorrow: {
 			events: eventsTomorrow,
 			tasks: tasksTomorrow,

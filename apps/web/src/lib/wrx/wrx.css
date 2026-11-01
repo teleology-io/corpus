@@ -1,0 +1,3278 @@
+/* Ported from WRX public/style.css: every rule is scoped to .wrx (see scope script in git history). */
+.wrx {
+	--background: var(--color-surface);
+	--background-deep: var(--color-canvas);
+	--foreground: var(--color-ink);
+	--border: var(--color-line);
+	--border-focused: var(--color-primary-500);
+	--accent: var(--color-primary-500);
+	--muted: var(--color-muted);
+	--success: var(--color-emerald-600, #059669);
+	--error: var(--color-red-600, #dc2626);
+	--warning: var(--color-amber-600, #d97706);
+	--bg-raised: color-mix(in srgb, var(--background) 60%, var(--border) 40%);
+	--bg-hover: color-mix(in srgb, var(--foreground) 5%, transparent);
+	--bg-selected: color-mix(in srgb, var(--accent) 14%, transparent);
+	--accent-dim: color-mix(in srgb, var(--accent) 50%, transparent);
+	--accent-text: var(--color-primary-600);
+	--text-secondary: color-mix(in srgb, var(--foreground) 70%, var(--muted) 30%);
+	height: 100%;
+	container: wrx / inline-size;
+	font-size: 13px;
+	color: var(--foreground);
+	background: var(--background-deep);
+}
+/* Tailwind preflight zeroes UA defaults that WRX relied on; restore them at zero specificity. */
+:where(.wrx) dialog {
+	margin: auto;
+}
+:where(.wrx) h1,
+:where(.wrx) h2,
+:where(.wrx) h3 {
+	font-weight: 600;
+}
+:where(.wrx) h3,
+:where(.wrx) dialog p {
+	margin: 0 0 12px;
+}
+:where(.wrx) .md ul,
+:where(.wrx) .todo-bar ul {
+	list-style: disc;
+}
+:where(.wrx) .md ol {
+	list-style: decimal;
+}
+:where(.wrx) .md a,
+:where(.wrx) .button-link {
+	text-decoration: underline;
+}
+
+.wrx * {
+	box-sizing: border-box;
+}
+.wrx button,
+.wrx input,
+.wrx textarea,
+.wrx select {
+	font: inherit;
+}
+.wrx button,
+.wrx a,
+.wrx input,
+.wrx textarea,
+.wrx select {
+	-webkit-tap-highlight-color: transparent;
+}
+.wrx button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	min-height: 35px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg-raised);
+	color: var(--foreground);
+	padding: 7px 12px;
+	cursor: pointer;
+	transition:
+		background 0.15s,
+		border-color 0.15s;
+}
+.wrx button:hover {
+	background: var(--bg-hover);
+	border-color: var(--border);
+}
+.wrx button:disabled {
+	opacity: 0.45;
+	cursor: wait;
+}
+.wrx button.primary {
+	background: var(--accent);
+	color: var(--muted);
+	border-color: var(--accent);
+	font-weight: 600;
+}
+.wrx button.primary:hover {
+	background: var(--accent);
+}
+.wrx .icon {
+	width: 17px;
+	height: 17px;
+	flex-shrink: 0;
+}
+.wrx .square {
+	width: 29px;
+	min-height: 29px;
+	padding: 4px;
+	background: transparent;
+	border-color: transparent;
+}
+.wrx .text-button {
+	background: none;
+	border: none;
+	color: var(--muted);
+	padding: 2px 0;
+	min-height: 24px;
+}
+.wrx .text-button:hover {
+	background: none;
+	color: var(--accent);
+}
+.wrx .muted {
+	color: var(--muted);
+}
+.wrx .mono,
+.wrx code,
+.wrx pre {
+	font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+.wrx .eyebrow {
+	font-size: 10px;
+	letter-spacing: 1.5px;
+	font-weight: 600;
+	color: var(--muted);
+}
+.wrx #app {
+	display: flex;
+	height: 100%;
+	min-height: 0;
+}
+.wrx .sidebar {
+	width: 243px;
+	flex-shrink: 0;
+	border-right: 1px solid var(--border);
+	background: var(--background);
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+.wrx .brand {
+	height: 75px;
+	display: flex;
+	align-items: center;
+	padding: 0 24px;
+	gap: 11px;
+	text-decoration: none;
+	color: var(--accent);
+}
+.wrx .brand > .icon {
+	width: 23px;
+	height: 23px;
+}
+.wrx .brand strong {
+	font-size: 26px;
+	letter-spacing: -1.5px;
+	color: var(--foreground);
+}
+.wrx .brand strong span {
+	color: var(--muted);
+	font-weight: 300;
+	margin-left: 5px;
+}
+.wrx .local {
+	font-size: 9px;
+	letter-spacing: 1px;
+	color: var(--muted);
+	border: 1px solid var(--border);
+	padding: 3px 5px;
+	border-radius: 3px;
+	margin-left: 5px;
+}
+.wrx .sidebar-top {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 10px 16px 8px 21px;
+}
+.wrx .sidebar-top .eyebrow {
+	font-size: 9px;
+}
+.wrx .search {
+	margin: 0 15px 25px;
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	background: var(--background);
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	padding: 8px;
+	color: var(--muted);
+}
+.wrx .search .icon {
+	width: 14px;
+}
+.wrx .search input {
+	border: 0;
+	background: none;
+	color: var(--text-secondary);
+	width: 100%;
+	min-width: 0;
+	outline: none;
+	font-size: 11px;
+}
+.wrx .search kbd {
+	font-size: 9px;
+	white-space: nowrap;
+	color: var(--muted);
+}
+.wrx button.search {
+	width: calc(100% - 30px);
+	text-align: left;
+	cursor: pointer;
+}
+.wrx .search > span {
+	flex: 1;
+	font-size: 11px;
+}
+.wrx nav {
+	padding: 0 10px;
+	overflow: auto;
+	flex: 1;
+}
+.wrx .nav-label {
+	display: flex;
+	justify-content: space-between;
+	font-size: 9px;
+	color: var(--muted);
+	letter-spacing: 1px;
+	margin: 0 12px 17px;
+}
+.wrx .nav-label span {
+	color: var(--muted);
+}
+.wrx .project-label {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	font-weight: 600;
+	margin: 17px 11px 9px;
+}
+.wrx .project-label .icon {
+	color: var(--text-secondary);
+	width: 16px;
+}
+.wrx .workspace-link {
+	width: 100%;
+	justify-content: flex-start;
+	padding: 10px 12px 10px 26px;
+	background: none;
+	border: 0;
+	color: var(--muted);
+	font-size: 12px;
+	border-radius: 5px;
+	margin-bottom: 3px;
+}
+.wrx .workspace-link.selected {
+	background: var(--bg-hover);
+	color: var(--accent);
+}
+.wrx .workspace-link span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wrx .workspace-link .icon {
+	width: 15px;
+}
+.wrx .nav-empty {
+	color: var(--muted);
+	font-size: 11px;
+	padding: 10px;
+}
+.wrx .live-dot {
+	display: inline-block;
+	background: var(--accent);
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+.wrx .workspace-link .live-dot {
+	margin-left: auto;
+}
+.wrx .sidebar-bottom {
+	padding: 13px 15px 0;
+	border-top: 1px solid var(--border);
+}
+.wrx .sidebar-bottom > button {
+	width: 100%;
+	background: none;
+	border: 0;
+	justify-content: flex-start;
+	color: var(--text-secondary);
+	padding: 11px 7px;
+	font-size: 12px;
+}
+.wrx .sidebar-bottom > button > span {
+	margin-left: auto;
+}
+.wrx .user {
+	border-top: 1px solid var(--border);
+	margin-top: 16px;
+	display: flex;
+	gap: 10px;
+	padding: 18px 0;
+	color: var(--text-secondary);
+	font-size: 11px;
+}
+.wrx .avatar {
+	background: var(--bg-hover);
+	border: 1px solid var(--border);
+	color: var(--text-secondary);
+	width: 30px;
+	height: 30px;
+	border-radius: 7px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.wrx .user small {
+	display: block;
+	font-size: 9px;
+	color: var(--muted);
+	margin-top: 5px;
+}
+.wrx .wrx-main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+.wrx header {
+	height: 62px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	border-bottom: 1px solid var(--border);
+	padding: 0 33px;
+	gap: 16px;
+}
+.wrx .breadcrumbs {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	color: var(--muted);
+	font-size: 11px;
+}
+.wrx .breadcrumbs .icon {
+	width: 12px;
+	height: 12px;
+}
+.wrx .breadcrumbs span {
+	color: var(--text-secondary);
+}
+.wrx .breadcrumbs strong {
+	font-weight: 400;
+	color: var(--foreground);
+}
+.wrx .header-right {
+	display: flex;
+	align-items: center;
+	gap: 18px;
+}
+.wrx .connection {
+	color: var(--muted);
+	font-size: 10px;
+	white-space: nowrap;
+	display: flex;
+	align-items: center;
+	gap: 7px;
+}
+.wrx .connection i {
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--accent);
+}
+.wrx .badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 10px;
+	white-space: nowrap;
+	padding: 4px 7px;
+	border: 1px solid var(--border);
+	background: var(--bg-raised);
+	border-radius: 4px;
+	color: var(--text-secondary);
+	font-weight: 400;
+}
+.wrx .badge i {
+	width: 4px;
+	height: 4px;
+	background: var(--accent);
+	border-radius: 50%;
+}
+.wrx .badge.green {
+	color: var(--text-secondary);
+	border-color: var(--border);
+	background: var(--bg-raised);
+}
+.wrx .badge.green i {
+	background: var(--accent);
+}
+.wrx .workspace-header {
+	padding: 35px 34px 26px;
+	display: flex;
+	justify-content: space-between;
+	gap: 20px;
+	align-items: center;
+}
+.wrx .workspace-header h1 {
+	font-size: 26px;
+	font-weight: 550;
+	letter-spacing: -0.8px;
+	margin: 11px 0 10px;
+	display: flex;
+	align-items: center;
+	gap: 16px;
+}
+.wrx .workspace-header p {
+	font-family: monospace;
+	font-size: 10px;
+	color: var(--muted);
+	margin: 0;
+}
+.wrx .workspace-tag {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	color: var(--text-secondary);
+	font-size: 10px;
+	letter-spacing: 0;
+	background: var(--bg-raised);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	padding: 4px 7px;
+	font-family: monospace;
+}
+.wrx .workspace-tag .icon {
+	width: 12px;
+	height: 12px;
+}
+.wrx .actions {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+.wrx .tabs {
+	padding: 0 34px;
+	display: flex;
+	gap: 27px;
+	border-bottom: 1px solid var(--border);
+}
+.wrx .tabs button {
+	padding: 13px 0 15px;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	position: relative;
+	font-size: 11px;
+	color: var(--muted);
+	gap: 7px;
+}
+.wrx .tabs button.active {
+	color: var(--accent);
+}
+.wrx .tabs button.active:after {
+	content: '';
+	position: absolute;
+	bottom: -1px;
+	left: 0;
+	right: 0;
+	height: 2px;
+	background: var(--accent);
+}
+.wrx .tabs .icon {
+	width: 14px;
+	height: 14px;
+}
+.wrx .count {
+	font-size: 9px;
+	background: var(--bg-hover);
+	padding: 1px 5px;
+	border-radius: 3px;
+}
+.wrx .content {
+	padding: 29px 34px 36px;
+	flex: 1;
+}
+.wrx .overview-top,
+.wrx .section-title {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 20px;
+	margin-bottom: 25px;
+}
+.wrx h2 {
+	font-size: 18px;
+	font-weight: 500;
+	letter-spacing: -0.3px;
+	margin: 0 0 8px;
+}
+.wrx p {
+	color: var(--muted);
+	line-height: 1.7;
+	margin: 0;
+}
+.wrx .overview-top p,
+.wrx .section-title p {
+	font-size: 11px;
+}
+.wrx .overview-top .mono {
+	font-size: 10px;
+}
+.wrx .stats {
+	display: grid;
+	grid-template-columns: 1fr 1fr 1fr;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--background);
+	margin-bottom: 25px;
+}
+.wrx .stats > div {
+	position: relative;
+	padding: 20px 21px;
+	border-right: 1px solid var(--border);
+	overflow: hidden;
+}
+.wrx .stats > div:last-child {
+	border: 0;
+}
+.wrx .stats > div > .icon {
+	color: var(--muted);
+	position: absolute;
+	right: 21px;
+	top: 21px;
+	width: 15px;
+	height: 15px;
+}
+.wrx .stats span {
+	font-size: 10px;
+	color: var(--muted);
+}
+.wrx .stats strong {
+	font-size: 22px;
+	font-weight: 500;
+	display: block;
+	margin-top: 14px;
+	letter-spacing: -0.6px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.wrx .stats strong.branch-name {
+	font-family: monospace;
+	font-size: 19px;
+	margin-top: 17px;
+}
+.wrx .stats strong small {
+	display: block;
+	font-family:
+		Inter,
+		-apple-system,
+		sans-serif;
+	font-size: 10px;
+	font-weight: 400;
+	color: var(--muted);
+	letter-spacing: 0;
+	margin-top: 7px;
+}
+.wrx .two-columns {
+	display: grid;
+	grid-template-columns: 1.15fr 1fr;
+	gap: 20px;
+}
+.wrx .panel {
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg-raised);
+	overflow: hidden;
+}
+.wrx .panel-heading {
+	height: 57px;
+	border-bottom: 1px solid var(--border);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0 19px;
+	gap: 12px;
+}
+.wrx .panel-heading h3 {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11px;
+	font-weight: 500;
+	margin: 0;
+}
+.wrx .panel-heading h3 .icon {
+	width: 15px;
+	color: var(--muted);
+}
+.wrx .panel-heading .text-button {
+	font-size: 10px;
+	gap: 6px;
+}
+.wrx .panel-heading .text-button .icon {
+	width: 13px;
+}
+.wrx .empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	padding: 65px 24px;
+	min-height: 280px;
+}
+.wrx .empty > .icon {
+	width: 27px;
+	height: 27px;
+	color: var(--muted);
+	margin-bottom: 15px;
+}
+.wrx .empty h3 {
+	font-size: 14px;
+	font-weight: 500;
+	margin: 0 0 8px;
+}
+.wrx .empty p {
+	font-size: 11px;
+}
+.wrx .empty button {
+	margin-top: 20px;
+	font-size: 11px;
+}
+.wrx .empty.compact {
+	min-height: 255px;
+	padding: 30px 16px;
+}
+.wrx .environment-summary {
+	padding: 27px 20px 24px;
+	text-align: center;
+	min-height: 255px;
+}
+.wrx .environment-art {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 9px;
+	color: var(--text-secondary);
+	margin-bottom: 16px;
+}
+.wrx .environment-art > .icon {
+	width: 36px;
+	height: 36px;
+	stroke-width: 1;
+}
+.wrx .environment-art span {
+	font-family: monospace;
+	font-size: 8px;
+	letter-spacing: 2px;
+	color: var(--muted);
+}
+.wrx .environment-summary h3 {
+	font-size: 13px;
+	font-weight: 500;
+	margin: 0 0 7px;
+}
+.wrx .environment-summary p {
+	font-size: 10px;
+}
+.wrx .environment-summary button {
+	margin-top: 17px;
+	font-size: 10px;
+	min-height: 30px;
+}
+.wrx .next-panel {
+	margin-top: 21px;
+	padding: 22px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	background: linear-gradient(100deg, var(--bg-raised), var(--background));
+}
+.wrx .next-panel .eyebrow {
+	font-size: 8px;
+	color: var(--muted);
+}
+.wrx .next-panel h3 {
+	font-size: 14px;
+	font-weight: 500;
+	margin: 9px 0 6px;
+}
+.wrx .next-panel p {
+	font-size: 10px;
+}
+.wrx .next-panel button {
+	font-size: 10px;
+}
+.wrx .workspace-location {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding-top: 22px;
+	color: var(--muted);
+	font-family: monospace;
+	font-size: 10px;
+}
+.wrx .workspace-location > .icon {
+	width: 13px;
+}
+.wrx .workspace-location > span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wrx .workspace-location button {
+	margin-left: auto;
+	white-space: nowrap;
+	font-family: inherit;
+	font-size: 9px;
+}
+.wrx footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 14px 34px;
+	border-top: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 9px;
+}
+.wrx footer > span:first-child {
+	display: flex;
+	gap: 7px;
+	align-items: center;
+}
+.wrx footer .live-dot {
+	width: 4px;
+	height: 4px;
+	background: var(--bg-hover);
+}
+.wrx footer > span:last-child {
+	font-family: monospace;
+	font-size: 8px;
+	letter-spacing: 0.7px;
+}
+.wrx .footer-divider {
+	margin: 0 9px;
+	color: var(--muted);
+}
+.wrx .welcome {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	padding: 65px 25px;
+	text-align: center;
+}
+.wrx .hero-icon {
+	width: 62px;
+	height: 62px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--border);
+	border-radius: 16px;
+	background: var(--bg-raised);
+	color: var(--accent);
+	margin-bottom: 28px;
+}
+.wrx .hero-icon .icon {
+	width: 30px;
+	height: 30px;
+}
+.wrx .welcome .eyebrow {
+	font-size: 9px;
+	color: var(--muted);
+}
+.wrx .welcome h1 {
+	font-size: 40px;
+	font-weight: 500;
+	letter-spacing: -1.5px;
+	line-height: 1.2;
+	margin: 20px 0;
+}
+.wrx .welcome > p {
+	font-size: 13px;
+	color: var(--muted);
+}
+.wrx .welcome .large {
+	margin-top: 27px;
+	padding: 11px 19px;
+}
+.wrx .welcome-features {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 45px;
+	margin: 62px 0 32px;
+}
+.wrx .welcome-features > div {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 10px;
+}
+.wrx .welcome-features .icon {
+	color: var(--text-secondary);
+	width: 22px;
+	height: 22px;
+	margin-bottom: 4px;
+}
+.wrx .welcome-features b {
+	font-size: 11px;
+	font-weight: 500;
+}
+.wrx .welcome-features span {
+	font-size: 10px;
+	color: var(--muted);
+}
+.wrx .welcome > small {
+	font-size: 10px;
+	color: var(--muted);
+}
+.wrx .chat-row {
+	width: 100%;
+	justify-content: flex-start;
+	border: 0;
+	border-bottom: 1px solid var(--border);
+	border-radius: 0;
+	background: none;
+	padding: 16px;
+	gap: 11px;
+}
+.wrx .chat-row:last-child {
+	border: 0;
+}
+.wrx .provider {
+	width: 31px;
+	height: 31px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--bg-hover);
+	border-radius: 6px;
+	color: var(--text-secondary);
+	font-size: 22px;
+}
+.wrx .provider.codex {
+	color: var(--text-secondary);
+	background: var(--bg-hover);
+}
+.wrx .chat-row > div {
+	text-align: left;
+	flex: 1;
+	min-width: 0;
+}
+.wrx .chat-row b {
+	display: block;
+	font-size: 11px;
+	font-weight: 500;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wrx .chat-row small {
+	display: block;
+	font-size: 10px;
+	color: var(--muted);
+	margin-top: 5px;
+}
+.wrx .chat-row > .icon {
+	width: 13px;
+	color: var(--muted);
+}
+.wrx .agent-layout {
+	display: grid;
+	grid-template-columns: 230px 1fr;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	overflow: hidden;
+	min-height: 590px;
+	height: calc(100dvh - 397px);
+}
+.wrx .conversation-list {
+	background: var(--background);
+	border-right: 1px solid var(--border);
+	overflow: auto;
+}
+.wrx .conversation-list .panel-heading {
+	padding: 0 14px;
+}
+.wrx .conversation {
+	width: 100%;
+	display: block;
+	text-align: left;
+	border: 0;
+	background: none;
+	border-radius: 0;
+	padding: 16px;
+	border-bottom: 1px solid var(--border);
+}
+.wrx .conversation.selected {
+	background: var(--bg-hover);
+	box-shadow: inset 2px 0 var(--accent);
+}
+.wrx .conversation-title {
+	display: block;
+	font-size: 11px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wrx .conversation small {
+	display: block;
+	font-size: 9px;
+	color: var(--muted);
+	margin-top: 7px;
+}
+.wrx .conversation-main {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	background: var(--background);
+}
+.wrx .conversation-main > .empty {
+	flex: 1;
+}
+.wrx .chat-heading {
+	padding: 17px 20px;
+	border-bottom: 1px solid var(--border);
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 10px;
+}
+.wrx .chat-heading h3 {
+	font-size: 13px;
+	margin: 0 0 5px;
+	font-weight: 500;
+}
+.wrx .chat-heading small {
+	font-size: 10px;
+	color: var(--muted);
+}
+.wrx .chat-heading button {
+	font-size: 10px;
+	min-height: 29px;
+}
+.wrx .transcript {
+	flex: 1;
+	overflow: auto;
+	padding: 20px;
+	min-height: 160px;
+}
+.wrx .message {
+	margin-bottom: 24px;
+}
+.wrx .message-meta {
+	display: flex;
+	gap: 10px;
+	font-size: 9px;
+	color: var(--muted);
+}
+.wrx .message-meta b {
+	letter-spacing: 1px;
+	font-weight: 500;
+}
+.wrx .message-meta span {
+	color: var(--muted);
+}
+.wrx .message pre.error {
+	white-space: pre-wrap;
+	font-family: inherit;
+	font-size: 11px;
+	line-height: 1.6;
+	margin: 6px 0 0;
+	overflow-wrap: anywhere;
+}
+.wrx .message.user {
+	background: var(--bg-raised);
+	padding: 13px 16px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+}
+.wrx .message.user .message-meta {
+	color: var(--text-secondary);
+}
+.wrx .composer {
+	margin: 0 18px 18px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg-raised);
+}
+.wrx .composer textarea {
+	border: 0;
+	width: 100%;
+	resize: vertical;
+	min-height: 70px;
+	background: none;
+	padding: 13px;
+	color: var(--foreground);
+	outline: none;
+	font-size: 12px;
+}
+.wrx .composer > div {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 8px 10px;
+	border-top: 1px solid var(--border);
+}
+.wrx .composer small {
+	color: var(--muted);
+	font-size: 9px;
+}
+.wrx .composer button {
+	font-size: 10px;
+	min-height: 29px;
+}
+.wrx .activity {
+	white-space: pre-wrap;
+	font-size: 10px;
+	line-height: 1.8;
+	color: var(--text-secondary);
+	overflow-wrap: anywhere;
+}
+.wrx .transcript details {
+	font-size: 10px;
+	color: var(--muted);
+	margin-top: 20px;
+}
+.wrx .working {
+	font-size: 11px;
+	color: var(--text-secondary);
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 20px 0;
+}
+.wrx .working i {
+	animation: wrx-pulse 1.4s infinite;
+}
+@keyframes wrx-pulse {
+	50% {
+		opacity: 0.3;
+	}
+}
+.wrx .inset {
+	padding: 16px;
+	font-size: 11px;
+}
+.wrx .diff-columns {
+	grid-template-columns: 280px 1fr;
+}
+.wrx .code-block {
+	font-size: 11px;
+	line-height: 1.8;
+	padding: 17px;
+	margin: 0;
+	overflow: auto;
+	max-height: 65vh;
+	white-space: pre;
+}
+.wrx .diff .added {
+	color: var(--text-secondary);
+}
+.wrx .diff .removed {
+	color: var(--error);
+}
+.wrx .task-board {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 18px;
+}
+.wrx .task-column {
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	min-height: 380px;
+	padding: 14px;
+	background: var(--background);
+}
+.wrx .task-column > h3 {
+	font-size: 11px;
+	font-weight: 500;
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	margin: 3px 0 18px;
+}
+.wrx .task-column > h3 span {
+	margin-left: auto;
+	color: var(--muted);
+	font-size: 10px;
+}
+.wrx .task-dot {
+	width: 7px;
+	height: 7px;
+	background: var(--bg-hover);
+	border-radius: 50%;
+}
+.wrx .task-dot.doing {
+	background: var(--accent);
+}
+.wrx .task-dot.done {
+	background: var(--accent);
+}
+.wrx .task-card {
+	padding: 14px;
+	border: 1px solid var(--border);
+	background: var(--bg-raised);
+	border-radius: 5px;
+	margin-bottom: 10px;
+}
+.wrx .task-card p {
+	font-size: 12px;
+	color: var(--foreground);
+	overflow-wrap: anywhere;
+}
+.wrx .task-card select {
+	font-size: 9px;
+	padding: 5px;
+	margin-top: 13px;
+	width: auto;
+}
+.wrx .task-empty {
+	border: 1px dashed var(--border);
+	border-radius: 5px;
+	padding: 22px 10px;
+	font-size: 10px;
+	text-align: center;
+	color: var(--muted);
+}
+.wrx .runtime-details {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 24px;
+	padding: 25px;
+}
+.wrx .runtime-details > div {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-width: 0;
+}
+.wrx .runtime-details span {
+	font-size: 10px;
+	color: var(--muted);
+}
+.wrx .runtime-details b,
+.wrx .runtime-details code {
+	font-size: 11px;
+	font-weight: 400;
+	overflow-wrap: anywhere;
+}
+.wrx .runtime-actions {
+	display: flex;
+	gap: 9px;
+	padding: 0 25px;
+	flex-wrap: wrap;
+}
+.wrx .runtime-actions button {
+	font-size: 11px;
+}
+.wrx .runtime-note {
+	font-size: 10px;
+	padding: 20px 25px;
+	color: var(--muted);
+}
+.wrx .runtime-log {
+	min-height: 180px;
+	max-height: 400px;
+	overflow: auto;
+	background: var(--background-deep);
+	border-top: 1px solid var(--border);
+	padding: 20px;
+	margin: 0;
+	color: var(--text-secondary);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 11px;
+	line-height: 1.7;
+}
+.wrx dialog {
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--bg-raised);
+	color: var(--foreground);
+	width: min(510px, 95vw);
+	padding: 27px;
+	box-shadow: 0 30px 120px color-mix(in srgb, #000 53%, transparent);
+}
+.wrx dialog::backdrop {
+	background: color-mix(in srgb, #000 72%, transparent);
+	backdrop-filter: blur(5px);
+}
+.wrx .modal-title {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 12px;
+}
+.wrx .modal-title h2 {
+	margin: 0;
+	font-size: 20px;
+}
+.wrx .modal-title .square {
+	font-size: 21px;
+}
+.wrx dialog > p,
+.wrx dialog form > p {
+	font-size: 12px;
+	margin-bottom: 24px;
+}
+.wrx label {
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+	font-size: 11px;
+	color: var(--text-secondary);
+	margin-bottom: 19px;
+}
+.wrx label .muted {
+	font-size: 10px;
+}
+.wrx input,
+.wrx select {
+	width: 100%;
+	border: 1px solid var(--border);
+	background: var(--background);
+	color: var(--foreground);
+	padding: 11px;
+	border-radius: 5px;
+	outline: none;
+}
+.wrx input:focus,
+.wrx select:focus,
+.wrx textarea:focus {
+	border-color: var(--border-focused);
+}
+.wrx input::placeholder,
+.wrx textarea::placeholder {
+	color: var(--muted);
+}
+.wrx .modal-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 25px;
+}
+.wrx .error {
+	color: var(--error);
+	font-size: 11px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.wrx .connection-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	border-top: 1px solid var(--border);
+	padding: 17px 0;
+	gap: 15px;
+}
+.wrx .connection-row b {
+	font-size: 12px;
+	font-weight: 500;
+}
+.wrx .connection-row small {
+	display: block;
+	color: var(--muted);
+	font-size: 10px;
+	margin-top: 7px;
+	overflow-wrap: anywhere;
+}
+.wrx #toast {
+	position: fixed;
+	bottom: 26px;
+	left: 50%;
+	transform: translateX(-50%) translateY(15px);
+	background: var(--accent);
+	color: var(--muted);
+	border: 1px solid var(--border-focused);
+	border-radius: 6px;
+	padding: 13px 20px;
+	box-shadow: 0 8px 40px color-mix(in srgb, #000 33%, transparent);
+	max-width: 80vw;
+	opacity: 0;
+	pointer-events: none;
+	transition: 0.2s;
+	z-index: 10;
+}
+.wrx #toast.show {
+	opacity: 1;
+	transform: translateX(-50%);
+}
+.wrx :focus-visible {
+	outline: 2px solid var(--border-focused);
+	outline-offset: 3px;
+}
+@container wrx (min-width:1500px) {
+	.wrx .content {
+		padding: 35px 48px;
+	}
+	.wrx .workspace-header {
+		padding-left: 48px;
+		padding-right: 48px;
+	}
+	.wrx .stats > div {
+		padding: 25px;
+	}
+	.wrx .two-columns {
+		gap: 25px;
+	}
+}
+@container wrx (max-width:1100px) {
+	.wrx .sidebar {
+		width: 205px;
+	}
+	.wrx .brand {
+		padding-left: 18px;
+	}
+	.wrx .content {
+		padding: 24px;
+	}
+	.wrx .workspace-header {
+		padding: 28px 24px;
+	}
+	.wrx .tabs {
+		padding: 0 24px;
+		gap: 21px;
+	}
+	.wrx header {
+		padding: 0 24px;
+	}
+	.wrx .workspace-header h1 {
+		font-size: 22px;
+		flex-wrap: wrap;
+	}
+	.wrx .stats > div {
+		padding: 17px 14px;
+	}
+	.wrx .stats > div > .icon {
+		right: 12px;
+	}
+	.wrx .stats strong {
+		font-size: 19px;
+	}
+	.wrx .stats strong.branch-name {
+		font-size: 15px;
+	}
+	.wrx .agent-layout {
+		grid-template-columns: 180px 1fr;
+	}
+	.wrx .welcome-features {
+		gap: 22px;
+	}
+	.wrx .workspace-header .actions button {
+		font-size: 10px;
+	}
+	.wrx .diff-columns {
+		grid-template-columns: 1fr;
+	}
+	.wrx .header-right .badge {
+		display: none;
+	}
+}
+@container wrx (max-width:760px) {
+	.wrx .sidebar {
+		width: 64px;
+	}
+	.wrx .brand {
+		padding: 0;
+		justify-content: center;
+	}
+	.wrx .brand strong,
+	.wrx .brand .local,
+	.wrx .sidebar-top,
+	.wrx .search,
+	.wrx .nav-label,
+	.wrx .project-label span,
+	.wrx .workspace-link span,
+	.wrx .sidebar-bottom > button span,
+	.wrx .sidebar-bottom > button:not(.square),
+	.wrx .user,
+	.wrx .nav-empty {
+		display: none;
+	}
+	.wrx .project-label {
+		margin-left: 10px;
+	}
+	.wrx .workspace-link {
+		padding: 12px;
+		justify-content: center;
+	}
+	.wrx .sidebar-bottom {
+		padding: 10px 0;
+	}
+	.wrx nav {
+		padding: 0 5px;
+	}
+	.wrx .workspace-header {
+		align-items: flex-start;
+		flex-direction: column;
+		padding: 24px 18px;
+	}
+	.wrx .workspace-header h1 {
+		font-size: 23px;
+	}
+	.wrx .workspace-header p {
+		max-width: 70vw;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.wrx .tabs {
+		padding: 0 18px;
+		gap: 18px;
+		overflow: auto;
+	}
+	.wrx .tabs button {
+		font-size: 10px;
+		white-space: nowrap;
+	}
+	.wrx .content {
+		padding: 20px 18px;
+	}
+	.wrx .stats {
+		grid-template-columns: 1fr;
+	}
+	.wrx .stats > div {
+		border-right: 0;
+		border-bottom: 1px solid var(--border);
+	}
+	.wrx .stats strong {
+		font-size: 20px;
+		margin-top: 8px;
+	}
+	.wrx .stats strong.branch-name {
+		font-size: 18px;
+		margin-top: 8px;
+	}
+	.wrx .stats strong small {
+		display: inline;
+		margin-left: 14px;
+	}
+	.wrx .two-columns,
+	.wrx .task-board {
+		grid-template-columns: 1fr;
+	}
+	.wrx .overview-top .mono {
+		display: none;
+	}
+	.wrx .overview-top h2 {
+		font-size: 17px;
+	}
+	.wrx .next-panel {
+		gap: 15px;
+	}
+	.wrx .next-panel button {
+		white-space: nowrap;
+	}
+	.wrx header {
+		height: 50px;
+		padding: 0 17px;
+	}
+	.wrx .breadcrumbs {
+		font-size: 9px;
+		gap: 5px;
+	}
+	.wrx .header-right {
+		display: none;
+	}
+	.wrx .breadcrumbs strong {
+		max-width: 90px;
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+	}
+	.wrx footer {
+		padding: 13px 18px;
+		font-size: 8px;
+	}
+	.wrx footer > span:last-child {
+		display: none;
+	}
+	.wrx .welcome h1 {
+		font-size: 30px;
+	}
+	.wrx .welcome > p {
+		font-size: 11px;
+	}
+	.wrx .welcome-features {
+		grid-template-columns: 1fr;
+		gap: 25px;
+		margin: 40px 0;
+	}
+	.wrx .welcome {
+		padding: 40px 20px;
+	}
+	.wrx .agent-layout {
+		display: flex;
+		flex-direction: column;
+		height: auto;
+		min-height: 600px;
+	}
+	.wrx .conversation-list {
+		max-height: 155px;
+		border-right: 0;
+		border-bottom: 1px solid var(--border);
+	}
+	.wrx .conversation {
+		padding: 10px 14px;
+	}
+	.wrx .conversation-main {
+		min-height: 450px;
+	}
+	.wrx .transcript {
+		max-height: 500px;
+	}
+	.wrx .composer small {
+		display: none;
+	}
+	.wrx .composer > div {
+		justify-content: flex-end;
+	}
+	.wrx .runtime-details {
+		grid-template-columns: 1fr;
+	}
+	.wrx .section-title {
+		align-items: flex-start;
+	}
+	.wrx .section-title button {
+		font-size: 10px;
+		white-space: nowrap;
+	}
+	.wrx .workspace-location {
+		font-size: 8px;
+	}
+}
+.wrx .machine-button {
+	border: 0;
+	background: none;
+	font-size: 10px;
+	color: var(--text-secondary);
+	max-width: 240px;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	justify-content: flex-start;
+}
+.wrx .machine-button .icon {
+	width: 13px;
+}
+.wrx .pairing-screen {
+	min-height: 100vh;
+	align-items: center;
+	justify-content: center;
+	padding: 30px;
+}
+.wrx .pairing-card {
+	width: min(430px, 100%);
+	padding: 30px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--bg-raised);
+}
+.wrx .pairing-card h1 {
+	font-size: 25px;
+	overflow-wrap: anywhere;
+}
+.wrx .pairing-card .hero-icon {
+	margin-bottom: 24px;
+}
+.wrx .pairing-card p {
+	font-size: 12px;
+	margin-bottom: 24px;
+}
+.wrx .pairing-card > small {
+	display: block;
+	color: var(--muted);
+	font-family: monospace;
+	margin-top: 24px;
+}
+.wrx .pairing-card form > button {
+	margin-top: 17px;
+	width: 100%;
+}
+.wrx .network-status {
+	padding: 16px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	margin: 20px 0;
+}
+.wrx .network-status p {
+	font-size: 11px;
+	margin-top: 12px;
+}
+.wrx .network-status > small {
+	font-size: 9px;
+	color: var(--muted);
+	display: block;
+	margin-top: 16px;
+}
+.wrx .network-status label {
+	margin: 18px 0 12px;
+}
+.wrx .network-status > button {
+	font-size: 10px;
+}
+.wrx .host-url {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 7px;
+	margin-top: 9px;
+}
+.wrx .host-url code {
+	font-size: 11px;
+	overflow-wrap: anywhere;
+}
+.wrx .host-url button {
+	font-size: 10px;
+	min-height: 26px;
+}
+.wrx .fingerprint {
+	display: block;
+	font-size: 10px;
+	overflow-wrap: anywhere;
+	line-height: 1.7;
+	margin-top: 6px;
+	color: var(--text-secondary);
+}
+.wrx .key-field {
+	display: flex;
+	gap: 6px;
+}
+.wrx .key-field input {
+	min-width: 0;
+}
+.wrx .key-field button {
+	white-space: nowrap;
+	font-size: 10px;
+}
+.wrx .saved-computers {
+	display: flex;
+	gap: 6px;
+	flex-direction: column;
+	margin-top: 17px;
+}
+.wrx .saved-computers button {
+	justify-content: flex-start;
+	font-size: 11px;
+}
+.wrx .logout-button {
+	margin-top: 20px;
+}
+.wrx #computer-error {
+	margin-top: 10px;
+}
+.wrx dialog h3 {
+	font-size: 13px;
+	font-weight: 500;
+	margin-top: 24px;
+}
+.wrx button.primary {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: #fff;
+}
+.wrx button.primary:hover {
+	background: color-mix(in srgb, var(--accent) 82%, #fff 18%);
+	border-color: var(--accent);
+}
+.wrx button:hover {
+	border-color: var(--border-focused);
+}
+.wrx .workspace-link.selected,
+.wrx .conversation.selected {
+	background: var(--bg-selected);
+	color: var(--accent-text);
+}
+.wrx .conversation.selected {
+	box-shadow: inset 2px 0 var(--accent);
+}
+.wrx .brand,
+.wrx .brand > .icon,
+.wrx .tabs button.active,
+.wrx .text-button:hover {
+	color: var(--accent-text);
+}
+.wrx .brand strong {
+	color: var(--foreground);
+}
+.wrx .tabs button.active:after {
+	background: var(--accent);
+}
+.wrx .workspace-tag,
+.wrx .message.user {
+	background: var(--bg-selected);
+	border-color: var(--accent-dim);
+	color: var(--text-secondary);
+}
+.wrx .hero-icon,
+.wrx .avatar,
+.wrx .provider.codex {
+	background: var(--bg-selected);
+	border-color: var(--accent-dim);
+	color: var(--accent-text);
+}
+.wrx .provider.claude {
+	background: var(--bg-hover);
+	color: var(--foreground);
+}
+.wrx .badge {
+	background: var(--bg-hover);
+	border-color: var(--border);
+	color: var(--muted);
+}
+.wrx .badge.green {
+	color: var(--success);
+	border-color: color-mix(in srgb, var(--success) 30%, transparent);
+	background: color-mix(in srgb, var(--success) 9%, transparent);
+}
+.wrx .badge.green i,
+.wrx .connection i,
+.wrx .live-dot,
+.wrx footer .live-dot,
+.wrx .task-dot.done {
+	background: var(--success);
+}
+.wrx .task-dot.doing {
+	background: var(--warning);
+}
+.wrx .composer,
+.wrx .task-card,
+.wrx .task-column,
+.wrx .conversation-list,
+.wrx .conversation-main,
+.wrx .pairing-card,
+.wrx .search,
+.wrx .stats {
+	background: var(--bg-raised);
+}
+.wrx .composer {
+	border-color: var(--border);
+}
+.wrx .composer:focus-within {
+	border-color: var(--border-focused);
+}
+.wrx .next-panel {
+	background: var(--bg-raised);
+}
+.wrx .environment-art,
+.wrx .environment-art span,
+.wrx .working,
+.wrx .message-meta,
+.wrx .message.user .message-meta {
+	color: var(--text-secondary);
+}
+.wrx .diff .added {
+	color: var(--success);
+}
+.wrx .diff .removed,
+.wrx .error {
+	color: var(--error);
+}
+.wrx #toast {
+	background: var(--bg-raised);
+	color: var(--foreground);
+	border-color: var(--border-focused);
+}
+.wrx input:focus,
+.wrx select:focus,
+.wrx textarea:focus {
+	border-color: var(--border-focused);
+}
+.wrx :focus-visible {
+	outline-color: var(--border-focused);
+}
+.wrx .folder-toolbar {
+	display: flex;
+	gap: 8px;
+	margin: 18px 0 12px;
+}
+.wrx .folder-toolbar button {
+	font-size: 11px;
+}
+.wrx .folder-location {
+	font:
+		11px/1.6 'SFMono-Regular',
+		monospace;
+	color: var(--text-secondary);
+	padding: 10px 12px;
+	background: var(--background);
+	border: 1px solid var(--border);
+	border-radius: 5px 5px 0 0;
+	overflow-wrap: anywhere;
+}
+.wrx .folder-list {
+	height: 300px;
+	overflow: auto;
+	border: 1px solid var(--border);
+	border-top: 0;
+	border-radius: 0 0 5px 5px;
+}
+.wrx .folder-entry {
+	display: flex;
+	width: 100%;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	justify-content: flex-start;
+	padding: 12px;
+	gap: 12px;
+}
+.wrx .folder-entry > span {
+	flex: 1;
+	text-align: left;
+	overflow-wrap: anywhere;
+	min-width: 0;
+}
+.wrx .folder-entry > .icon:first-child {
+	color: var(--accent-text);
+}
+.wrx .folder-entry > .icon:last-child {
+	width: 12px;
+	color: var(--muted);
+}
+.wrx .folder-empty {
+	padding: 24px;
+	font-size: 12px;
+	text-align: center;
+}
+.wrx .folder-footer {
+	align-items: center;
+	flex-wrap: wrap;
+}
+.wrx .folder-footer > span {
+	flex: 1;
+	font-size: 10px;
+	color: var(--muted);
+	min-width: 100px;
+}
+.wrx .badge i {
+	background: var(--muted);
+}
+.wrx .badge.green i {
+	background: var(--success);
+}
+.wrx .c0 {
+	--agent: #8f7af0;
+}
+.wrx .c1 {
+	--agent: #4fb3a9;
+}
+.wrx .c2 {
+	--agent: #d98a4e;
+}
+.wrx .c3 {
+	--agent: #d0679a;
+}
+.wrx .c4 {
+	--agent: #6b9fe0;
+}
+.wrx .c5 {
+	--agent: #b5b04a;
+}
+.wrx .c6 {
+	--agent: #5fb873;
+}
+.wrx .c7 {
+	--agent: #a98d6f;
+}
+.wrx .you,
+.wrx .all {
+	--agent: var(--foreground);
+}
+.wrx .avatar-chip {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	width: 26px;
+	height: 26px;
+	border-radius: 7px;
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--agent);
+	background: color-mix(in srgb, var(--agent) 16%, transparent);
+	border: 1px solid color-mix(in srgb, var(--agent) 38%, transparent);
+}
+.wrx .avatar-chip.you {
+	color: var(--accent-text);
+	background: var(--bg-selected);
+	border-color: var(--accent-dim);
+}
+.wrx .avatar-stack {
+	display: flex;
+	margin-top: 8px;
+}
+.wrx .avatar-stack .avatar-chip {
+	width: 18px;
+	height: 18px;
+	font-size: 9px;
+	border-radius: 5px;
+	margin-right: -4px;
+	box-shadow: 0 0 0 2px var(--bg-raised);
+}
+.wrx .avatar-stack small {
+	margin: 3px 0 0 9px !important;
+}
+.wrx .conversation-title {
+	display: flex !important;
+	align-items: center;
+	gap: 6px;
+}
+.wrx .conversation-title .live-dot {
+	animation: wrx-pulse 1.4s infinite;
+}
+.wrx .conversation small {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wrx .conversation-main {
+	position: relative;
+}
+.wrx .chat-heading {
+	flex-wrap: wrap;
+	padding: 12px 20px;
+}
+.wrx .chat-title {
+	min-width: 0;
+}
+.wrx .chat-title h3 {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wrx .roster {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	justify-content: flex-end;
+}
+.wrx .member {
+	min-height: 29px;
+	padding: 3px 9px 3px 3px;
+	gap: 6px;
+	font-size: 10px;
+	border-radius: 7px;
+	position: relative;
+}
+.wrx .member .avatar-chip {
+	width: 21px;
+	height: 21px;
+	font-size: 10px;
+	border-radius: 5px;
+}
+.wrx .member em {
+	font-style: normal;
+	color: var(--warning);
+	font-size: 10px;
+}
+.wrx .member-state {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: transparent;
+}
+.wrx .member.running .member-state {
+	background: var(--success);
+	animation: wrx-pulse 1.2s infinite;
+}
+.wrx .member.queued .member-state {
+	background: var(--warning);
+}
+.wrx .transcript {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 16px 20px;
+}
+.wrx .transcript > .message {
+	margin: 0;
+}
+.wrx .message {
+	display: grid;
+	grid-template-columns: 26px minmax(0, 1fr) auto;
+	gap: 12px;
+	padding: 10px 12px;
+	border-radius: 7px;
+	border: 1px solid transparent;
+	position: relative;
+}
+.wrx .message:hover {
+	background: var(--bg-hover);
+}
+.wrx .message.user {
+	background: var(--bg-selected);
+	border-color: var(--accent-dim);
+	padding: 10px 12px;
+	margin: 6px 0;
+}
+.wrx .message.live {
+	border-color: color-mix(in srgb, var(--success) 25%, transparent);
+}
+.wrx .message-body {
+	min-width: 0;
+}
+.wrx .message-meta {
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 8px;
+	font-size: 10px;
+	margin-bottom: 4px;
+}
+.wrx .message-meta b {
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0;
+}
+.wrx .message-meta b.name {
+	color: var(--agent);
+}
+.wrx .message.user .message-meta b {
+	letter-spacing: 1px;
+	font-size: 9px;
+}
+.wrx .message-meta .handle,
+.wrx .message-meta .via {
+	color: var(--muted);
+}
+.wrx .message-meta .tag {
+	font-size: 9px;
+	padding: 1px 6px;
+	border-radius: 4px;
+	border: 1px solid var(--border);
+	color: var(--muted);
+}
+.wrx .message-actions {
+	display: flex;
+	gap: 2px;
+	opacity: 0;
+	align-self: start;
+}
+.wrx .message:hover .message-actions,
+.wrx .message-actions:focus-within {
+	opacity: 1;
+}
+.wrx button.ghost {
+	min-height: 24px;
+	width: 24px;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--muted);
+	font-size: 13px;
+}
+.wrx button.ghost:hover {
+	color: var(--foreground);
+	background: var(--bg-hover);
+}
+.wrx .message-footer {
+	font-size: 9px;
+	color: var(--muted);
+	margin-top: 6px;
+}
+.wrx .md {
+	font-size: 12.5px;
+	line-height: 1.65;
+	overflow-wrap: anywhere;
+}
+.wrx .md > * {
+	margin: 0 0 8px;
+}
+.wrx .md > *:last-child {
+	margin-bottom: 0;
+}
+.wrx .md h3,
+.wrx .md h4,
+.wrx .md h5,
+.wrx .md h6 {
+	font-size: 12.5px;
+	font-weight: 600;
+	margin: 12px 0 6px;
+}
+.wrx .md h3 {
+	font-size: 14px;
+}
+.wrx .md ul,
+.wrx .md ol {
+	padding-left: 20px;
+}
+.wrx .md li {
+	margin: 2px 0;
+}
+.wrx .md li.task {
+	list-style: none;
+	margin-left: -16px;
+}
+.wrx .md li.task:before {
+	content: '☐ ';
+	color: var(--muted);
+}
+.wrx .md li.task.checked:before {
+	content: '☑ ';
+	color: var(--success);
+}
+.wrx .md code {
+	font:
+		11px 'SFMono-Regular',
+		Menlo,
+		monospace;
+	background: var(--bg-hover);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	padding: 1px 4px;
+}
+.wrx .md-code {
+	position: relative;
+	background: var(--background-deep);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 10px 12px;
+	overflow: auto;
+	white-space: pre;
+}
+.wrx .md-code code {
+	background: none;
+	border: 0;
+	padding: 0;
+	font-size: 11px;
+	line-height: 1.6;
+}
+.wrx .md-lang {
+	position: absolute;
+	top: 4px;
+	right: 8px;
+	font-size: 9px;
+	color: var(--muted);
+}
+.wrx .md blockquote {
+	border-left: 2px solid var(--accent-dim);
+	padding-left: 10px;
+	color: var(--text-secondary);
+}
+.wrx .md a {
+	color: var(--accent-text);
+}
+.wrx .md hr {
+	border: 0;
+	border-top: 1px solid var(--border);
+}
+.wrx .md-table {
+	overflow: auto;
+}
+.wrx .md table {
+	border-collapse: collapse;
+	font-size: 11.5px;
+}
+.wrx .md th,
+.wrx .md td {
+	border: 1px solid var(--border);
+	padding: 5px 9px;
+	text-align: left;
+	vertical-align: top;
+}
+.wrx .md th {
+	background: var(--bg-hover);
+	font-weight: 600;
+}
+.wrx .mention {
+	color: var(--agent, var(--accent-text));
+	background: color-mix(in srgb, var(--agent, var(--accent)) 14%, transparent);
+	border-radius: 4px;
+	padding: 0 3px;
+	font-weight: 500;
+}
+.wrx .tool,
+.wrx .thinking {
+	margin: 6px 0;
+	font-size: 11px;
+}
+.wrx .tool summary,
+.wrx .thinking summary {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	cursor: pointer;
+	color: var(--text-secondary);
+	padding: 4px 8px;
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	background: var(--background);
+	list-style: none;
+	min-width: 0;
+}
+.wrx .tool summary::-webkit-details-marker,
+.wrx .thinking summary::-webkit-details-marker {
+	display: none;
+}
+.wrx .tool summary:hover,
+.wrx .thinking summary:hover {
+	color: var(--foreground);
+	border-color: var(--border-focused);
+}
+.wrx .tool summary b {
+	font-weight: 600;
+	color: var(--foreground);
+	flex-shrink: 0;
+}
+.wrx .tool summary span {
+	font-family: 'SFMono-Regular', Menlo, monospace;
+	font-size: 10.5px;
+	color: var(--muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+.wrx .tool-state {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	flex-shrink: 0;
+	background: var(--success);
+}
+.wrx .tool.running .tool-state {
+	background: var(--warning);
+	animation: wrx-pulse 1s infinite;
+}
+.wrx .tool.error .tool-state {
+	background: var(--error);
+}
+.wrx .tool.cancelled .tool-state,
+.wrx .tool.denied .tool-state {
+	background: var(--muted);
+}
+.wrx .tool[open] summary,
+.wrx .thinking[open] summary {
+	border-radius: 5px 5px 0 0;
+}
+.wrx .tool-detail,
+.wrx .tool-result {
+	margin: 0;
+	padding: 8px 10px;
+	max-height: 260px;
+	overflow: auto;
+	font:
+		10.5px/1.6 'SFMono-Regular',
+		Menlo,
+		monospace;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	border: 1px solid var(--border);
+	border-top: 0;
+	background: var(--background-deep);
+}
+.wrx .tool-result {
+	color: var(--text-secondary);
+}
+.wrx .tool.error .tool-result {
+	color: var(--error);
+}
+.wrx .tool-detail .added {
+	color: var(--success);
+}
+.wrx .tool-detail .removed {
+	color: var(--error);
+}
+.wrx .tool-empty {
+	margin: 0;
+	padding: 6px 10px;
+	font-size: 10px;
+	color: var(--muted);
+	border: 1px solid var(--border);
+	border-top: 0;
+}
+.wrx .thinking summary:before {
+	content: '✻';
+	color: var(--accent-text);
+}
+.wrx .thinking > div {
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-top: 0;
+	font-style: italic;
+	color: var(--muted);
+	white-space: pre-wrap;
+	max-height: 260px;
+	overflow: auto;
+	line-height: 1.55;
+}
+.wrx .system-note {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 8px 0;
+	font-size: 10px;
+	color: var(--muted);
+}
+.wrx .system-note:before,
+.wrx .system-note:after {
+	content: '';
+	flex: 1;
+	border-top: 1px dashed var(--border);
+}
+.wrx .system-note span {
+	max-width: 75%;
+	text-align: center;
+	white-space: pre-wrap;
+}
+.wrx .typing {
+	display: flex;
+	gap: 4px;
+	padding: 6px 0;
+}
+.wrx .typing i {
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--agent, var(--muted));
+	animation: wrx-pulse 1.2s infinite;
+}
+.wrx .typing i:nth-child(2) {
+	animation-delay: 0.2s;
+}
+.wrx .typing i:nth-child(3) {
+	animation-delay: 0.4s;
+}
+.wrx .working {
+	margin: 10px 12px;
+	flex-wrap: wrap;
+}
+.wrx .working span {
+	color: var(--muted);
+}
+.wrx .working .esc {
+	font-size: 10px;
+	opacity: 0.7;
+	margin-left: auto;
+}
+.wrx .spark {
+	color: var(--accent-text);
+	display: inline-block;
+	animation: wrx-spin 2s linear infinite;
+}
+@keyframes wrx-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+.wrx .activity-log {
+	font-size: 10px;
+	color: var(--muted);
+	margin: 16px 12px 4px;
+}
+.wrx .activity-log summary {
+	cursor: pointer;
+}
+.wrx .thread-welcome .logo {
+	font-size: 30px;
+	color: var(--accent-text);
+	margin-bottom: 12px;
+}
+.wrx .thread-welcome p {
+	line-height: 1.7;
+}
+.wrx .tips {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 6px 14px;
+	font-size: 10px;
+	color: var(--muted);
+	margin-top: 16px;
+}
+.wrx kbd {
+	font:
+		10px 'SFMono-Regular',
+		Menlo,
+		monospace;
+	border: 1px solid var(--border);
+	border-radius: 3px;
+	padding: 0 4px;
+	background: var(--background);
+}
+.wrx .jump {
+	position: absolute;
+	right: 28px;
+	bottom: 150px;
+	z-index: 4;
+	width: 30px;
+	min-height: 30px;
+	padding: 0;
+	border-radius: 50%;
+	box-shadow: 0 4px 14px color-mix(in srgb, #000 40%, transparent);
+}
+.wrx .jump.hidden {
+	display: none;
+}
+.wrx .todo-bar {
+	margin: 0 18px;
+	border: 1px solid var(--border);
+	border-bottom: 0;
+	border-radius: 7px 7px 0 0;
+	background: var(--background);
+	font-size: 11px;
+}
+.wrx .todo-bar summary {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding: 6px 10px;
+	cursor: pointer;
+	list-style: none;
+}
+.wrx .todo-bar summary span {
+	color: var(--muted);
+}
+.wrx .todo-bar summary em {
+	font-style: normal;
+	color: var(--muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+.wrx .todo-bar ul {
+	list-style: none;
+	margin: 0;
+	padding: 0 10px 8px 24px;
+	max-height: 140px;
+	overflow: auto;
+}
+.wrx .todo-bar li {
+	padding: 2px 0;
+}
+.wrx .todo-bar li.completed {
+	color: var(--muted);
+	text-decoration: line-through;
+}
+.wrx .todo-bar li.in_progress {
+	color: var(--accent-text);
+}
+.wrx .todo-bar + .composer {
+	border-top-left-radius: 0;
+	border-top-right-radius: 0;
+}
+.wrx .composer {
+	position: relative;
+}
+.wrx .composer textarea {
+	resize: none;
+	min-height: 64px;
+	max-height: 240px;
+	font-size: 12.5px;
+}
+.wrx #composer-menu {
+	display: block;
+	padding: 0;
+	border: 0;
+}
+.wrx .composer-menu {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: calc(100% + 6px);
+	z-index: 10;
+	background: var(--bg-raised);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 4px;
+	box-shadow: 0 14px 40px color-mix(in srgb, #000 50%, transparent);
+	max-height: 280px;
+	overflow: auto;
+}
+.wrx .composer-menu button {
+	display: flex;
+	width: 100%;
+	justify-content: flex-start;
+	gap: 9px;
+	border: 0;
+	background: none;
+	padding: 6px 8px;
+	min-height: 32px;
+	font-size: 11px;
+	border-radius: 5px;
+	text-align: left;
+}
+.wrx .composer-menu button.active {
+	background: var(--bg-selected);
+}
+.wrx .composer-menu .avatar-chip {
+	width: 20px;
+	height: 20px;
+	font-size: 9px;
+}
+.wrx .composer-menu i {
+	color: var(--muted);
+	font-style: normal;
+}
+.wrx .composer-menu span {
+	color: var(--muted);
+	margin-left: auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+.wrx .composer-left,
+.wrx .composer-right {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+.wrx button.ib {
+	width: 27px;
+	min-height: 27px;
+	padding: 0;
+	border-color: transparent;
+	background: none;
+	color: var(--muted);
+	font:
+		600 13px 'SFMono-Regular',
+		Menlo,
+		monospace;
+}
+.wrx button.ib:hover {
+	color: var(--foreground);
+	background: var(--bg-hover);
+}
+.wrx .recipients {
+	font-size: 10px;
+	color: var(--muted);
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+.wrx dialog textarea {
+	width: 100%;
+	border: 1px solid var(--border);
+	background: var(--background);
+	color: var(--foreground);
+	padding: 11px;
+	border-radius: 5px;
+	outline: none;
+	resize: vertical;
+	font-size: 12px;
+	line-height: 1.5;
+}
+.wrx dialog form {
+	max-height: 80vh;
+	overflow: auto;
+}
+.wrx dialog label small {
+	color: var(--muted);
+	font-size: 10px;
+}
+.wrx .modal-title h2 .muted {
+	font-weight: 400;
+	font-size: 0.8em;
+}
+.wrx label.check {
+	flex-direction: row;
+	align-items: flex-start;
+	gap: 10px;
+	margin-bottom: 10px;
+	cursor: pointer;
+}
+.wrx label.check input {
+	width: auto;
+	margin: 2px 0 0;
+	padding: 0;
+}
+.wrx label.check span {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.wrx label.check b {
+	color: var(--foreground);
+	font-weight: 500;
+}
+.wrx label.check small {
+	font-size: 10px;
+	color: var(--muted);
+}
+.wrx .team-picker {
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 12px 14px 4px;
+	margin: 0 0 19px;
+}
+.wrx .team-picker legend {
+	font-size: 11px;
+	color: var(--text-secondary);
+	padding: 0 6px;
+}
+.wrx .danger-link {
+	background: none;
+	border: 0;
+	color: var(--error);
+	padding: 0;
+	min-height: 24px;
+	font-size: 11px;
+}
+.wrx .danger-link:hover {
+	background: none;
+	text-decoration: underline;
+}
+@container wrx (max-width:760px) {
+	.wrx .roster {
+		justify-content: flex-start;
+	}
+	.wrx .member span {
+		display: none;
+	}
+	.wrx .member {
+		padding: 3px;
+	}
+	.wrx .message {
+		grid-template-columns: 22px minmax(0, 1fr);
+	}
+	.wrx .message-actions {
+		display: none;
+	}
+	.wrx .composer-right small {
+		display: none;
+	}
+	.wrx .jump {
+		bottom: 130px;
+	}
+}
+.wrx .team-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr) 29px;
+	gap: 6px;
+	align-items: center;
+	margin-bottom: 8px;
+}
+.wrx .team-row input,
+.wrx .team-row select {
+	padding: 8px;
+	font-size: 11px;
+}
+.wrx .team-add {
+	display: flex;
+	gap: 6px;
+	margin: 4px 0 10px;
+}
+.wrx .team-add button {
+	font-size: 10px;
+	min-height: 28px;
+	padding: 4px 10px;
+}
+.wrx .team-add .icon {
+	width: 13px;
+}
+.wrx .sidebar button.search {
+	width: calc(100% - 28px);
+	margin: 2px 14px 22px;
+	height: 32px;
+	min-height: 32px;
+	padding: 0 8px 0 10px;
+	gap: 8px;
+	justify-content: flex-start;
+	background: var(--bg-hover);
+	border: 1px solid transparent;
+	border-radius: 7px;
+	color: var(--muted);
+	font-weight: 400;
+}
+.wrx .sidebar button.search:hover {
+	background: color-mix(in srgb, var(--foreground) 8%, transparent);
+	border-color: var(--border);
+	color: var(--text-secondary);
+}
+.wrx .sidebar button.search .icon {
+	width: 13px;
+	height: 13px;
+}
+.wrx .sidebar button.search > span {
+	font-size: 12px;
+}
+.wrx .sidebar button.search kbd {
+	border: 0;
+	background: none;
+	padding: 0;
+	font-size: 10px;
+	color: var(--muted);
+	opacity: 0.75;
+}
+.wrx .row-delete {
+	min-height: 24px;
+	width: 24px;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--muted);
+	opacity: 0;
+	flex-shrink: 0;
+	transition:
+		opacity 0.15s,
+		color 0.15s;
+}
+.wrx .row-delete .icon {
+	width: 14px;
+	height: 14px;
+}
+.wrx .row-delete:hover {
+	background: color-mix(in srgb, var(--error) 12%, transparent);
+	color: var(--error);
+	border: 0;
+}
+.wrx .project-label .row-delete {
+	margin-left: auto;
+}
+.wrx .project-label:hover .row-delete,
+.wrx .conversation-row:hover .row-delete,
+.wrx .row-delete:focus-visible {
+	opacity: 1;
+}
+.wrx .conversation-row {
+	position: relative;
+}
+.wrx .conversation-row .row-delete {
+	position: absolute;
+	top: 11px;
+	right: 8px;
+}
+.wrx .conversation-row .conversation {
+	padding-right: 36px;
+}
+.wrx button.danger {
+	background: var(--error);
+	border-color: var(--error);
+	color: #fff;
+	font-weight: 600;
+}
+.wrx button.danger:hover {
+	background: color-mix(in srgb, var(--error) 85%, #fff 15%);
+	border-color: var(--error);
+}
+.wrx dialog p code {
+	font-size: 11px;
+	overflow-wrap: anywhere;
+}
+@media (hover: none) {
+	.wrx .row-delete {
+		opacity: 0.6;
+	}
+}
+@container wrx (max-width:760px) {
+	.wrx .project-label .row-delete {
+		display: none;
+	}
+}
+.wrx .composer > #attachments,
+.wrx .composer > #dictation-status {
+	border-top: 0;
+	justify-content: flex-start;
+}
+.wrx .composer > [hidden] {
+	display: none !important;
+}
+.wrx .attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 10px 12px 0 !important;
+}
+.wrx .attachment {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 200px;
+	padding: 3px 3px 3px 3px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--background);
+	font-size: 10.5px;
+	color: var(--text-secondary);
+}
+.wrx .attachment img {
+	width: 34px;
+	height: 34px;
+	object-fit: cover;
+	border-radius: 5px;
+	flex-shrink: 0;
+}
+.wrx .attachment span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+.wrx .attachment .ghost {
+	width: 20px;
+	min-height: 20px;
+	font-size: 14px;
+}
+.wrx .message-images {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 8px;
+}
+.wrx .message-images a {
+	display: block;
+	border: 1px solid var(--accent-dim);
+	border-radius: 8px;
+	overflow: hidden;
+	background: var(--background);
+}
+.wrx .message-images img {
+	display: block;
+	max-width: 220px;
+	max-height: 160px;
+	object-fit: cover;
+}
+.wrx .conversation-main.dropping:after {
+	content: 'Drop images to attach';
+	position: absolute;
+	inset: 8px;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 2px dashed var(--border-focused);
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--background) 82%, var(--accent) 18%);
+	color: var(--accent-text);
+	font-size: 14px;
+	font-weight: 500;
+	pointer-events: none;
+}
+.wrx .dictation-status {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	padding: 9px 13px 0 !important;
+	font-size: 12px;
+	color: var(--muted);
+	font-style: italic;
+}
+.wrx .dictation-status.partial {
+	color: var(--text-secondary);
+}
+.wrx .dictation-status i {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--error);
+	flex-shrink: 0;
+	animation: wrx-pulse 1.2s infinite;
+}
+.wrx .dictation-status span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+.wrx button.ib .icon {
+	width: 15px;
+	height: 15px;
+}
+.wrx button.mic {
+	position: relative;
+	--level: 0;
+}
+.wrx button.mic.listening {
+	color: var(--error);
+	background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+.wrx button.mic.listening:before {
+	content: '';
+	position: absolute;
+	inset: -2px;
+	border-radius: 8px;
+	border: 2px solid var(--error);
+	opacity: calc(0.25 + var(--level) * 0.75);
+	transform: scale(calc(1 + var(--level) * 0.18));
+	transition:
+		transform 0.08s,
+		opacity 0.08s;
+	pointer-events: none;
+}
+.wrx button.mic.loading,
+.wrx button.mic.stopping {
+	color: var(--accent-text);
+	animation: wrx-pulse 1.2s infinite;
+}
+.wrx .agent-layout {
+	grid-template-rows: minmax(0, 1fr);
+}
+.wrx .conversation-main,
+.wrx .conversation-list {
+	min-height: 0;
+}
+.wrx .conversation-main {
+	overflow: hidden;
+}
+.wrx .transcript {
+	min-height: 0;
+	overscroll-behavior: contain;
+}
+.wrx .transcript > * {
+	flex-shrink: 0;
+}
+@container wrx (max-width:760px) {
+	.wrx .conversation-main {
+		min-height: 450px;
+	}
+	.wrx .transcript {
+		min-height: 160px;
+	}
+}
+.wrx .message-images.generated img {
+	max-width: min(420px, 100%);
+	max-height: 420px;
+	object-fit: contain;
+}
+.wrx .message-images.generated a {
+	border-color: var(--border);
+}
+.wrx .files-layout {
+	display: grid;
+	grid-template-columns: 280px minmax(0, 1fr);
+	grid-template-rows: minmax(0, 1fr);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	overflow: hidden;
+	min-height: 590px;
+	height: calc(100dvh - 397px);
+}
+.wrx .file-tree {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	border-right: 1px solid var(--border);
+	background: var(--bg-raised);
+}
+.wrx .file-tree .panel-heading {
+	padding: 0 10px 0 16px;
+	flex-shrink: 0;
+}
+.wrx .file-find {
+	display: flex !important;
+	flex-direction: row !important;
+	align-items: center;
+	gap: 8px;
+	margin: 10px 10px 6px !important;
+	height: 30px;
+	padding: 0 9px;
+	border-radius: 6px;
+	background: var(--bg-hover);
+	border: 1px solid transparent;
+	color: var(--muted);
+	flex-shrink: 0;
+}
+.wrx .file-find:focus-within {
+	border-color: var(--border-focused);
+	background: var(--background);
+}
+.wrx .file-find .icon {
+	width: 13px;
+	height: 13px;
+}
+.wrx .file-find input {
+	border: 0;
+	background: none;
+	padding: 0;
+	height: 100%;
+	font-size: 12px;
+	color: var(--foreground);
+}
+.wrx .file-find input::-webkit-search-cancel-button {
+	-webkit-appearance: none;
+}
+.wrx .tree {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: 4px 6px 12px;
+}
+.wrx .tree-group {
+	padding-left: 13px;
+	margin-left: 8px;
+	border-left: 1px solid var(--border);
+}
+.wrx .tree-row {
+	display: flex;
+	width: 100%;
+	justify-content: flex-start;
+	gap: 6px;
+	min-height: 26px;
+	padding: 3px 6px;
+	border: 0;
+	border-radius: 5px;
+	background: none;
+	color: var(--text-secondary);
+	font-size: 12px;
+	text-align: left;
+}
+.wrx .tree-row:hover {
+	background: var(--bg-hover);
+	color: var(--foreground);
+	border: 0;
+}
+.wrx .tree-row .icon {
+	width: 14px;
+	height: 14px;
+	color: var(--muted);
+}
+.wrx .tree-row.dir .icon:not(.twisty) {
+	color: var(--accent-text);
+}
+.wrx .tree-row .twisty {
+	width: 11px;
+	height: 11px;
+	transition: transform 0.12s;
+}
+.wrx .tree-row.open .twisty {
+	transform: rotate(90deg);
+}
+.wrx .tree-row.file {
+	padding-left: 23px;
+}
+.wrx .tree-row.result {
+	padding-left: 6px;
+}
+.wrx .tree-row span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+.wrx .tree-row small {
+	display: block;
+	font-size: 10px;
+	color: var(--muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.wrx .tree-row.selected {
+	background: var(--bg-selected);
+	color: var(--accent-text);
+}
+.wrx .tree-row.ignored {
+	opacity: 0.5;
+}
+.wrx .tree-note {
+	font-size: 11px;
+	color: var(--muted);
+	padding: 6px 8px;
+	margin: 0;
+}
+.wrx .file-viewer {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	background: var(--background);
+}
+.wrx .file-viewer > .empty {
+	flex: 1;
+}
+.wrx .viewer-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 10px 16px;
+	border-bottom: 1px solid var(--border);
+	flex-shrink: 0;
+	flex-wrap: wrap;
+}
+.wrx .viewer-path {
+	font:
+		12px 'SFMono-Regular',
+		Menlo,
+		monospace;
+	color: var(--foreground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+.wrx .viewer-path i {
+	font-style: normal;
+	color: var(--muted);
+	margin: 0 4px;
+}
+.wrx .viewer-meta {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	font-size: 11px;
+	color: var(--muted);
+}
+.wrx .viewer-meta .text-button {
+	font-size: 11px;
+	text-decoration: none;
+	min-height: 0;
+}
+.wrx .viewer-body {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	display: flex;
+	flex-direction: column;
+}
+.wrx .viewer-note {
+	font-size: 11px;
+	color: var(--warning);
+	padding: 8px 16px;
+	margin: 0;
+	border-bottom: 1px solid var(--border);
+}
+.wrx .code-view {
+	margin: 0;
+	padding: 12px 0;
+	font:
+		12px/1.6 'SFMono-Regular',
+		Menlo,
+		monospace;
+	counter-reset: line;
+	tab-size: 2;
+	min-width: max-content;
+}
+.wrx .code-view span {
+	display: block;
+	padding: 0 16px 0 0;
+	white-space: pre;
+}
+.wrx .code-view span:before {
+	counter-increment: line;
+	content: counter(line);
+	display: inline-block;
+	width: 52px;
+	padding-right: 16px;
+	margin-right: 4px;
+	text-align: right;
+	color: var(--muted);
+	opacity: 0.55;
+	user-select: none;
+}
+.wrx .code-view span:hover {
+	background: var(--bg-hover);
+}
+.wrx .markdown-view {
+	padding: 24px 32px;
+	max-width: 880px;
+}
+.wrx .markdown-view .md {
+	font-size: 13.5px;
+}
+.wrx .media-stage {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	min-height: 0;
+}
+.wrx .media-stage img,
+.wrx .media-stage video {
+	max-width: 100%;
+	max-height: 100%;
+	object-fit: contain;
+	border-radius: 6px;
+}
+.wrx .media-stage video {
+	background: #000;
+	width: 100%;
+}
+.wrx .checker {
+	background-color: var(--background-deep);
+	background-image:
+		linear-gradient(
+			45deg,
+			var(--bg-hover) 25%,
+			transparent 25%,
+			transparent 75%,
+			var(--bg-hover) 75%
+		),
+		linear-gradient(
+			45deg,
+			var(--bg-hover) 25%,
+			transparent 25%,
+			transparent 75%,
+			var(--bg-hover) 75%
+		);
+	background-size: 20px 20px;
+	background-position:
+		0 0,
+		10px 10px;
+}
+.wrx .audio-card {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 14px;
+	padding: 32px 40px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--bg-raised);
+	width: min(480px, 100%);
+}
+.wrx .audio-card .icon {
+	width: 34px;
+	height: 34px;
+	color: var(--accent-text);
+}
+.wrx .audio-card b {
+	font-weight: 500;
+	overflow-wrap: anywhere;
+	text-align: center;
+}
+.wrx .audio-card audio {
+	width: 100%;
+}
+.wrx .pdf-frame {
+	flex: 1;
+	width: 100%;
+	border: 0;
+	background: #fff;
+}
+.wrx .button-link {
+	margin-top: 16px;
+	color: var(--accent-text);
+	font-size: 12px;
+}
+@container wrx (max-width:760px) {
+	.wrx .files-layout {
+		display: flex;
+		flex-direction: column;
+		height: auto;
+	}
+	.wrx .file-tree {
+		max-height: 260px;
+		border-right: 0;
+		border-bottom: 1px solid var(--border);
+	}
+	.wrx .file-viewer {
+		min-height: 450px;
+	}
+	.wrx .markdown-view {
+		padding: 16px;
+	}
+}
+
+/* Corpus shell: the workbench's left panel sits on surface, its main column scrolls on canvas. */
+.wrx .wrx-main {
+	overflow-y: auto;
+	background: var(--background-deep);
+}
+.wrx .stats strong small {
+	font-family: inherit;
+}

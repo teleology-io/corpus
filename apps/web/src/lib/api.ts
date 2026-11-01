@@ -12,7 +12,7 @@ export async function api<T = unknown>(
 		let message = res.statusText;
 		try {
 			const data = await res.json();
-			message = data.message ?? message;
+			message = data.message ?? data.error ?? message;
 		} catch {
 			/* not json */
 		}

@@ -75,6 +75,28 @@ export interface DoseDTO {
 	status: 'taken' | 'skipped' | 'missed' | null;
 }
 
+/** One row in the app-wide ⌘K search palette. */
+export interface SearchResult {
+	kind: string;
+	title: string;
+	detail: string;
+	href: string;
+	/** Opens in a new tab (integration items) */
+	external?: boolean;
+}
+
+/** A task from the Workbench (ported WRX) board, shown on the dashboard. */
+export interface WorkbenchTaskDTO {
+	id: string;
+	title: string;
+	status: 'todo' | 'doing' | 'done';
+	createdAt: string;
+	completedAt: string | null;
+	workspaceId: string;
+	workspace: string | null;
+	project: string | null;
+}
+
 export interface TaskDTO {
 	id: string;
 	title: string;

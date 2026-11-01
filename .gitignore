@@ -9,3 +9,6 @@ build
 uploads
 *.log
 apps/web/static/sherpa
+
+# Workbench (ported WRX) state, worktrees, transcripts
+.wrx

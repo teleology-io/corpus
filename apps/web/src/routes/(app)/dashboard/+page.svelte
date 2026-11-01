@@ -19,6 +19,7 @@
 		AtSign
 	} from '@lucide/svelte';
 	import TaskList from '#lib/components/dashboard/TaskList.svelte';
+	import WorkbenchTasks from '#lib/components/dashboard/WorkbenchTasks.svelte';
 	import Icon from '#lib/components/ui/Icon.svelte';
 	import AvatarStack from '#lib/components/ui/AvatarStack.svelte';
 	import BrandIcon from '#lib/components/ui/BrandIcon.svelte';
@@ -166,6 +167,9 @@
 				<span class="text-xs text-muted">{data.stats.openToday} open</span>
 			</div>
 			<TaskList tasks={data.today.tasks} {tz} dueDate={data.date} />
+			{#if data.today.workbench.length}
+				<WorkbenchTasks tasks={data.today.workbench} />
+			{/if}
 		</section>
 
 		<!-- schedule -->

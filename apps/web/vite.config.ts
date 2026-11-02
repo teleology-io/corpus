@@ -2,8 +2,16 @@ import tailwindcss from '@tailwindcss/vite';
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
+import os from 'node:os';
+
+// Listen on every interface so other machines on the network can open the app by IP or by this
+// machine's Bonjour name (Vite rejects unknown Host headers, so allow <hostname>.local too).
+const lanName = `${os.hostname().replace(/\.local$/i, '')}.local`.toLowerCase();
+const lan = { host: '0.0.0.0', allowedHosts: [lanName, 'localhost'] };
 
 export default defineConfig({
+	server: lan,
+	preview: lan,
 	plugins: [
 		tailwindcss(),
 		sveltekit({

@@ -57,7 +57,7 @@ function host(userId) {
 	void probeRuntimes();
 	// Agents run detached in their own process groups; stop them with the server.
 	process.once('exit', () => {
-		for (const chatId of engine.running.keys())
+		for (const chatId of new Set([...engine.running.values()].map((r) => r.chatId)))
 			try {
 				engine.cancel(chatId);
 			} catch {}

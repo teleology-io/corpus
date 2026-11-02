@@ -3,8 +3,9 @@ import { optionalEnv } from '@corpus/db';
 import { requireCtx } from '#lib/server/ctx.js';
 import { listWorkspaces, workspaceMembers } from '#lib/server/workspaces.js';
 import { unreadCount } from '#lib/server/notifications.js';
+import { collabUrl } from '#lib/server/collab.js';
 
-export const load: LayoutServerLoad = async ({ locals }) => {
+export const load: LayoutServerLoad = async ({ locals, url }) => {
 	const ctx = requireCtx(locals);
 	const [workspaces, members, unread] = await Promise.all([
 		listWorkspaces(ctx.userId),
@@ -33,7 +34,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		unread,
 		config: {
 			vapidKey: optionalEnv('PUBLIC_VAPID_KEY') ?? null,
-			collabUrl: optionalEnv('PUBLIC_COLLAB_URL') ?? 'ws://localhost:1234'
+			collabUrl: collabUrl(url)
 		}
 	};
 };

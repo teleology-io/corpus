@@ -6,13 +6,31 @@ import { onUserCreated, initialWorkspaceId, seedWorkspace } from './workspace';
 
 export { resolveWorkspace } from './workspace';
 import { sendInvitation } from './email';
+import os from 'node:os';
 
 const githubId = optionalEnv('GITHUB_CLIENT_ID');
 const githubSecret = optionalEnv('GITHUB_CLIENT_SECRET');
+const baseURL = env('PUBLIC_APP_URL', 'http://localhost:5173');
+
+// When the app runs on localhost (dev), also accept sign-in from other machines on the LAN that
+// open it by this host's IP or <hostname>.local — better-auth rejects unknown Origins otherwise.
+function lanOrigins(): string[] {
+	const base = new URL(baseURL);
+	if (!['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)) return [];
+	const hosts = [
+		`${os.hostname().replace(/\.local$/i, '')}.local`.toLowerCase(),
+		...Object.values(os.networkInterfaces())
+			.flat()
+			.filter((a) => a && !a.internal && a.family === 'IPv4')
+			.map((a) => a!.address)
+	];
+	return hosts.map((h) => `${base.protocol}//${h}${base.port ? `:${base.port}` : ''}`);
+}
 
 export const auth = betterAuth({
 	appName: 'Corpus',
-	baseURL: env('PUBLIC_APP_URL', 'http://localhost:5173'),
+	baseURL,
+	trustedOrigins: lanOrigins(),
 	secret: env('BETTER_AUTH_SECRET', 'dev-secret-change-me-dev-secret-change-me'),
 	database: drizzleAdapter(db, { provider: 'pg', schema }),
 	emailAndPassword: { enabled: true, autoSignIn: true },

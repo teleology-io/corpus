@@ -597,10 +597,20 @@ export class Engine {
 		if (member.status !== 'running') member.status = 'queued';
 		if (chat.status !== 'running') chat.status = 'queued';
 	}
-	busy(workspaceId) {
-		return this.store.state.chats.some(
-			(c) => c.workspaceId === workspaceId && this.running.has(c.id)
-		);
+	// Agents that can modify the checkout. Only one runs per workspace at a time so edits don't
+	// collide; read-only agents (assess/review) run alongside everything.
+	static writes(member) {
+		return member.mode === 'implement' || !!member.fullAccess;
+	}
+	// One live run per (chat, member): { chatId, memberId, workspaceId, writer, child }.
+	runs(chatId) {
+		return [...this.running.values()].filter((r) => r.chatId === chatId);
+	}
+	chatRunning(chatId) {
+		return this.runs(chatId).length > 0;
+	}
+	writing(workspaceId) {
+		return [...this.running.values()].some((r) => r.workspaceId === workspaceId && r.writer);
 	}
 	pump() {
 		for (const job of [...this.queue]) {
@@ -612,7 +622,8 @@ export class Engine {
 			}
 			const w = this.store.get('workspaces', chat.workspaceId);
 			if (
-				this.busy(w.id) ||
+				this.running.has(`${chat.id}:${member.id}`) ||
+				(Engine.writes(member) && this.writing(w.id)) ||
 				(w.environmentId && this.store.get('environments', w.environmentId).busy)
 			)
 				continue;
@@ -719,7 +730,7 @@ export class Engine {
 				: '',
 			`Thread members:\n${roster}`,
 			first
-				? "How this thread works:\n- Write like a teammate in Slack: concise, direct, Markdown allowed.\n- @mention a teammate's handle when you need them to act or answer. Every agent you mention takes a turn after you, in order. Do not mention anyone just to acknowledge or thank them.\n- Use @all only when every agent truly needs to respond.\n- Address the human as @you, and ask @you when a decision needs a human.\n- Agents take turns one at a time. Never claim work you have not done."
+				? "How this thread works:\n- Write like a teammate in Slack: concise, direct, Markdown allowed.\n- @mention a teammate's handle when you need them to act or answer. Every agent you mention starts after your reply; several mentioned agents may work at the same time. Do not mention anyone just to acknowledge or thank them.\n- Use @all only when every agent truly needs to respond.\n- Address the human as @you, and ask @you when a decision needs a human.\n- Other agents may be working in parallel with you; you only see their replies once they finish. Read-only agents run concurrently; agents that edit files take turns in the workspace. Never claim work you have not done."
 				: '',
 			transcript
 				? `${first ? 'Recent thread messages' : 'New thread messages since your last turn'}:\n${transcript}`
@@ -892,7 +903,7 @@ export class Engine {
 			if (finished) return;
 			finished = true;
 			if (pending) event(pending);
-			this.running.delete(chat.id);
+			this.running.delete(key);
 			if (msg.status !== 'cancelled')
 				msg.status = code === 0 && !error && !resultError ? 'done' : 'failed';
 			for (const b of msg.blocks)
@@ -924,12 +935,24 @@ export class Engine {
 			member.status = this.queue.some((j) => j.chatId === chat.id && j.memberId === member.id)
 				? 'queued'
 				: 'idle';
-			chat.status = this.queue.some((j) => j.chatId === chat.id)
-				? 'queued'
-				: { done: 'completed', cancelled: 'cancelled' }[msg.status] || 'failed';
+			chat.status = this.chatRunning(chat.id)
+				? 'running'
+				: this.queue.some((j) => j.chatId === chat.id)
+					? 'queued'
+					: chat.status === 'cancelled'
+						? 'cancelled'
+						: { done: 'completed', cancelled: 'cancelled' }[msg.status] || 'failed';
 			chat.updatedAt = now();
 			this.changed();
 			this.pump();
+		};
+		const key = `${chat.id}:${member.id}`;
+		const run = {
+			chatId: chat.id,
+			memberId: member.id,
+			workspaceId: w.id,
+			writer: Engine.writes(member),
+			child: null
 		};
 		let child;
 		try {
@@ -940,13 +963,14 @@ export class Engine {
 				stdio: ['pipe', 'pipe', 'pipe']
 			});
 		} catch (error) {
-			this.running.set(chat.id, null);
+			this.running.set(key, run);
 			finish(null, error);
 			return msg;
 		}
 		child.stdout.setEncoding('utf8');
 		child.stderr.setEncoding('utf8');
-		this.running.set(chat.id, child);
+		run.child = child;
+		this.running.set(key, run);
 		child.stdout.on('data', (chunk) => {
 			pending += chunk.toString();
 			const lines = pending.split('\n');
@@ -968,31 +992,33 @@ export class Engine {
 	}
 	cancel(chatId) {
 		const c = this.store.get('chats', chatId);
-		const child = this.running.get(chatId);
+		const runs = this.runs(chatId);
 		this.queue = this.queue.filter((j) => j.chatId !== chatId);
 		for (const m of c.members) if (m.status === 'queued') m.status = 'idle';
-		if (child) {
-			const msg = c.messages.findLast((m) => m.role === 'agent' && m.status === 'running');
-			if (msg) msg.status = 'cancelled';
-			c.status = 'cancelled';
-			try {
-				process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGTERM');
-			} catch {}
+		for (const msg of c.messages)
+			if (msg.role === 'agent' && msg.status === 'running') msg.status = 'cancelled';
+		if (runs.length || c.status === 'queued') c.status = 'cancelled';
+		for (const run of runs) {
+			const child = run.child;
+			if (!child) continue;
+			const kill = (signal) => {
+				try {
+					process.kill(process.platform === 'win32' ? child.pid : -child.pid, signal);
+				} catch {}
+			};
+			kill('SIGTERM');
+			const key = `${run.chatId}:${run.memberId}`;
 			const timer = setTimeout(() => {
-				if (this.running.get(chatId) === child) {
-					try {
-						process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL');
-					} catch {}
-				}
+				if (this.running.get(key)?.child === child) kill('SIGKILL');
 			}, 3000);
 			timer.unref();
-		} else if (c.status === 'queued') c.status = 'cancelled';
+		}
 		this.changed();
 	}
 	deleteChat(chatId) {
 		const chat = this.store.get('chats', chatId);
-		if (this.running.has(chat.id))
-			throw new Error('Stop the running agent before deleting this conversation');
+		if (this.chatRunning(chat.id))
+			throw new Error('Stop the running agents before deleting this conversation');
 		this.queue = this.queue.filter((j) => j.chatId !== chat.id);
 		this.store.state.chats = this.store.state.chats.filter((c) => c !== chat);
 		fs.rmSync(this.uploads(chat.id), { recursive: true, force: true });
@@ -1005,7 +1031,7 @@ export class Engine {
 		const project = this.store.get('projects', projectId);
 		const workspaces = this.store.state.workspaces.filter((w) => w.projectId === project.id);
 		const ids = new Set(workspaces.map((w) => w.id));
-		if (this.store.state.chats.some((c) => ids.has(c.workspaceId) && this.running.has(c.id)))
+		if (this.store.state.chats.some((c) => ids.has(c.workspaceId) && this.chatRunning(c.id)))
 			throw new Error('Stop running agents in this project first');
 		const isolated = this.store.state.environments.filter(
 			(e) => e.scope === 'isolated' && ids.has(e.workspaceId)

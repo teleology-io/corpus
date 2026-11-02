@@ -1,12 +1,13 @@
 import { error } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import type { PageServerLoad } from './$types';
-import { db, env, optionalEnv, schema } from '@corpus/db';
+import { db, env, schema } from '@corpus/db';
 import { linkRole } from '@corpus/db/access';
+import { collabUrl } from '#lib/server/collab.js';
 import { randomToken, signToken } from '@corpus/core/crypto';
 
 /** Public note view via share link — collab token is minted server-side with the link's role. */
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params, locals, url }) => {
 	const link = await linkRole(params.token);
 	if (!link) error(404, 'This link is invalid or has been turned off');
 	const [note] = await db
@@ -26,6 +27,6 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			env('BETTER_AUTH_SECRET', 'dev-secret-change-me-dev-secret-change-me'),
 			60 * 60 * 12
 		),
-		collabUrl: optionalEnv('PUBLIC_COLLAB_URL') ?? 'ws://localhost:1234'
+		collabUrl: collabUrl(url)
 	};
 };

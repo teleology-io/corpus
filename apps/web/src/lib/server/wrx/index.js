@@ -255,6 +255,28 @@ function events(h, request) {
 	});
 }
 
+// Claude Code accepts aliases (resolve to the latest of a family) or full model IDs.
+const CLAUDE_MODELS = [
+	['best', 'Best available (alias)'],
+	['opus', 'Opus — latest (alias)'],
+	['sonnet', 'Sonnet — latest (alias)'],
+	['haiku', 'Haiku — latest (alias)'],
+	['opus[1m]', 'Opus 1M context (alias)'],
+	['sonnet[1m]', 'Sonnet 1M context (alias)'],
+	['opusplan', 'Opus plans, Sonnet executes (alias)'],
+	['claude-fable-5-1', 'Claude Fable 5.1'],
+	['claude-fable-5', 'Claude Fable 5'],
+	['claude-opus-5-5', 'Claude Opus 5.5'],
+	['claude-opus-5', 'Claude Opus 5'],
+	['claude-opus-4-8', 'Claude Opus 4.8'],
+	['claude-opus-4-7', 'Claude Opus 4.7'],
+	['claude-opus-4-6', 'Claude Opus 4.6'],
+	['claude-sonnet-5-5', 'Claude Sonnet 5.5'],
+	['claude-sonnet-5', 'Claude Sonnet 5'],
+	['claude-sonnet-4-6', 'Claude Sonnet 4.6'],
+	['claude-haiku-5-5', 'Claude Haiku 5.5'],
+	['claude-haiku-4-5', 'Claude Haiku 4.5']
+].map(([value, label]) => ({ value, label }));
 export async function handleWrx({ request, url, route, userId }) {
 	try {
 		const { store, engine, directory } = host(userId);
@@ -291,6 +313,27 @@ export async function handleWrx({ request, url, route, userId }) {
 			});
 		}
 		if (request.method === 'GET') {
+			if (route === 'models') {
+				let codex = [];
+				try {
+					const cache = JSON.parse(
+						fs.readFileSync(
+							path.join(
+								process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
+								'models_cache.json'
+							),
+							'utf8'
+						)
+					);
+					codex = (cache.models || [])
+						.filter((m) => m.visibility === 'list' && typeof m.slug === 'string')
+						.map((m) => ({ value: m.slug, label: m.display_name || m.slug }));
+				} catch {}
+				return json(200, {
+					codex,
+					claude: CLAUDE_MODELS
+				});
+			}
 			if (route === 'state')
 				return json(200, { ...store.state, tools: await tools(), machine, remote });
 			if (route === 'network')

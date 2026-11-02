@@ -9,7 +9,8 @@
 		"./access": "./src/access.ts",
 		"./connections": "./src/connections.ts",
 		"./apps": "./src/apps.ts",
-		"./storage": "./src/storage.ts"
+		"./storage": "./src/storage.ts",
+		"./testing": "./src/testing.ts"
 	},
 	"scripts": {
 		"generate": "drizzle-kit generate",

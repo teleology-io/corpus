@@ -44,6 +44,27 @@ export async function noteRole(userId: string, noteId: string): Promise<NoteRole
 	return (r.role as NoteRole | null) ?? null;
 }
 
+/**
+ * Who may see a note's recipients and link tokens and change its sharing: its creator while
+ * still a member of the note's workspace, or an owner/admin of that workspace (so notes stay
+ * manageable after their creator leaves). External share recipients and ordinary members can't.
+ * better-auth stores multiple member roles comma-separated, hence the array overlap.
+ */
+export async function canManageNote(userId: string, noteId: string): Promise<boolean> {
+	const rows = await sql<{ ok: boolean }[]>`
+		select exists(
+			select 1 from note n
+			join member m on m.organization_id = n.workspace_id and m.user_id = ${userId}
+			where n.id = ${noteId}
+				and (
+					n.created_by = ${userId}
+					or string_to_array(replace(m.role, ' ', ''), ',') && array['owner', 'admin']
+				)
+		) as ok
+	`;
+	return !!rows[0]?.ok;
+}
+
 /** Role granted by a public link token for a note (link on the note or an ancestor). */
 export async function linkRole(token: string): Promise<{ noteId: string; role: NoteRole } | null> {
 	const [row] = await db

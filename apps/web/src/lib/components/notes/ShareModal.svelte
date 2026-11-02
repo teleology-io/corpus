@@ -23,11 +23,9 @@
 		teams: { id: string; name: string }[];
 	}
 
-	let {
-		open = $bindable(false),
-		noteId,
-		canEdit
-	}: { open?: boolean; noteId: string; canEdit: boolean } = $props();
+	// Only rendered for callers who may manage sharing (creator or workspace owner/admin);
+	// the API enforces the same rule.
+	let { open = $bindable(false), noteId }: { open?: boolean; noteId: string } = $props();
 
 	let data = $state<ShareData | null>(null);
 	let email = $state('');
@@ -91,32 +89,31 @@
 	size="md"
 >
 	{#snippet icon()}<Share2 class="size-5" />{/snippet}
-	{#if canEdit}
-		<form class="flex gap-2" onsubmit={invite}>
-			<input
-				class="input flex-1"
-				type="email"
-				placeholder="Email address"
-				bind:value={email}
-				disabled={!!teamId}
-			/>
-			{#if data?.teams.length}
-				<select class="input w-36" bind:value={teamId} disabled={!!email.trim()}>
-					<option value="">or a team…</option>
-					{#each data.teams as t (t.id)}<option value={t.id}>{t.name}</option>{/each}
-				</select>
-			{/if}
-			<select class="input w-28" bind:value={role}>
-				<option value="view">Can view</option>
-				<option value="comment">Can comment</option>
-				<option value="edit">Can edit</option>
+	<form class="flex gap-2" onsubmit={invite}>
+		<input
+			class="input flex-1"
+			type="email"
+			placeholder="Email address"
+			bind:value={email}
+			disabled={!!teamId}
+		/>
+		{#if data?.teams.length}
+			<select class="input w-36" bind:value={teamId} disabled={!!email.trim()}>
+				<option value="">or a team…</option>
+				{#each data.teams as t (t.id)}<option value={t.id}>{t.name}</option>{/each}
 			</select>
-			<button class="btn-primary h-10">Invite</button>
-		</form>
-		<p class="mt-1.5 text-xs text-muted">
-			Members of this workspace can already edit. Sharing also applies to subpages.
-		</p>
-	{/if}
+		{/if}
+		<select class="input w-28" bind:value={role}>
+			<option value="view">Can view</option>
+			<option value="comment">Can comment</option>
+			<option value="edit">Can edit</option>
+		</select>
+		<button class="btn-primary h-10">Invite</button>
+	</form>
+	<p class="mt-1.5 text-xs text-muted">
+		Members of this workspace can already edit. Sharing also applies to subpages. Only the page
+		owner and workspace admins can see or change who it's shared with.
+	</p>
 
 	<ul class="mt-4 divide-y divide-line">
 		{#each data?.shares ?? [] as s (s.id)}
@@ -137,11 +134,11 @@
 					</span>
 				{/if}
 				<span class="text-xs text-muted capitalize">{s.role}</span>
-				{#if canEdit}<button
-						class="btn-icon size-7 hover:text-red-600"
-						aria-label="Remove"
-						onclick={() => removeShare(s.id)}><Trash2 class="size-3.5" /></button
-					>{/if}
+				<button
+					class="btn-icon size-7 hover:text-red-600"
+					aria-label="Remove"
+					onclick={() => removeShare(s.id)}><Trash2 class="size-3.5" /></button
+				>
 			</li>
 		{/each}
 	</ul>
@@ -157,17 +154,15 @@
 					Anyone with the link can {linkRole === 'edit' ? 'edit' : 'view'} — no account needed.
 				</p>
 			</div>
-			{#if canEdit}<Switch checked={!!linkUrl} label="Public link" onchange={setLink} />{/if}
+			<Switch checked={!!linkUrl} label="Public link" onchange={setLink} />
 		</div>
 		{#if linkUrl}
 			<div class="mt-3 flex gap-2">
 				<input class="input h-9 flex-1 text-xs" readonly value={linkUrl} />
-				{#if canEdit}
-					<select class="input h-9 w-28 text-xs" bind:value={linkRole} onchange={changeLinkRole}>
-						<option value="view">Can view</option>
-						<option value="edit">Can edit</option>
-					</select>
-				{/if}
+				<select class="input h-9 w-28 text-xs" bind:value={linkRole} onchange={changeLinkRole}>
+					<option value="view">Can view</option>
+					<option value="edit">Can edit</option>
+				</select>
 				<button
 					class="btn-outline h-9"
 					onclick={() => (

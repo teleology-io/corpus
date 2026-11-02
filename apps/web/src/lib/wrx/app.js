@@ -766,10 +766,26 @@ export function mountWrx(root) {
 		modal(
 			'Add an agent to the thread',
 			`Each agent keeps its own session and sees the thread when it's their turn. Address them with their @handle; they can @mention each other to hand off work.`,
-			`${select('Role', 'preset', presetOptions(preset.key))}${field('Name', 'name', 'e.g. Designer', preset.name)}${select('Agent', 'provider', providerOptions(member(chat, chat.leadId)?.provider))}${select('Purpose', 'mode', modeOptions(preset.mode))}<label>Model <small>optional — defaults to your CLI setting</small><input name="model" placeholder="e.g. sonnet, opus, gpt-5-codex"></label><label>Instructions<textarea name="role" rows="4" placeholder="What this agent is good at and how it should behave">${esc(preset.role)}</textarea></label>`,
+			`${select('Role', 'preset', presetOptions(preset.key))}${field('Name', 'name', 'e.g. Designer', preset.name)}${select('Agent', 'provider', providerOptions(member(chat, chat.leadId)?.provider))}${select('Purpose', 'mode', modeOptions(preset.mode))}<label class="check"><input type="checkbox" name="fullAccess"> Full access — skip all permission prompts</label><small>Runs shell commands, network and MCP tools without asking (Claude: bypassPermissions · Codex: danger-full-access). Use only in workspaces you trust.</small><label>Model <small>optional — defaults to your CLI setting</small><input name="model" list="model-suggestions" placeholder="e.g. sonnet, claude-opus-5-5, gpt-5-codex"><datalist id="model-suggestions"></datalist></label><label>Instructions<textarea name="role" rows="4" placeholder="What this agent is good at and how it should behave">${esc(preset.role)}</textarea></label>`,
 			'Add agent',
 			(body) => api('members', { ...body, chatId })
 		);
+		const fillModels = (catalog) => {
+			const list = $('#model-suggestions');
+			if (!list) return;
+			const provider = $('#modal-form').elements.provider.value;
+			list.innerHTML = (catalog[provider] || [])
+				.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`)
+				.join('');
+		};
+		let catalog = {};
+		api('models')
+			.then((c) => fillModels((catalog = c)))
+			.catch(() => {});
+		$('#modal-form').elements.provider.onchange = () => fillModels(catalog);
+		$('#modal-form').elements.fullAccess.onchange = (event) => {
+			if (event.target.checked) $('#modal-form').elements.mode.value = 'implement';
+		};
 		$('#modal-form [name=preset]').onchange = (event) => {
 			const p = PRESETS.find((x) => x.key === event.target.value);
 			const form = $('#modal-form');
@@ -779,33 +795,72 @@ export function mountWrx(root) {
 			form.elements.name.focus();
 		};
 	}
-	function editMember(memberId) {
+	async function editMember(memberId) {
 		const chat = state.chats.find((c) => c.id === chatId);
 		const m = member(chat, memberId);
 		if (!m) return;
+		let catalog = {};
+		try {
+			catalog = await api('models');
+		} catch {}
+		const requireModel = (value) => {
+			if (!value?.trim()) throw new Error('Enter a custom model ID');
+			return value.trim();
+		};
+		const models = catalog[m.provider] || [];
+		const customModel = !!m.model && !models.some((option) => option.value === m.model);
+		const modelOptions = [
+			{ value: '', label: 'CLI default' },
+			...models,
+			{ value: '__custom__', label: 'Custom model…' }
+		]
+			.map(
+				(option) =>
+					`<option value="${esc(option.value)}" ${option.value === (customModel ? '__custom__' : m.model || '') ? 'selected' : ''}>${esc(option.label)}</option>`
+			)
+			.join('');
 		modal(
 			`${esc(m.name)} <span class="muted">@${esc(m.handle)}</span>`,
 			`${esc(m.provider === 'codex' ? 'Codex' : 'Claude Code')} · ${m.sessionId ? `session ${esc(m.sessionId.slice(0, 8))}` : 'not started yet'}${m.costUsd ? ` · ${money(m.costUsd)} so far` : ''}${m.activeModel ? ` · ${esc(m.activeModel)}` : ''}`,
-			`${select('Purpose', 'mode', modeOptions(m.mode))}<label class="check"><input type="checkbox" id="member-write" ${m.mode === 'implement' ? 'checked' : ''} ${m.status !== 'idle' ? 'disabled' : ''}> Allow workspace writes</label><small>${m.status !== 'idle' ? 'Stop this agent to change permissions.' : 'Write access selects Implement; read-only selects Assess. Changes start a fresh session with thread context.'}</small><label>Model <small>optional</small><input name="model" value="${esc(m.model || '')}" placeholder="CLI default"></label><label>Instructions<textarea name="role" rows="5">${esc(m.role)}</textarea></label><label class="check"><input type="checkbox" name="lead" ${m.id === chat.leadId ? 'checked disabled' : ''}> Thread lead — receives messages that don't @mention anyone</label>${chat.members.length > 1 ? `<button type="button" class="danger-link" id="remove-member">Remove ${esc(m.name)} from thread</button>` : ''}`,
+			`${select('Purpose', 'mode', modeOptions(m.mode))}<label class="check"><input type="checkbox" id="member-write" ${m.mode === 'implement' ? 'checked' : ''} ${m.status !== 'idle' ? 'disabled' : ''}> Allow workspace writes</label><small>${m.status !== 'idle' ? 'Stop this agent to change permissions.' : 'Write access selects Implement; read-only selects Assess. Changes start a fresh session with thread context.'}</small><label class="check"><input type="checkbox" id="member-full" name="fullAccess" ${m.fullAccess ? 'checked' : ''} ${m.status !== 'idle' ? 'disabled' : ''}> Full access — skip all permission prompts</label><small>Runs shell commands, network and MCP tools without asking (Claude: bypassPermissions · Codex: danger-full-access). Use only in workspaces you trust.</small>${select('Model', 'model', modelOptions)}<label id="custom-model-label" ${customModel ? '' : 'hidden'}>Custom model<input name="customModel" value="${esc(customModel ? m.model : '')}" placeholder="Model ID"></label><small>${m.status !== 'idle' ? 'Stop this agent to change models.' : 'Model changes apply on the next turn with a fresh session and thread context.'}</small><label>Instructions<textarea name="role" rows="5">${esc(m.role)}</textarea></label><label class="check"><input type="checkbox" name="lead" ${m.id === chat.leadId ? 'checked disabled' : ''}> Thread lead — receives messages that don't @mention anyone</label>${chat.members.length > 1 ? `<button type="button" class="danger-link" id="remove-member">Remove ${esc(m.name)} from thread</button>` : ''}`,
 			'Save',
 			(body) =>
 				api('member', {
 					chatId,
 					memberId,
 					mode: body.mode ?? m.mode,
-					model: body.model,
+					fullAccess: m.status !== 'idle' ? !!m.fullAccess : body.fullAccess === 'on',
+					model:
+						m.status !== 'idle'
+							? m.model
+							: body.model === '__custom__'
+								? requireModel(body.customModel)
+								: body.model,
 					role: body.role,
 					lead: body.lead === 'on'
 				})
 		);
+		const modelSelect = $('#modal-form').elements.model;
+		modelSelect.disabled = m.status !== 'idle';
+		$('#modal-form').elements.customModel.disabled = m.status !== 'idle';
+		modelSelect.onchange = () => {
+			$('#custom-model-label').hidden = modelSelect.value !== '__custom__';
+		};
 		const purpose = $('#modal-form').elements.mode;
 		const write = $('#member-write');
 		purpose.disabled = m.status !== 'idle';
 		purpose.onchange = () => {
 			write.checked = purpose.value === 'implement';
 		};
+		const full = $('#member-full');
 		write.onchange = () => {
 			purpose.value = write.checked ? 'implement' : m.mode === 'review' ? 'review' : 'assess';
+			if (!write.checked) full.checked = false;
+		};
+		full.onchange = () => {
+			if (!full.checked) return;
+			write.checked = true;
+			purpose.value = 'implement';
 		};
 		if ($('#remove-member'))
 			$('#remove-member').onclick = async () => {
@@ -1329,7 +1384,7 @@ export function mountWrx(root) {
 				tab = 'agents';
 				render();
 			}
-			if (target.dataset.member) editMember(target.dataset.member);
+			if (target.dataset.member) await editMember(target.dataset.member);
 			if (target.dataset.deleteChat) deleteChat(target.dataset.deleteChat);
 			if (target.dataset.deleteProject) deleteProject(target.dataset.deleteProject);
 			if (target.dataset.menu) applyMenu(Number(target.dataset.menu));

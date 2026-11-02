@@ -2,7 +2,7 @@ import { error } from '@sveltejs/kit';
 import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '@corpus/db';
-import { atLeast, noteRole, type NoteRole } from '@corpus/db/access';
+import { atLeast, canManageNote, noteRole, type NoteRole } from '@corpus/db/access';
 import { notify } from '@corpus/db/notify';
 import { randomToken } from '@corpus/core/crypto';
 import type { NoteTreeItem } from '#lib/types.js';
@@ -16,6 +16,18 @@ export async function requireNote(ctx: Ctx, noteId: string, needed: NoteRole = '
 	const [row] = await db.select().from(note).where(eq(note.id, noteId)).limit(1);
 	if (!row) error(404, 'Note not found');
 	return { note: row, role: role! };
+}
+
+/**
+ * Sharing details (recipients, link tokens) and share changes are limited to the note's
+ * creator or a workspace owner/admin — see `canManageNote`. Callers with no access at all
+ * still get the 404 from `requireNote`, so this doesn't reveal that the note exists.
+ */
+export async function requireManage(ctx: Ctx, noteId: string) {
+	const found = await requireNote(ctx, noteId, 'view');
+	if (!(await canManageNote(ctx.userId, noteId)))
+		error(403, 'Only the page owner or a workspace admin can manage sharing');
+	return found;
 }
 
 export async function noteTree(ctx: Ctx): Promise<NoteTreeItem[]> {
@@ -185,7 +197,7 @@ export async function breadcrumbs(noteId: string) {
 // ---------- sharing ----------
 
 export async function listShares(ctx: Ctx, noteId: string) {
-	const { note: row } = await requireNote(ctx, noteId, 'view');
+	const { note: row } = await requireManage(ctx, noteId);
 	const [shares, links, teams] = await Promise.all([
 		db
 			.select({
@@ -218,7 +230,7 @@ export const shareInput = z.object({
 });
 
 export async function addShare(ctx: Ctx, noteId: string, input: z.infer<typeof shareInput>) {
-	const { note: row } = await requireNote(ctx, noteId, 'edit');
+	const { note: row } = await requireManage(ctx, noteId);
 	if (input.email) {
 		const [target] = await db
 			.select()
@@ -268,12 +280,12 @@ export async function addShare(ctx: Ctx, noteId: string, input: z.infer<typeof s
 }
 
 export async function removeShare(ctx: Ctx, noteId: string, shareId: string) {
-	await requireNote(ctx, noteId, 'edit');
+	await requireManage(ctx, noteId);
 	await db.delete(noteShare).where(and(eq(noteShare.id, shareId), eq(noteShare.noteId, noteId)));
 }
 
 export async function createLink(ctx: Ctx, noteId: string, role: 'view' | 'comment' | 'edit') {
-	await requireNote(ctx, noteId, 'edit');
+	await requireManage(ctx, noteId);
 	await db.delete(noteLink).where(eq(noteLink.noteId, noteId));
 	const [row] = await db
 		.insert(noteLink)
@@ -283,6 +295,6 @@ export async function createLink(ctx: Ctx, noteId: string, role: 'view' | 'comme
 }
 
 export async function revokeLink(ctx: Ctx, noteId: string) {
-	await requireNote(ctx, noteId, 'edit');
+	await requireManage(ctx, noteId);
 	await db.delete(noteLink).where(eq(noteLink.noteId, noteId));
 }

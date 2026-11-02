@@ -210,7 +210,11 @@ export function agentArgs(agent, images = []) {
 				? ['resume', agent.sessionId]
 				: [
 						'--sandbox',
-						agent.mode === 'implement' ? 'workspace-write' : 'read-only',
+						agent.fullAccess
+							? 'danger-full-access'
+							: agent.mode === 'implement'
+								? 'workspace-write'
+								: 'read-only',
 						...(model ? ['-m', model] : [])
 					]),
 			...images.flatMap((i) => ['--image', i.path]),
@@ -224,7 +228,9 @@ export function agentArgs(agent, images = []) {
 		'stream-json',
 		...(images.length ? ['--input-format', 'stream-json'] : []),
 		'--permission-mode',
-		agent.mode === 'implement' ? 'acceptEdits' : 'plan',
+		// acceptEdits only auto-approves file edits; headless runs deny Bash, web and MCP
+		// tools. Full access bypasses every permission prompt.
+		agent.fullAccess ? 'bypassPermissions' : agent.mode === 'implement' ? 'acceptEdits' : 'plan',
 		...(model ? ['--model', model] : []),
 		...(agent.sessionId ? ['--resume', agent.sessionId] : [])
 	];
@@ -468,6 +474,7 @@ export class Engine {
 			role: typeof input.role === 'string' ? input.role.trim().slice(0, 4000) : '',
 			provider: input.provider,
 			mode: MODES.includes(input.mode) ? input.mode : 'assess',
+			fullAccess: input.fullAccess === true || input.fullAccess === 'on',
 			model: typeof input.model === 'string' ? input.model.trim().slice(0, 100) : '',
 			color: [0, 1, 2, 3, 4, 5, 6, 7].find((c) => !used.has(c)) ?? chat.members.length % 8,
 			sessionId: null,
@@ -528,6 +535,9 @@ export class Engine {
 		const chat = this.store.get('chats', chatId);
 		const m = chat.members.find((x) => x.id === memberId);
 		if (!m) throw new Error('Agent not found in this thread');
+		const model = typeof patch.model === 'string' ? patch.model.trim().slice(0, 100) : m.model;
+		if (model !== m.model && m.status !== 'idle')
+			throw new Error('Stop this agent before changing its model');
 		if (patch.mode !== undefined) {
 			if (!MODES.includes(patch.mode)) throw new Error('Invalid purpose');
 			if (patch.mode !== m.mode) {
@@ -538,8 +548,19 @@ export class Engine {
 			}
 			m.mode = patch.mode;
 		}
+		if (typeof patch.fullAccess === 'boolean' && patch.fullAccess !== !!m.fullAccess) {
+			if (m.status !== 'idle') throw new Error('Stop this agent before changing its permissions');
+			m.fullAccess = patch.fullAccess;
+			m.sessionId = null;
+			m.seen = 0;
+		}
 		if (typeof patch.role === 'string') m.role = patch.role.trim().slice(0, 4000);
-		if (typeof patch.model === 'string') m.model = patch.model.trim().slice(0, 100);
+		if (model !== m.model) {
+			m.model = model;
+			m.sessionId = null;
+			m.seen = 0;
+			m.activeModel = null;
+		}
 		if (patch.lead) chat.leadId = m.id;
 		this.changed();
 		return m;

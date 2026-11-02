@@ -115,9 +115,11 @@
 		{/if}
 		{#if !canEdit}<span class="chip bg-canvas text-muted"><Eye class="size-3" /> View only</span
 			>{/if}
-		<button class="btn-outline h-8 text-xs" onclick={() => (shareOpen = true)}
-			><Share2 class="size-3.5" /> Share</button
-		>
+		{#if data.canManage}
+			<button class="btn-outline h-8 text-xs" onclick={() => (shareOpen = true)}
+				><Share2 class="size-3.5" /> Share</button
+			>
+		{/if}
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger class="btn-icon size-8" aria-label="More"
 				><MoreHorizontal class="size-4" /></DropdownMenu.Trigger
@@ -188,4 +190,6 @@
 	</div>
 </article>
 
-<ShareModal bind:open={shareOpen} noteId={data.note.id} {canEdit} />
+{#if data.canManage}
+	<ShareModal bind:open={shareOpen} noteId={data.note.id} />
+{/if}

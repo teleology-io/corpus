@@ -530,6 +530,12 @@ export class Engine {
 		if (!m) throw new Error('Agent not found in this thread');
 		if (patch.mode !== undefined) {
 			if (!MODES.includes(patch.mode)) throw new Error('Invalid purpose');
+			if (patch.mode !== m.mode) {
+				if (m.status !== 'idle') throw new Error('Stop this agent before changing its permissions');
+				// Resumed provider sessions retain their original sandbox permissions.
+				m.sessionId = null;
+				m.seen = 0;
+			}
 			m.mode = patch.mode;
 		}
 		if (typeof patch.role === 'string') m.role = patch.role.trim().slice(0, 4000);

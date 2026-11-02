@@ -3276,3 +3276,41 @@
 .wrx .stats strong small {
 	font-family: inherit;
 }
+
+/* Give long conversations the viewport while keeping the composer visible. */
+.wrx.conversation-fullscreen {
+	position: fixed;
+	inset: 0;
+	z-index: 50;
+	height: 100dvh;
+	overflow: hidden;
+}
+.wrx.conversation-fullscreen .sidebar,
+.wrx.conversation-fullscreen .wrx-main > :not(.content),
+.wrx.conversation-fullscreen .conversation-list {
+	display: none;
+}
+.wrx.conversation-fullscreen .agent-layout {
+	position: absolute;
+	inset: 0;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	grid-template-rows: minmax(0, 1fr);
+	height: 100%;
+	min-height: 0;
+	border: 0;
+	border-radius: 0;
+}
+.wrx.conversation-fullscreen .conversation-main {
+	min-height: 0;
+}
+.wrx.conversation-fullscreen .chat-heading,
+.wrx.conversation-fullscreen .composer,
+.wrx.conversation-fullscreen .todo-bar {
+	flex-shrink: 0;
+}
+.wrx.conversation-fullscreen .transcript {
+	min-height: 0;
+	max-height: none;
+	scrollbar-gutter: stable;
+}

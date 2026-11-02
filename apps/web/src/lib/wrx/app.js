@@ -31,6 +31,8 @@ export function mountWrx(root) {
 		chat: '<path d="M21 11a8 8 0 0 1-8 8H7l-5 3V11a9 9 0 0 1 19 0Z"/>',
 		box: '<path d="m12 3 9 5v9l-9 5-9-5V8l9-5Zm0 9L3 8m9 4 9-4m-9 4v10M7 5l9 5"/>',
 		check: '<path d="m5 12 4 4L19 6"/>',
+		expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
+		minimize: '<path d="M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5"/>',
 		plus: '<path d="M12 5v14M5 12h14"/>',
 		arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
 		code: '<path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/>',
@@ -55,6 +57,7 @@ export function mountWrx(root) {
 	let state,
 		workspaceId = localStorage.getItem('wrx.workspace'),
 		chatId = null,
+		conversationFullscreen = false,
 		tab = 'overview',
 		diff = null,
 		loading = false;
@@ -145,6 +148,8 @@ export function mountWrx(root) {
 		const w = current(),
 			p = project();
 		const chats = state.chats.filter((c) => c.workspaceId === w?.id);
+		if (tab !== 'agents' || !chats.length) conversationFullscreen = false;
+		root.classList.toggle('conversation-fullscreen', conversationFullscreen);
 		const active = state.chats.filter((c) => c.status === 'running');
 		const filtered = state.projects;
 		const old = $('#transcript');
@@ -641,7 +646,7 @@ export function mountWrx(root) {
 			})
 			.join('');
 		const draft = drafts.get(chatId) || '';
-		return `<div class="agent-layout"><div class="conversation-list"><div class="panel-heading"><h3>Conversations</h3><button class="square" data-action="chat" aria-label="New conversation">${icon('plus')}</button></div>${list || '<p class="muted inset">Start a thread to begin.</p>'}</div><section class="conversation-main">${chat ? `<div class="chat-heading"><div class="chat-title"><h3>${esc(chat.title)}</h3><small>${chat.members.length} agent${chat.members.length === 1 ? '' : 's'} · ${esc(running ? 'working' : chat.status)}${chat.members.some((m) => m.costUsd) ? ` · ${money(chat.members.reduce((s, m) => s + (m.costUsd || 0), 0))}` : ''}</small></div><div class="roster">${chat.members.map((m) => `<button class="member ${m.status}" data-member="${m.id}" title="${esc(`${m.name} (@${m.handle}) · ${m.provider} / ${MODE_LABELS[m.mode]}${m.role ? `\n${m.role}` : ''}`)}">${avatar(m)}<span>${esc(m.name)}</span>${m.id === chat.leadId ? '<em title="Thread lead">★</em>' : ''}<i class="member-state"></i></button>`).join('')}${btn('Add agent', 'add-member', 'plus')}${running || queued.length ? btn('Stop', 'cancel', 'check') : ''}</div></div><div id="transcript" class="transcript">${!chat.messages.length ? `<div class="empty thread-welcome"><span class="logo">✻</span><h3>What should the team work on?</h3><p>Messages go to the thread lead, <b>@${esc(member(chat, chat.leadId)?.handle || '')}</b>, unless you @mention someone.<br>Agents hand work to each other with @mentions and take turns in this workspace.</p><div class="tips"><span><kbd>@</kbd> mention an agent</span><span><kbd>@all</kbd> everyone</span><span><kbd>/</kbd> commands</span><span><kbd>Esc</kbd> stop</span></div></div>` : chat.messages.map((m) => messageView(chat, m)).join('')}${running ? `<div class="working"><span class="spark">✻</span><b>${esc(running.name)}</b> is working…${queued.length ? ` <span>Up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</span>` : ''}<span class="esc">esc to stop</span></div>` : queued.length ? `<div class="working"><i class="live-dot"></i> Waiting for the workspace · up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</div>` : ''}${chat.events.length ? `<details class="activity-log" data-open="events:${chat.id}" ${openKeys.has(`events:${chat.id}`) ? 'open' : ''}><summary>Activity & diagnostics (${chat.events.length})</summary><pre class="activity">${esc(chat.events.join('\n'))}</pre></details>` : ''}</div><button class="jump hidden" data-action="jump" aria-label="Scroll to latest">↓</button>${todoBar(chat)}<form id="message-form" class="composer"><div id="composer-menu">${menuView()}</div><div id="attachments" class="attachments" ${attachments.get(chatId)?.length ? '' : 'hidden'}>${attachmentsView(chatId)}</div><div id="dictation-status" class="dictation-status ${voice.partial ? 'partial' : ''}" ${voice.status === 'idle' ? 'hidden' : ''} aria-live="polite"><i></i><span>${esc(dictationText())}</span></div><textarea id="message" name="message" placeholder="Message ${esc(chat.title)} — @mention agents, / for commands" rows="3" aria-label="Message to agents"></textarea><div class="composer-bar"><div class="composer-left"><button type="button" class="ib" data-action="mention" title="Mention an agent" aria-label="Mention an agent">@</button><button type="button" class="ib" data-action="slash" title="Commands" aria-label="Commands">/</button><button type="button" class="ib" data-action="attach" title="Attach images — or drop / paste them" aria-label="Attach images">${icon('image')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><button type="button" id="mic" class="ib mic ${voice.status}" data-action="dictate" title="${micTitle()}" aria-label="Voice input" aria-pressed="${voice.status === 'listening'}">${icon('mic')}</button><span id="recipients" class="recipients">${recipientsLabel(chat, draft)}</span></div><div class="composer-right"><small>Enter to send · ⇧Enter for a new line</small><button class="primary" aria-label="Send">Send ${icon('arrow')}</button></div></div></form>` : `<div class="empty"><h3>Your team is ready.</h3><p>Start a thread with one or more agents — a lead, designer, engineer, marketer…</p>${btn('New conversation', 'chat', 'plus', 'primary')}</div>`}</section></div>`;
+		return `<div class="agent-layout"><div class="conversation-list"><div class="panel-heading"><h3>Conversations</h3><button class="square" data-action="chat" aria-label="New conversation">${icon('plus')}</button></div>${list || '<p class="muted inset">Start a thread to begin.</p>'}</div><section class="conversation-main">${chat ? `<div class="chat-heading"><div class="chat-title"><h3>${esc(chat.title)}</h3><small>${chat.members.length} agent${chat.members.length === 1 ? '' : 's'} · ${esc(running ? 'working' : chat.status)}${chat.members.some((m) => m.costUsd) ? ` · ${money(chat.members.reduce((s, m) => s + (m.costUsd || 0), 0))}` : ''}</small></div><div class="roster">${chat.members.map((m) => `<button class="member ${m.status}" data-member="${m.id}" title="${esc(`${m.name} (@${m.handle}) · ${m.provider} / ${MODE_LABELS[m.mode]}${m.role ? `\n${m.role}` : ''}`)}">${avatar(m)}<span>${esc(m.name)}</span>${m.id === chat.leadId ? '<em title="Thread lead">★</em>' : ''}<i class="member-state"></i></button>`).join('')}${btn('Add agent', 'add-member', 'plus')}<button data-action="conversation-fullscreen" aria-label="${conversationFullscreen ? 'Minimize conversation' : 'Expand conversation to full screen'}" aria-pressed="${conversationFullscreen}" title="${conversationFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(conversationFullscreen ? 'minimize' : 'expand')}<span>${conversationFullscreen ? 'Minimize' : 'Full screen'}</span></button>${running || queued.length ? btn('Stop', 'cancel', 'check') : ''}</div></div><div id="transcript" class="transcript">${!chat.messages.length ? `<div class="empty thread-welcome"><span class="logo">✻</span><h3>What should the team work on?</h3><p>Messages go to the thread lead, <b>@${esc(member(chat, chat.leadId)?.handle || '')}</b>, unless you @mention someone.<br>Agents hand work to each other with @mentions and take turns in this workspace.</p><div class="tips"><span><kbd>@</kbd> mention an agent</span><span><kbd>@all</kbd> everyone</span><span><kbd>/</kbd> commands</span><span><kbd>Esc</kbd> stop</span></div></div>` : chat.messages.map((m) => messageView(chat, m)).join('')}${running ? `<div class="working"><span class="spark">✻</span><b>${esc(running.name)}</b> is working…${queued.length ? ` <span>Up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</span>` : ''}<span class="esc">esc to stop</span></div>` : queued.length ? `<div class="working"><i class="live-dot"></i> Waiting for the workspace · up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</div>` : ''}${chat.events.length ? `<details class="activity-log" data-open="events:${chat.id}" ${openKeys.has(`events:${chat.id}`) ? 'open' : ''}><summary>Activity & diagnostics (${chat.events.length})</summary><pre class="activity">${esc(chat.events.join('\n'))}</pre></details>` : ''}</div><button class="jump hidden" data-action="jump" aria-label="Scroll to latest">↓</button>${todoBar(chat)}<form id="message-form" class="composer"><div id="composer-menu">${menuView()}</div><div id="attachments" class="attachments" ${attachments.get(chatId)?.length ? '' : 'hidden'}>${attachmentsView(chatId)}</div><div id="dictation-status" class="dictation-status ${voice.partial ? 'partial' : ''}" ${voice.status === 'idle' ? 'hidden' : ''} aria-live="polite"><i></i><span>${esc(dictationText())}</span></div><textarea id="message" name="message" placeholder="Message ${esc(chat.title)} — @mention agents, / for commands" rows="3" aria-label="Message to agents"></textarea><div class="composer-bar"><div class="composer-left"><button type="button" class="ib" data-action="mention" title="Mention an agent" aria-label="Mention an agent">@</button><button type="button" class="ib" data-action="slash" title="Commands" aria-label="Commands">/</button><button type="button" class="ib" data-action="attach" title="Attach images — or drop / paste them" aria-label="Attach images">${icon('image')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><button type="button" id="mic" class="ib mic ${voice.status}" data-action="dictate" title="${micTitle()}" aria-label="Voice input" aria-pressed="${voice.status === 'listening'}">${icon('mic')}</button><span id="recipients" class="recipients">${recipientsLabel(chat, draft)}</span></div><div class="composer-right"><small>Enter to send · ⇧Enter for a new line</small><button class="primary" aria-label="Send">Send ${icon('arrow')}</button></div></div></form>` : `<div class="empty"><h3>Your team is ready.</h3><p>Start a thread with one or more agents — a lead, designer, engineer, marketer…</p>${btn('New conversation', 'chat', 'plus', 'primary')}</div>`}</section></div>`;
 	}
 	const recipientsLabel = (chat, text) =>
 		`→ ${recipients(chat, text)
@@ -781,18 +786,27 @@ export function mountWrx(root) {
 		modal(
 			`${esc(m.name)} <span class="muted">@${esc(m.handle)}</span>`,
 			`${esc(m.provider === 'codex' ? 'Codex' : 'Claude Code')} · ${m.sessionId ? `session ${esc(m.sessionId.slice(0, 8))}` : 'not started yet'}${m.costUsd ? ` · ${money(m.costUsd)} so far` : ''}${m.activeModel ? ` · ${esc(m.activeModel)}` : ''}`,
-			`${select('Purpose', 'mode', modeOptions(m.mode))}<label>Model <small>optional</small><input name="model" value="${esc(m.model || '')}" placeholder="CLI default"></label><label>Instructions<textarea name="role" rows="5">${esc(m.role)}</textarea></label><label class="check"><input type="checkbox" name="lead" ${m.id === chat.leadId ? 'checked disabled' : ''}> Thread lead — receives messages that don't @mention anyone</label>${chat.members.length > 1 ? `<button type="button" class="danger-link" id="remove-member">Remove ${esc(m.name)} from thread</button>` : ''}`,
+			`${select('Purpose', 'mode', modeOptions(m.mode))}<label class="check"><input type="checkbox" id="member-write" ${m.mode === 'implement' ? 'checked' : ''} ${m.status !== 'idle' ? 'disabled' : ''}> Allow workspace writes</label><small>${m.status !== 'idle' ? 'Stop this agent to change permissions.' : 'Write access selects Implement; read-only selects Assess. Changes start a fresh session with thread context.'}</small><label>Model <small>optional</small><input name="model" value="${esc(m.model || '')}" placeholder="CLI default"></label><label>Instructions<textarea name="role" rows="5">${esc(m.role)}</textarea></label><label class="check"><input type="checkbox" name="lead" ${m.id === chat.leadId ? 'checked disabled' : ''}> Thread lead — receives messages that don't @mention anyone</label>${chat.members.length > 1 ? `<button type="button" class="danger-link" id="remove-member">Remove ${esc(m.name)} from thread</button>` : ''}`,
 			'Save',
 			(body) =>
 				api('member', {
 					chatId,
 					memberId,
-					mode: body.mode,
+					mode: body.mode ?? m.mode,
 					model: body.model,
 					role: body.role,
 					lead: body.lead === 'on'
 				})
 		);
+		const purpose = $('#modal-form').elements.mode;
+		const write = $('#member-write');
+		purpose.disabled = m.status !== 'idle';
+		purpose.onchange = () => {
+			write.checked = purpose.value === 'implement';
+		};
+		write.onchange = () => {
+			purpose.value = write.checked ? 'implement' : m.mode === 'review' ? 'review' : 'assess';
+		};
 		if ($('#remove-member'))
 			$('#remove-member').onclick = async () => {
 				try {
@@ -1133,6 +1147,16 @@ export function mountWrx(root) {
 	const select = (label, name, options) =>
 		`<label>${label}<select name="${name}">${options}</select></label>`;
 	const actions = {
+		'conversation-fullscreen': () => {
+			const transcript = $('#transcript');
+			const top = transcript?.scrollTop ?? 0;
+			const atBottom = transcript && transcript.scrollHeight - top - transcript.clientHeight < 24;
+			conversationFullscreen = !conversationFullscreen;
+			render();
+			const resized = $('#transcript');
+			if (resized) resized.scrollTop = atBottom ? resized.scrollHeight : top;
+			$('[data-action="conversation-fullscreen"]')?.focus({ preventScroll: true });
+		},
 		search: () => openSearch(),
 		project: () => openProject(),
 		workspace: () =>

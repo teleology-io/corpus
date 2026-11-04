@@ -3277,6 +3277,17 @@
 	font-family: inherit;
 }
 
+/* A fullscreen conversation covers the app shell, so it makes room for Telescope's recording bar. */
+body:has(.wrx.conversation-fullscreen) .recording-bar {
+	position: fixed;
+	inset: 0 0 auto;
+	z-index: 60;
+}
+body:has(.recording-bar) .wrx.conversation-fullscreen {
+	top: 2.75rem;
+	height: calc(100dvh - 2.75rem);
+}
+
 /* Give long conversations the viewport while keeping the composer visible. */
 .wrx.conversation-fullscreen {
 	position: fixed;

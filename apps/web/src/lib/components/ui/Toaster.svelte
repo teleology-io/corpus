@@ -1,14 +1,25 @@
 <script lang="ts">
 	import { fly } from 'svelte/transition';
 	import { Bell, CircleCheck, CircleAlert, X } from '@lucide/svelte';
-	import { dismiss, toasts } from '#lib/stores/toast.svelte.js';
+	import { dismiss, dismissAll, toasts } from '#lib/stores/toast.svelte.js';
 </script>
 
-<div class="pointer-events-none fixed right-4 bottom-4 z-[60] flex w-80 flex-col gap-2">
+<!-- Sticky toasts can pile up, so the stack scrolls and offers a way to clear it. -->
+<div
+	class="pointer-events-none fixed right-2 bottom-2 z-[60] flex max-h-[calc(100dvh-1rem)] w-84 scrollbar-thin flex-col gap-2 overflow-y-auto p-2"
+>
+	{#if toasts.length > 1}
+		<button
+			class="pointer-events-auto shrink-0 self-end rounded-lg border border-line bg-surface px-2.5 py-1 text-xs font-medium text-muted shadow-pop hover:text-ink"
+			onclick={dismissAll}
+		>
+			Clear all
+		</button>
+	{/if}
 	{#each toasts as t (t.id)}
 		<div
 			transition:fly={{ x: 24, duration: 180 }}
-			class="pointer-events-auto flex items-start gap-3 rounded-xl border border-line bg-surface p-3 shadow-pop"
+			class="pointer-events-auto flex shrink-0 items-start gap-3 rounded-xl border border-line bg-surface p-3 shadow-pop"
 			role="status"
 		>
 			<span

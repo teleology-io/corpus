@@ -6,7 +6,8 @@
 	import Icon, { ICONS } from '#lib/components/ui/Icon.svelte';
 	import Avatar from '#lib/components/ui/Avatar.svelte';
 	import { api } from '#lib/api.js';
-	import { attempt, toast } from '#lib/stores/toast.svelte.js';
+	import { attempt, readToastPrefs, saveToastPrefs, toast } from '#lib/stores/toast.svelte.js';
+	import { DEFAULT_TOAST_PREFS, TOAST_SECONDS } from '#lib/stores/toast-prefs.js';
 	import { currentSubscription, disablePush, enablePush, pushSupported } from '#lib/push.js';
 	import type { PageProps } from './$types';
 
@@ -22,6 +23,7 @@
 	let dailyDigest = $state(false);
 	let pushOn = $state(false);
 	let pushAvailable = $state(false);
+	let toastPrefs = $state({ ...DEFAULT_TOAST_PREFS });
 	let newCat = $state({ name: '', color: '#2C87F2', icon: 'calendar' });
 
 	// Seed the form once; live refreshes (refreshAll on notifications) must not wipe edits.
@@ -37,6 +39,7 @@
 	});
 
 	onMount(async () => {
+		toastPrefs = readToastPrefs();
 		pushAvailable = pushSupported() && !!data.config.vapidKey;
 		if (pushAvailable) pushOn = !!(await currentSubscription());
 	});
@@ -248,6 +251,36 @@
 					/></label
 				>
 				<p class="text-xs text-muted">A 7am summary of your day's appointments and tasks.</p>
+			</div>
+			<div>
+				<label class="flex items-center justify-between text-sm font-medium"
+					>Keep pop-ups until dismissed <Switch
+						bind:checked={toastPrefs.sticky}
+						onchange={() => saveToastPrefs($state.snapshot(toastPrefs))}
+						label="Keep pop-ups until dismissed"
+					/></label
+				>
+				<p class="text-xs text-muted">
+					Applies to every pop-up card in Corpus, on this device. Close them with the X.
+				</p>
+			</div>
+			<div>
+				<label class="flex items-center justify-between gap-3 text-sm font-medium">
+					Time on screen
+					<select
+						class="input w-28"
+						bind:value={toastPrefs.seconds}
+						disabled={toastPrefs.sticky}
+						onchange={() => saveToastPrefs($state.snapshot(toastPrefs))}
+					>
+						{#each TOAST_SECONDS as s (s)}<option value={s}>{s} seconds</option>{/each}
+					</select>
+				</label>
+				<p class="text-xs text-muted">
+					{toastPrefs.sticky
+						? 'Not used while pop-ups stay until dismissed.'
+						: 'How long pop-ups stay. Errors stay at least 7 seconds.'}
+				</p>
 			</div>
 		</div>
 	</section>

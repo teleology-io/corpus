@@ -17,6 +17,8 @@
 	let list = $state<HTMLDivElement>();
 	let timer: ReturnType<typeof setTimeout>;
 	let generation = 0;
+	// Superseded searches are cancelled so the server stops work on stale keystrokes.
+	let inflight: AbortController | null = null;
 
 	// Fresh palette every time it opens.
 	$effect(() => {
@@ -29,6 +31,8 @@
 
 	function onInput() {
 		clearTimeout(timer);
+		inflight?.abort();
+		inflight = null;
 		const q = query.trim();
 		const request = ++generation;
 		if (!q) {
@@ -38,14 +42,17 @@
 		}
 		loading = true;
 		timer = setTimeout(async () => {
+			const controller = (inflight = new AbortController());
 			try {
-				const found = await api<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`);
+				const found = await api<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`, {
+					signal: controller.signal
+				});
 				if (request !== generation) return;
 				results = found.slice(0, MAX);
 				selected = 0;
 				error = '';
 			} catch (e) {
-				if (request === generation) error = (e as Error).message;
+				if (request === generation && !controller.signal.aborted) error = (e as Error).message;
 			} finally {
 				if (request === generation) loading = false;
 			}

@@ -19,7 +19,6 @@ import { notify } from '@corpus/db/notify';
 import { doseOccurrences, expand, phaseSegments, presetRule } from '@corpus/core';
 import type { CycleBandDTO, DoseDTO, ReminderOccurrenceDTO, TaskDTO } from '#lib/types.js';
 import type { Ctx } from './ctx.js';
-import { membership } from './workspaces.js';
 
 const { task, reminder, cycle, doseLog, user } = schema;
 
@@ -107,10 +106,19 @@ export async function listTasks(
 	return rows.map(taskDTO);
 }
 
+/** The task, if it's in a workspace the user belongs to (one round trip, not two). */
 async function ownTask(ctx: Ctx, id: string) {
-	const [row] = await db.select().from(task).where(eq(task.id, id)).limit(1);
-	if (!row || !(await membership(ctx.userId, row.workspaceId))) error(404, 'Task not found');
-	return row;
+	const [hit] = await db
+		.select({ row: task })
+		.from(task)
+		.innerJoin(
+			schema.member,
+			and(eq(schema.member.organizationId, task.workspaceId), eq(schema.member.userId, ctx.userId))
+		)
+		.where(eq(task.id, id))
+		.limit(1);
+	if (!hit) error(404, 'Task not found');
+	return hit.row;
 }
 
 export async function createTask(ctx: Ctx, input: z.infer<typeof taskInput>) {

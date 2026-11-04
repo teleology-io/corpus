@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '@corpus/db';
 import { notify } from '@corpus/db/notify';
@@ -101,15 +101,19 @@ async function workspaceIdsFor(userId: string) {
 
 /** Load an event the user can edit (member of its workspace, calendar not read-only). */
 export async function editableEvent(ctx: Ctx, eventId: string): Promise<EventRow> {
+	// Membership is joined in rather than fetched separately: one round trip per edit.
 	const [found] = await db
-		.select({ row: event, readOnly: calendar.readOnly })
+		.select({ row: event, readOnly: calendar.readOnly, memberId: member.id })
 		.from(event)
 		.innerJoin(calendar, eq(event.calendarId, calendar.id))
+		.leftJoin(
+			member,
+			and(eq(member.organizationId, event.workspaceId), eq(member.userId, ctx.userId))
+		)
 		.where(eq(event.id, eventId))
 		.limit(1);
 	if (!found) error(404, 'Event not found');
-	const ids = await workspaceIdsFor(ctx.userId);
-	if (!ids.includes(found.row.workspaceId)) error(403, 'Not allowed');
+	if (!found.memberId) error(403, 'Not allowed');
 	if (found.readOnly) error(403, 'This calendar is read-only');
 	return found.row;
 }
@@ -185,24 +189,51 @@ export async function defaultCalendar(workspaceId: string, userId: string) {
 	return created!;
 }
 
-/** Event rows that might produce occurrences in [from, to) for this user. */
+/**
+ * Event rows that might produce occurrences in [from, to) for this user. Run as three
+ * disjoint queries rather than one OR so each can use an index: the workspace's one-off events
+ * (by end time, `event_ws_single_end_idx`), its recurring series (`event_ws_recurring_idx`),
+ * and events in other workspaces the user is invited to.
+ */
 async function candidateEvents(ctx: Ctx, from: Date, to: Date, search?: string) {
 	const attending = db
 		.select({ id: eventAttendee.eventId })
 		.from(eventAttendee)
 		.where(eq(eventAttendee.userId, ctx.userId));
-	return db
-		.select()
-		.from(event)
-		.where(
-			and(
-				isNull(event.deletedAt),
-				or(eq(event.workspaceId, ctx.workspaceId), inArray(event.id, attending)),
-				lt(event.startsAt, to),
-				or(isNotNull(event.rrule), gt(event.endsAt, from)),
-				search ? ilike(event.title, `%${search}%`) : undefined
+	const common = and(
+		isNull(event.deletedAt),
+		lt(event.startsAt, to),
+		search ? ilike(event.title, `%${search}%`) : undefined
+	);
+	const [single, recurring, invited] = await Promise.all([
+		db
+			.select()
+			.from(event)
+			.where(
+				and(
+					eq(event.workspaceId, ctx.workspaceId),
+					isNull(event.rrule),
+					gt(event.endsAt, from),
+					common
+				)
+			),
+		db
+			.select()
+			.from(event)
+			.where(and(eq(event.workspaceId, ctx.workspaceId), isNotNull(event.rrule), common)),
+		db
+			.select()
+			.from(event)
+			.where(
+				and(
+					ne(event.workspaceId, ctx.workspaceId),
+					inArray(event.id, attending),
+					or(isNotNull(event.rrule), gt(event.endsAt, from)),
+					common
+				)
 			)
-		);
+	]);
+	return [...single, ...recurring, ...invited];
 }
 
 export async function listOccurrences(

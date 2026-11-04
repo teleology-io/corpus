@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
 	boolean,
 	index,
@@ -30,7 +31,11 @@ export const notification = pgTable(
 	},
 	(t) => [
 		uniqueIndex('notification_dedupe_idx').on(t.userId, t.dedupeKey),
-		index('notification_user_idx').on(t.userId, t.createdAt)
+		index('notification_user_idx').on(t.userId, t.createdAt),
+		// Unread count runs on every page load
+		index('notification_unread_idx')
+			.on(t.userId)
+			.where(sql`${t.readAt} is null`)
 	]
 );
 

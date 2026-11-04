@@ -432,7 +432,29 @@ export function mountWrx(root) {
 		m.images?.length
 			? `<div class="message-images ${m.role === 'agent' ? 'generated' : ''}">${m.images.map((i) => `<a href="/api/wrx/uploads/${esc(chat.id)}/${esc(i.file)}" target="_blank" rel="noopener noreferrer" title="${esc(i.name)}"><img src="/api/wrx/uploads/${esc(chat.id)}/${esc(i.file)}" alt="${esc(i.name)}" loading="lazy"></a>`).join('')}</div>`
 			: '';
+	// Rendered message HTML, reused across refreshes while nothing it depends on changed. A
+	// streaming run refreshes several times a second; without this every message in the
+	// transcript re-ran Markdown/escaping each time, so cost grew with the conversation.
+	const messageCache = new Map();
+	const chatSigs = new WeakMap();
 	function messageView(chat, m) {
+		let chatSig = chatSigs.get(chat);
+		if (chatSig === undefined) {
+			chatSig = JSON.stringify([chat.id, chat.members, mentionColors]);
+			chatSigs.set(chat, chatSig);
+		}
+		const prefix = `${m.id}:`;
+		const open = [...openKeys].filter((k) => k.startsWith(prefix)).join(',');
+		const sig = `${chatSig}|${open}|${JSON.stringify(m)}`;
+		const key = `${chat.id}:${m.id}`;
+		const hit = messageCache.get(key);
+		if (hit && hit.sig === sig) return hit.html;
+		const html = renderMessage(chat, m);
+		if (messageCache.size > 5000) messageCache.clear();
+		messageCache.set(key, { sig, html });
+		return html;
+	}
+	function renderMessage(chat, m) {
 		if (m.role === 'system')
 			return `<div class="system-note"><span>${esc(m.text)}</span><small>${time(m.at)}</small></div>`;
 		const actions = `<div class="message-actions"><button class="ghost" data-copy-message="${esc(m.id)}" title="Copy message" aria-label="Copy message">⧉</button>${m.role === 'agent' && member(chat, m.memberId) ? `<button class="ghost" data-reply="${esc(member(chat, m.memberId).handle)}" title="Reply to this agent" aria-label="Reply to this agent">↩</button>` : ''}</div>`;

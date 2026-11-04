@@ -1,4 +1,4 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { type AnyPgColumn, index, integer, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { team } from './auth';
 import { bytea, createdAt, id, tstz, updatedAt, userRef, workspaceRef } from './_helpers';
@@ -22,7 +22,13 @@ export const note = pgTable(
 		createdAt: createdAt(),
 		updatedAt: updatedAt()
 	},
-	(t) => [index('note_workspace_parent_idx').on(t.workspaceId, t.parentId)]
+	(t) => [
+		index('note_workspace_parent_idx').on(t.workspaceId, t.parentId),
+		index('note_workspace_archived_idx').on(t.workspaceId, t.archivedAt),
+		// ilike '%q%' search on title / body text
+		index('note_title_trgm_idx').using('gin', sql`${t.title} gin_trgm_ops`),
+		index('note_content_trgm_idx').using('gin', sql`${t.contentText} gin_trgm_ops`)
+	]
 );
 
 /** Share with a user or a team. role: view | comment | edit */
@@ -39,7 +45,11 @@ export const noteShare = pgTable(
 		createdBy: userRef('created_by'),
 		createdAt: createdAt()
 	},
-	(t) => [index('note_share_note_idx').on(t.noteId), index('note_share_user_idx').on(t.userId)]
+	(t) => [
+		index('note_share_note_idx').on(t.noteId),
+		index('note_share_user_idx').on(t.userId),
+		index('note_share_team_idx').on(t.teamId)
+	]
 );
 
 /** Public link sharing */

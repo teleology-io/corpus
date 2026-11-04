@@ -8,11 +8,18 @@ type LiveEvent =
 	| { type: 'integration_items'; provider: string; changes?: number }
 	| { type: 'invalidate'; scope?: string };
 
+type RelayMessage =
+	{ kind: 'event'; event: LiveEvent } | { kind: 'status'; connected: boolean } | { kind: 'hello' };
+
 class Live {
 	unread = $state(0);
 	latest = $state<NotificationDTO[]>([]);
 	connected = $state(false);
 	private source: EventSource | null = null;
+	private channel: BroadcastChannel | null = null;
+	private releaseLeader: (() => void) | null = null;
+	private leader = false;
+	private started = false;
 	private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 	/** `true` = everything; otherwise the dependency keys waiting to be invalidated. */
 	private pending: true | Set<string> = new Set();
@@ -20,25 +27,81 @@ class Live {
 		if (!document.hidden) this.flush();
 	};
 
-	start(initialUnread: number) {
+	/**
+	 * One SSE connection per browser, not per tab: browsers cap HTTP/1.1 connections per origin
+	 * (~6), so a stream per tab starves page and API requests once several tabs are open. Tabs
+	 * elect a leader with a Web Lock; the leader holds the EventSource and relays every event
+	 * over a BroadcastChannel. When the leader tab closes, its lock is released and the next
+	 * tab takes over. Every tab still handles every event itself (toasts, counts, refreshes).
+	 */
+	start(initialUnread: number, userId: string) {
 		this.unread = initialUnread;
-		if (this.source) return;
+		if (this.started) return;
+		this.started = true;
 		document.addEventListener('visibilitychange', this.onVisible);
+		const name = `corpus-live:${userId}`;
+		if (typeof BroadcastChannel === 'undefined' || !navigator.locks) {
+			this.connect(null);
+			return;
+		}
+		const channel = (this.channel = new BroadcastChannel(name));
+		channel.onmessage = ({ data }: MessageEvent<RelayMessage>) => {
+			if (data.kind === 'event') this.handle(data.event);
+			else if (data.kind === 'status') this.connected = data.connected;
+			else if (data.kind === 'hello' && this.leader)
+				this.relay({ kind: 'status', connected: this.connected });
+		};
+		// Followers learn the current connection state from the leader.
+		channel.postMessage({ kind: 'hello' } satisfies RelayMessage);
+		void navigator.locks.request(
+			name,
+			() =>
+				new Promise<void>((release) => {
+					if (!this.started) return release();
+					this.leader = true;
+					this.releaseLeader = release;
+					this.connect(channel);
+				})
+		);
+	}
+
+	private relay(message: RelayMessage) {
+		try {
+			this.channel?.postMessage(message);
+		} catch {
+			/* channel closed */
+		}
+	}
+
+	private connect(channel: BroadcastChannel | null) {
+		const setConnected = (connected: boolean) => {
+			this.connected = connected;
+			if (channel) this.relay({ kind: 'status', connected });
+		};
 		this.source = new EventSource('/api/stream');
-		this.source.onopen = () => (this.connected = true);
-		this.source.onerror = () => (this.connected = false);
+		this.source.onopen = () => setConnected(true);
+		this.source.onerror = () => setConnected(false);
 		this.source.onmessage = (e) => {
+			let event: LiveEvent;
 			try {
-				this.handle(JSON.parse(e.data) as LiveEvent);
+				event = JSON.parse(e.data) as LiveEvent;
 			} catch {
-				/* ignore malformed */
+				return; /* ignore malformed */
 			}
+			this.handle(event);
+			if (channel) this.relay({ kind: 'event', event });
 		};
 	}
 
 	stop() {
+		this.started = false;
 		this.source?.close();
 		this.source = null;
+		this.leader = false;
+		this.releaseLeader?.();
+		this.releaseLeader = null;
+		this.channel?.close();
+		this.channel = null;
 		document.removeEventListener('visibilitychange', this.onVisible);
 		if (this.refreshTimer) clearTimeout(this.refreshTimer);
 	}

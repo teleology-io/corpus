@@ -11,7 +11,7 @@
 	let drawer = $state(false);
 
 	onMount(() => {
-		live.start(data.unread);
+		live.start(data.unread, data.user.id);
 		// Keep the browser timezone in sync for new accounts (defaults to UTC).
 		const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 		if (data.user.timezone === 'UTC' && tz && tz !== 'UTC') {

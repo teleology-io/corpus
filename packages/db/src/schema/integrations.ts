@@ -1,4 +1,4 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import {
 	boolean,
 	index,
@@ -99,7 +99,13 @@ export const integrationItem = pgTable(
 		createdAt: createdAt(),
 		updatedAt: updatedAt()
 	},
-	(t) => [uniqueIndex('integration_item_unique').on(t.connectionId, t.externalId)]
+	(t) => [
+		uniqueIndex('integration_item_unique').on(t.connectionId, t.externalId),
+		// Open items, newest first (dashboard, integrations page, search)
+		index('integration_item_open_idx')
+			.on(t.connectionId, t.externalUpdatedAt)
+			.where(sql`${t.resolvedAt} is null`)
+	]
 );
 
 /** Slack threads the user follows (auto-followed when mentioned, or opened by link). */

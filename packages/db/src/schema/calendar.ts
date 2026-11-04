@@ -1,4 +1,4 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import {
 	boolean,
 	index,
@@ -37,6 +37,8 @@ export const calendar = pgTable(
 	},
 	(t) => [
 		index('calendar_workspace_idx').on(t.workspaceId),
+		// Public .ics feed lookups (polled by external calendar apps)
+		index('calendar_feed_token_idx').on(t.feedToken),
 		uniqueIndex('calendar_external_unique').on(t.connectionId, t.externalId)
 	]
 );
@@ -109,6 +111,15 @@ export const event = pgTable(
 	},
 	(t) => [
 		index('event_workspace_range_idx').on(t.workspaceId, t.startsAt),
+		// Range queries split by kind so each side can use an index: one-off events by end time
+		// (skips history), recurring series by start (they can repeat into any window).
+		index('event_ws_single_end_idx')
+			.on(t.workspaceId, t.endsAt)
+			.where(sql`${t.rrule} is null and ${t.deletedAt} is null`),
+		index('event_ws_recurring_idx')
+			.on(t.workspaceId, t.startsAt)
+			.where(sql`${t.rrule} is not null and ${t.deletedAt} is null`),
+		index('event_title_trgm_idx').using('gin', sql`${t.title} gin_trgm_ops`),
 		index('event_calendar_idx').on(t.calendarId),
 		uniqueIndex('event_external_unique').on(t.calendarId, t.externalId)
 	]

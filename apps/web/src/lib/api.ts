@@ -1,9 +1,10 @@
 /** Small fetch wrapper for the JSON API. Throws Error(message) on non-2xx. */
 export async function api<T = unknown>(
 	path: string,
-	init: { method?: string; body?: unknown } = {}
+	init: { method?: string; body?: unknown; signal?: AbortSignal } = {}
 ): Promise<T> {
 	const res = await fetch(path, {
+		signal: init.signal,
 		method: init.method ?? (init.body !== undefined ? 'POST' : 'GET'),
 		headers: init.body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
 		body: init.body !== undefined ? JSON.stringify(init.body) : undefined

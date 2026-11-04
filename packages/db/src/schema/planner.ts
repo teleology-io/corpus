@@ -1,4 +1,4 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import {
 	boolean,
 	index,
@@ -36,7 +36,8 @@ export const task = pgTable(
 	},
 	(t) => [
 		index('task_workspace_due_idx').on(t.workspaceId, t.dueAt),
-		index('task_completed_idx').on(t.workspaceId, t.completedAt)
+		index('task_completed_idx').on(t.workspaceId, t.completedAt),
+		index('task_title_trgm_idx').using('gin', sql`${t.title} gin_trgm_ops`)
 	]
 );
 

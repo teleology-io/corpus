@@ -29,8 +29,9 @@ type Resolved = {
  * Short-lived per-process cache of session + workspace resolution, keyed by the raw cookie
  * header. Every request (page data, API calls, hover preloads) otherwise pays two to three
  * sequential DB round trips before route code runs. In-flight lookups are shared so a burst
- * of parallel requests resolves once. Any non-GET request clears the cache, so sign-out,
- * workspace switches, profile edits and membership changes are seen immediately.
+ * of parallel requests resolves once. Every non-GET request clears the cache once it has
+ * run, so sign-out, workspace switches, profile edits and membership changes are seen by the
+ * very next request. Sessions are never used past their expiry.
  */
 const SESSION_TTL_MS = 10_000;
 const sessionCache = new Map<string, { at: number; value: Promise<Resolved> }>();
@@ -48,8 +49,8 @@ async function lookup(headers: Headers): Promise<Resolved> {
 
 function resolveSession(event: Parameters<Handle>[0]['event']): Promise<Resolved> {
 	const cookie = event.request.headers.get('cookie');
-	const cacheable =
-		!!cookie && event.request.method === 'GET' && !event.url.pathname.startsWith('/api/auth/');
+	// Auth routes (sign-in/out, session management) always read fresh state.
+	const cacheable = !!cookie && !event.url.pathname.startsWith('/api/auth/');
 	if (!cacheable) return lookup(event.request.headers);
 	const now = Date.now();
 	const hit = sessionCache.get(cookie);
@@ -65,7 +66,6 @@ function resolveSession(event: Parameters<Handle>[0]['event']): Promise<Resolved
 
 const authHandle: Handle = async ({ event, resolve }) => {
 	if (!building) {
-		if (event.request.method !== 'GET' && event.request.method !== 'HEAD') sessionCache.clear();
 		const resolved = await resolveSession(event);
 		const expired =
 			resolved.session && new Date(resolved.session.expiresAt).getTime() <= Date.now();
@@ -73,10 +73,12 @@ const authHandle: Handle = async ({ event, resolve }) => {
 		event.locals.session = expired ? null : resolved.session;
 		event.locals.workspaceId = expired ? null : resolved.workspaceId;
 	}
-	const response = await svelteKitHandler({ event, resolve, auth, building });
-	// Mutations may change the session, user or membership the cache holds.
-	if (event.request.method !== 'GET' && event.request.method !== 'HEAD') sessionCache.clear();
-	return response;
+	try {
+		return await svelteKitHandler({ event, resolve, auth, building });
+	} finally {
+		// Mutations may change the session, user or membership the cache holds.
+		if (event.request.method !== 'GET' && event.request.method !== 'HEAD') sessionCache.clear();
+	}
 };
 
 const guard: Handle = async ({ event, resolve }) => {

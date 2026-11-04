@@ -224,16 +224,15 @@
 			</table>
 		</div>
 
-		<div class="mt-6 grid gap-4 border-t border-line pt-5 sm:grid-cols-2">
+		<div class="mt-6 flex flex-col gap-4 border-t border-line pt-5">
 			<div>
-				<label class="flex items-center justify-between text-sm font-medium"
-					>Quiet hours <Switch
-						bind:checked={quietOn}
-						onchange={savePrefs}
-						label="Quiet hours"
-					/></label
-				>
-				<p class="text-xs text-muted">No push notifications during this window.</p>
+				<label class="flex items-center justify-between gap-4">
+					<span class="flex min-w-0 flex-col">
+						<span class="text-sm font-medium">Quiet hours</span>
+						<span class="text-xs text-muted">No push notifications during this window.</span>
+					</span>
+					<Switch bind:checked={quietOn} onchange={savePrefs} label="Quiet hours" />
+				</label>
 				{#if quietOn}
 					<div class="mt-2 flex items-center gap-2">
 						<input type="time" class="input" bind:value={quietStart} onchange={savePrefs} />
@@ -242,46 +241,45 @@
 					</div>
 				{/if}
 			</div>
-			<div>
-				<label class="flex items-center justify-between text-sm font-medium"
-					>Daily digest <Switch
-						bind:checked={dailyDigest}
-						onchange={savePrefs}
-						label="Daily digest"
-					/></label
-				>
-				<p class="text-xs text-muted">A 7am summary of your day's appointments and tasks.</p>
-			</div>
-			<div>
-				<label class="flex items-center justify-between text-sm font-medium"
-					>Keep pop-ups until dismissed <Switch
-						bind:checked={toastPrefs.sticky}
-						onchange={() => saveToastPrefs($state.snapshot(toastPrefs))}
-						label="Keep pop-ups until dismissed"
-					/></label
-				>
-				<p class="text-xs text-muted">
-					Applies to every pop-up card in Corpus, on this device. Close them with the X.
-				</p>
-			</div>
-			<div>
-				<label class="flex items-center justify-between gap-3 text-sm font-medium">
-					Time on screen
-					<select
-						class="input w-28"
-						bind:value={toastPrefs.seconds}
-						disabled={toastPrefs.sticky}
-						onchange={() => saveToastPrefs($state.snapshot(toastPrefs))}
+			<label class="flex items-center justify-between gap-4">
+				<span class="flex min-w-0 flex-col">
+					<span class="text-sm font-medium">Daily digest</span>
+					<span class="text-xs text-muted">A 7am summary of your day's appointments and tasks.</span
 					>
-						{#each TOAST_SECONDS as s (s)}<option value={s}>{s} seconds</option>{/each}
-					</select>
-				</label>
-				<p class="text-xs text-muted">
-					{toastPrefs.sticky
-						? 'Not used while pop-ups stay until dismissed.'
-						: 'How long pop-ups stay. Errors stay at least 7 seconds.'}
-				</p>
-			</div>
+				</span>
+				<Switch bind:checked={dailyDigest} onchange={savePrefs} label="Daily digest" />
+			</label>
+			<label class="flex items-center justify-between gap-4">
+				<span class="flex min-w-0 flex-col">
+					<span class="text-sm font-medium">Keep pop-ups until dismissed</span>
+					<span class="text-xs text-muted">
+						Applies to every pop-up card in Corpus, on this device. Close them with the X.
+					</span>
+				</span>
+				<Switch
+					bind:checked={toastPrefs.sticky}
+					onchange={() => saveToastPrefs($state.snapshot(toastPrefs))}
+					label="Keep pop-ups until dismissed"
+				/>
+			</label>
+			<label class="flex items-center justify-between gap-4">
+				<span class="flex min-w-0 flex-col">
+					<span class="text-sm font-medium">Time on screen</span>
+					<span class="text-xs text-muted">
+						{toastPrefs.sticky
+							? 'Not used while pop-ups stay until dismissed.'
+							: 'How long pop-ups stay. Errors stay at least 7 seconds.'}
+					</span>
+				</span>
+				<select
+					class="input w-32 shrink-0"
+					bind:value={toastPrefs.seconds}
+					disabled={toastPrefs.sticky}
+					onchange={() => saveToastPrefs($state.snapshot(toastPrefs))}
+				>
+					{#each TOAST_SECONDS as s (s)}<option value={s}>{s} seconds</option>{/each}
+				</select>
+			</label>
 		</div>
 	</section>
 

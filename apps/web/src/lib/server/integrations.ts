@@ -3,9 +3,16 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { db, schema, sql } from '@corpus/db';
 import { accessToken, encryptionKey, oauthConfig } from '@corpus/db/connections';
 import { isInstanceAdmin } from '@corpus/db/apps';
-import { encrypt } from '@corpus/core/crypto';
+import { decrypt, encrypt } from '@corpus/core/crypto';
 import {
 	GoogleApiError,
+	IcalFetchError,
+	feedId,
+	fetchIcal,
+	icalCalendarId,
+	parseIcal,
+	parseIcalUrl,
+	type IcalFeed,
 	ProviderAuthError,
 	envPrefix,
 	gcal,
@@ -88,6 +95,77 @@ export async function connectServiceAccount(userId: string, json: string, subjec
 	);
 }
 
+const MAX_FEEDS = 20;
+
+const readFeeds = (row: { accessToken: string }): IcalFeed[] => {
+	try {
+		return (
+			(JSON.parse(decrypt(row.accessToken, encryptionKey())) as { feeds?: IcalFeed[] }).feeds ?? []
+		);
+	} catch {
+		return [];
+	}
+};
+
+/**
+ * Adds a Google "secret address in iCal format" (read-only, no OAuth app). The first one creates
+ * an `ical` Google Calendar connection; later ones join it. The worker re-fetches every 5–15 min.
+ */
+export async function connectIcal(userId: string, input: string) {
+	let url: string;
+	try {
+		url = parseIcalUrl(input);
+	} catch (e) {
+		error(400, (e as Error).message);
+	}
+	const [existing] = await db
+		.select()
+		.from(conn)
+		.where(and(eq(conn.userId, userId), eq(conn.provider, 'google-calendar')))
+		.limit(1);
+	if (existing && existing.authType !== 'ical')
+		error(
+			409,
+			'Google Calendar is already connected another way — disconnect it first to use iCal addresses.'
+		);
+	const feeds = existing ? readFeeds(existing) : [];
+	const id = feedId(url);
+	if (feeds.some((f) => f.id === id)) error(400, 'That calendar is already added');
+	if (feeds.length >= MAX_FEEDS) error(400, `You can add up to ${MAX_FEEDS} iCal addresses`);
+	try {
+		parseIcal(await fetchIcal(url, 15_000), 'UTC');
+	} catch (e) {
+		if (e instanceof IcalFetchError) error(400, `Couldn’t read that address: ${e.message}`);
+		error(400, 'Couldn’t read that address — make sure it’s the secret iCal address');
+	}
+	const next = [...feeds, { id, url }];
+	const login = icalCalendarId(next[0]!.url) ?? 'iCal';
+	return saveConnection(
+		userId,
+		'google-calendar',
+		{ accessToken: JSON.stringify({ feeds: next }) },
+		{ login: next.length > 1 ? `${login} +${next.length - 1}` : login, avatarUrl: null },
+		'ical'
+	);
+}
+
+/** Stops syncing one iCal address; its mirrored calendar is removed on the next poll. */
+export async function removeIcalFeed(userId: string, id: string, feed: string) {
+	const row = await ownConnection(userId, id);
+	if (row.authType !== 'ical') error(400, 'Not an iCal connection');
+	const next = readFeeds(row).filter((f) => f.id !== feed);
+	if (!next.length) error(400, 'This is the last address — disconnect Google Calendar instead');
+	const login = icalCalendarId(next[0]!.url) ?? 'iCal';
+	await db
+		.update(conn)
+		.set({
+			accessToken: encrypt(JSON.stringify({ feeds: next }), encryptionKey()),
+			accountLogin: next.length > 1 ? `${login} +${next.length - 1}` : login
+		})
+		.where(eq(conn.id, id));
+	await requestPoll(id);
+}
+
 /** Integrations are per user (workspace_id stays null until org integrations exist). */
 export async function listConnections(userId: string) {
 	return db
@@ -118,7 +196,7 @@ export async function saveConnection(
 		scopes?: string | null;
 	},
 	account: { login: string; avatarUrl?: string | null },
-	authType: 'oauth' | 'token' | 'service_account' = 'oauth'
+	authType: 'oauth' | 'token' | 'service_account' | 'ical' = 'oauth'
 ) {
 	const key = encryptionKey();
 	const values = {
@@ -174,6 +252,28 @@ export async function updateConnectionSettings(
 export async function googleCalendars(userId: string, id: string) {
 	const row = await ownConnection(userId, id);
 	if (row.provider !== 'google-calendar') error(400, 'Not a Google Calendar connection');
+	if (row.authType === 'ical') {
+		const mirrored = await db
+			.select({
+				externalId: schema.calendar.externalId,
+				name: schema.calendar.name,
+				color: schema.calendar.color
+			})
+			.from(schema.calendar)
+			.where(eq(schema.calendar.connectionId, id));
+		// Never send the secret URLs back to the browser — only their ids and calendar names.
+		return readFeeds(row).map((f) => {
+			const cal = mirrored.find((m) => m.externalId === f.id);
+			return {
+				id: f.id,
+				name: cal?.name ?? icalCalendarId(f.url) ?? 'Google Calendar',
+				color: cal?.color ?? '#2C87F2',
+				primary: false,
+				readOnly: true,
+				selected: true
+			};
+		});
+	}
 	let list: Awaited<ReturnType<typeof gcal.calendars>>;
 	try {
 		list = await gcal.calendars(await accessToken(row));

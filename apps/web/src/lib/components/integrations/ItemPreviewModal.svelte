@@ -1,19 +1,27 @@
 <script lang="ts" module>
-	import DOMPurify from 'dompurify';
-
-	// Provider content is untrusted: sanitize, and open every link in a new tab.
-	// (Registered once; DOMPurify is a no-op stub during SSR.)
-	if (DOMPurify.isSupported)
-		DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-			if (node.tagName === 'A') {
-				node.setAttribute('target', '_blank');
-				node.setAttribute('rel', 'noreferrer');
+	// marked + DOMPurify (~75 kB) load on first preview instead of with the dashboard and
+	// integrations pages. Provider content is untrusted: sanitize, and open every link in a
+	// new tab (hook registered once).
+	let libs: Promise<{
+		marked: typeof import('marked').marked;
+		purify: typeof import('dompurify').default;
+	}> | null = null;
+	function loadLibs() {
+		return (libs ??= Promise.all([import('marked'), import('dompurify')]).then(
+			([{ marked }, { default: purify }]) => {
+				purify.addHook('afterSanitizeAttributes', (node) => {
+					if (node.tagName === 'A') {
+						node.setAttribute('target', '_blank');
+						node.setAttribute('rel', 'noreferrer');
+					}
+				});
+				return { marked, purify };
 			}
-		});
+		));
+	}
 </script>
 
 <script lang="ts">
-	import { marked } from 'marked';
 	import { ExternalLink, LoaderCircle } from '@lucide/svelte';
 	import Modal from '#lib/components/ui/Modal.svelte';
 	import BrandIcon from '#lib/components/ui/BrandIcon.svelte';
@@ -40,15 +48,15 @@
 		html = null;
 		failed = null;
 		loading = true;
-		api<ItemPreview>(`/api/integrations/items/${id}/preview`)
-			.then((p) => {
+		Promise.all([api<ItemPreview>(`/api/integrations/items/${id}/preview`), loadLibs()])
+			.then(([p, { marked, purify }]) => {
 				if (item?.id !== id) return;
 				const raw = p.body
 					? p.format === 'markdown'
 						? (marked.parse(p.body, { async: false, gfm: true, breaks: true }) as string)
 						: p.body
 					: '';
-				html = DOMPurify.sanitize(raw);
+				html = purify.sanitize(raw);
 			})
 			.catch((e: Error) => {
 				if (item?.id === id) failed = e.message;

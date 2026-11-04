@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { goto, refreshAll } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
 	import { ArrowLeft, Check, Minus, Pencil, Trash2, Pill } from '@lucide/svelte';
 	import CycleModal from '#lib/components/cycles/CycleModal.svelte';
 	import { api } from '#lib/api.js';
@@ -19,7 +19,7 @@
 				body: { cycleId: d.cycleId, at: d.at, status: d.status === status ? null : status }
 			})
 		);
-		await refreshAll();
+		await invalidate('app:cycles');
 	}
 
 	async function remove() {
@@ -151,5 +151,5 @@
 	{tz}
 	today={localDate(new Date(), tz)}
 	editing={c}
-	onsaved={() => refreshAll()}
+	onsaved={() => invalidate('app:cycles')}
 />

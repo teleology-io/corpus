@@ -83,7 +83,7 @@
 
 <Dialog.Root bind:open={search.open}>
 	<Dialog.Portal>
-		<Dialog.Overlay class="fixed inset-0 z-[60] bg-black/50 backdrop-blur-[1px]" />
+		<Dialog.Overlay class="fixed inset-0 z-[60] bg-black/50" />
 		<Dialog.Content
 			class="fixed top-[12vh] left-1/2 z-[60] flex max-h-[76dvh] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-pop outline-none"
 		>

@@ -1693,14 +1693,24 @@ export function mountWrx(root) {
 	// its own, and every (re)open refreshes so changes made while disconnected show up.
 	function watch() {
 		events = new EventSource('/api/wrx/events');
+		// A change that lands while a refresh is in flight re-runs it once afterwards, so the
+		// last update of a run is never dropped.
+		let again = false;
 		const soon = () => {
-			if (loading) return;
+			if (loading) {
+				again = true;
+				return;
+			}
 			loading = true;
 			setTimeout(async () => {
 				try {
 					await refresh();
 				} catch {}
 				loading = false;
+				if (again) {
+					again = false;
+					soon();
+				}
 			}, 300);
 		};
 		events.addEventListener('change', soon);

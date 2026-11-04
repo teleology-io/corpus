@@ -321,6 +321,7 @@ export class Store {
 		return item;
 	}
 }
+const CHANGE_FLUSH_MS = 150;
 export class Engine {
 	constructor(store, publish = () => {}, spawnProcess = spawn) {
 		this.store = store;
@@ -329,7 +330,21 @@ export class Engine {
 		this.running = new Map();
 		this.queue = [];
 	}
+	// Agent runs call this for every output line. Coalesce into one disk write + one client
+	// notification per CHANGE_FLUSH_MS so a streaming run doesn't block the event loop with
+	// a full pretty-printed state write per line. State in memory stays authoritative.
 	changed() {
+		if (this.changeTimer) return;
+		if (!this.exitFlush) {
+			this.exitFlush = () => this.flushChanges();
+			process.once('exit', this.exitFlush);
+		}
+		this.changeTimer = setTimeout(() => this.flushChanges(), CHANGE_FLUSH_MS);
+	}
+	flushChanges() {
+		if (!this.changeTimer) return;
+		clearTimeout(this.changeTimer);
+		this.changeTimer = null;
 		this.store.save();
 		this.publish();
 	}

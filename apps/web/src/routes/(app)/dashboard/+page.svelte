@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { refreshAll } from '$app/navigation';
+	import { invalidate } from '$app/navigation';
 	import {
 		CircleCheck,
 		History,
@@ -80,7 +80,7 @@
 		const status = d.status === 'taken' ? null : 'taken';
 		await attempt(() => api('/api/doses', { body: { cycleId: d.cycleId, at: d.at, status } }));
 		if (status) toast(`${d.name} — taken`, { tone: 'success' });
-		await refreshAll();
+		await invalidate('app:dashboard');
 	}
 
 	const isPast = (iso: string) => new Date(iso) < now;

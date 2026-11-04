@@ -37,7 +37,8 @@ export const integrationConnection = pgTable(
 		scopes: text('scopes'),
 		/**
 		 * oauth (via the instance's OAuth app) | token (user-pasted personal token / API key) |
-		 * service_account (Google key file; refresh_token holds the encrypted credential)
+		 * service_account (Google key file; refresh_token holds the encrypted credential) |
+		 * ical (Google secret iCal addresses; access_token holds the encrypted `{ feeds }` JSON)
 		 */
 		authType: text('auth_type').notNull().default('oauth'),
 		/** Provider-specific poll cursor (etag, last-modified, updatedAt...) */

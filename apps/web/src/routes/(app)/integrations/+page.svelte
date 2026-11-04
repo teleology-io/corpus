@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { refreshAll } from '$app/navigation';
+	import { invalidate } from '$app/navigation';
 	import { formatDistanceToNowStrict } from 'date-fns';
 	import {
 		RefreshCw,
@@ -23,6 +23,7 @@
 		type TokenTarget
 	} from '#lib/components/integrations/TokenConnectModal.svelte';
 	import ServiceAccountModal from '#lib/components/integrations/ServiceAccountModal.svelte';
+	import IcalModal from '#lib/components/integrations/IcalModal.svelte';
 	import ItemPreviewModal from '#lib/components/integrations/ItemPreviewModal.svelte';
 	import { api } from '#lib/api.js';
 	import { attempt, toast } from '#lib/stores/toast.svelte.js';
@@ -38,6 +39,7 @@
 	let tokenTarget = $state<TokenTarget | null>(null);
 
 	let saOpen = $state(false);
+	let icalOpen = $state(false);
 	let previewOpen = $state(false);
 	let previewItem = $state<IntegrationItemDTO | null>(null);
 
@@ -94,7 +96,7 @@
 		if (!confirm(`Disconnect ${name}? ${what[name] ?? 'Imported tasks stay; items are removed.'}`))
 			return;
 		await attempt(() => api(`/api/integrations/${id}`, { method: 'DELETE' }));
-		await refreshAll();
+		await invalidate('app:integrations');
 	}
 
 	async function setting(id: string, key: 'syncTasks' | 'notify', value: boolean) {
@@ -167,19 +169,22 @@
 							{#if p.id === 'google-calendar' && c.status === 'active'}
 								<GoogleCalendars
 									connectionId={c.id}
+									ical={c.authType === 'ical'}
 									shareWith={c.authType === 'service_account' &&
 									c.accountLogin?.endsWith('.gserviceaccount.com')
 										? c.accountLogin
 										: null}
 								/>
 							{/if}
-							<label class="flex items-center justify-between"
-								>{NOTIFY_LABEL[p.id] ?? 'Notify me about new items'}
-								<Switch
-									checked={c.settings.notify !== false}
-									onchange={(v) => setting(c.id, 'notify', v)}
-								/></label
-							>
+							{#if c.authType !== 'ical'}
+								<label class="flex items-center justify-between"
+									>{NOTIFY_LABEL[p.id] ?? 'Notify me about new items'}
+									<Switch
+										checked={c.settings.notify !== false}
+										onchange={(v) => setting(c.id, 'notify', v)}
+									/></label
+								>
+							{/if}
 						</div>
 						{#if p.id === 'slack' && c.status === 'active'}
 							<a class="mt-3 btn-primary h-8 w-full text-xs" href="/integrations/slack"
@@ -234,11 +239,17 @@
 									<button class="btn-ghost h-8 w-full text-xs" onclick={() => (saOpen = true)}
 										>Use a service account instead</button
 									>
+									<button class="btn-ghost h-8 w-full text-xs" onclick={() => (icalOpen = true)}
+										>Use a secret iCal address (read-only)</button
+									>
 								{/if}
 							{:else}
 								{#if p.id === 'google-calendar'}
 									<button class="btn-primary h-9 w-full" onclick={() => (saOpen = true)}
 										>Connect with a service account</button
+									>
+									<button class="btn-outline h-9 w-full" onclick={() => (icalOpen = true)}
+										>Use a secret iCal address (read-only)</button
 									>
 								{/if}
 								{#if p.personalToken}
@@ -342,4 +353,5 @@
 <AppSetupModal bind:open={appOpen} target={appTarget} />
 <TokenConnectModal bind:open={tokenOpen} target={tokenTarget} />
 <ServiceAccountModal bind:open={saOpen} />
+<IcalModal bind:open={icalOpen} />
 <ItemPreviewModal bind:open={previewOpen} item={previewItem} />

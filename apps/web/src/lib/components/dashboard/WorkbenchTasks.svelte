@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { refreshAll } from '$app/navigation';
+	import { invalidate } from '$app/navigation';
 	import { Check, SquareTerminal, ArrowUpRight } from '@lucide/svelte';
 	import { api } from '#lib/api.js';
 	import { attempt } from '#lib/stores/toast.svelte.js';
@@ -18,7 +18,7 @@
 		await attempt(() =>
 			api('/api/wrx/task-status', { body: { id: t.id, status: next ? 'done' : 'todo' } })
 		);
-		await refreshAll();
+		await invalidate('app:dashboard');
 		delete optimistic[t.id];
 	}
 </script>

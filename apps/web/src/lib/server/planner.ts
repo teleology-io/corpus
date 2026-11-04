@@ -370,8 +370,14 @@ export async function cycleBands(
 	);
 }
 
-export async function doses(ctx: Ctx, from: Date, to: Date): Promise<DoseDTO[]> {
-	const rows = await listCycles(ctx);
+export async function doses(
+	ctx: Ctx,
+	from: Date,
+	to: Date,
+	/** Pass already-loaded cycles to skip re-querying them. */
+	cycles?: Awaited<ReturnType<typeof listCycles>>
+): Promise<DoseDTO[]> {
+	const rows = cycles ?? (await listCycles(ctx));
 	if (!rows.length) return [];
 	const logs = await db
 		.select()

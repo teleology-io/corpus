@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { refreshAll } from '$app/navigation';
+	import { invalidate } from '$app/navigation';
 	import { Pill, Plus, Bell, Pause, Play, Trash2, Repeat } from '@lucide/svelte';
 	import CycleModal from '#lib/components/cycles/CycleModal.svelte';
 	import ReminderModal from '#lib/components/cycles/ReminderModal.svelte';
@@ -18,17 +18,17 @@
 
 	async function pause(id: string, paused: boolean) {
 		await attempt(() => api(`/api/cycles/${id}`, { method: 'PATCH', body: { paused } }));
-		await refreshAll();
+		await invalidate('app:cycles');
 	}
 
 	async function toggleReminder(id: string, active: boolean) {
 		await attempt(() => api(`/api/reminders/${id}`, { method: 'PATCH', body: { active } }));
-		await refreshAll();
+		await invalidate('app:cycles');
 	}
 
 	async function deleteReminder(id: string) {
 		await attempt(() => api(`/api/reminders/${id}`, { method: 'DELETE' }));
-		await refreshAll();
+		await invalidate('app:cycles');
 	}
 
 	function phaseText(p: (typeof data.cycles)[number]['phase']) {
@@ -198,11 +198,11 @@
 	bind:open={cycleOpen}
 	tz={data.user.timezone}
 	today={data.today}
-	onsaved={() => refreshAll()}
+	onsaved={() => invalidate('app:cycles')}
 />
 <ReminderModal
 	bind:open={reminderOpen}
 	tz={data.user.timezone}
 	editing={editingReminder}
-	onsaved={() => refreshAll()}
+	onsaved={() => invalidate('app:cycles')}
 />

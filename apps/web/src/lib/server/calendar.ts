@@ -224,6 +224,7 @@ export async function listOccurrences(
 				userId: eventAttendee.userId,
 				email: eventAttendee.email,
 				name: eventAttendee.name,
+				rsvp: eventAttendee.rsvp,
 				userName: user.name,
 				userEmail: user.email,
 				image: user.image
@@ -265,7 +266,8 @@ export async function listOccurrences(
 			id: a.userId,
 			name: a.userName ?? a.name ?? a.email ?? 'Guest',
 			email: a.userEmail ?? a.email,
-			image: a.image
+			image: a.image,
+			rsvp: a.rsvp
 		});
 		attendeesBy.set(a.eventId, list);
 	}

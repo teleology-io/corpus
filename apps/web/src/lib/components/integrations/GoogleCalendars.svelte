@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { LoaderCircle, Lock } from '@lucide/svelte';
+	import { LoaderCircle, Lock, X } from '@lucide/svelte';
 	import { api } from '#lib/api.js';
 	import { attempt, toast } from '#lib/stores/toast.svelte.js';
 
@@ -15,11 +15,14 @@
 
 	let {
 		connectionId,
-		shareWith = null
+		shareWith = null,
+		ical = false
 	}: {
 		connectionId: string;
 		/** Service account email: its calendars must be shared with it and added by ID. */
 		shareWith?: string | null;
+		/** Secret iCal addresses: each row is one feed, added by URL and removed individually. */
+		ical?: boolean;
 	} = $props();
 
 	let list = $state<GoogleCalendar[] | null>(null);
@@ -44,9 +47,10 @@
 		saving = true;
 		const ok = await attempt(
 			() =>
-				api(`/api/integrations/${connectionId}/calendars`, { body: { calendarId } }).then(
-					() => true
-				),
+				(ical
+					? api('/api/integrations/ical', { body: { url: calendarId } })
+					: api(`/api/integrations/${connectionId}/calendars`, { body: { calendarId } })
+				).then(() => true),
 			'Could not add calendar'
 		);
 		saving = false;
@@ -54,6 +58,21 @@
 		newId = '';
 		toast('Calendar added', { body: 'Events appear in My Calendar shortly.' });
 		await load();
+	}
+
+	async function remove(cal: GoogleCalendar) {
+		if (!confirm(`Stop syncing “${cal.name}”? Its events are removed from Corpus.`)) return;
+		saving = true;
+		const ok = await attempt(
+			() =>
+				api(`/api/integrations/${connectionId}/calendars`, {
+					method: 'DELETE',
+					body: { calendarId: cal.id }
+				}).then(() => true),
+			'Could not remove calendar'
+		);
+		saving = false;
+		if (ok) await load();
 	}
 
 	async function toggle(cal: GoogleCalendar) {
@@ -89,26 +108,57 @@
 		<ul class="max-h-44 scrollbar-thin space-y-1 overflow-y-auto">
 			{#each list as cal (cal.id)}
 				<li>
-					<label
-						class="flex cursor-pointer items-center gap-2 rounded-md px-1 py-0.5 hover:bg-surface"
-					>
-						<input
-							type="checkbox"
-							class="accent-primary-500"
-							checked={cal.selected}
-							disabled={saving}
-							onchange={() => toggle(cal)}
-						/>
-						<span class="size-2.5 shrink-0 rounded-full" style:background={cal.color}></span>
-						<span class="min-w-0 flex-1 truncate">{cal.name}</span>
-						{#if cal.primary}<span class="text-muted">Primary</span>{/if}
-						{#if cal.readOnly}<span title="Read-only"><Lock class="size-3 text-muted" /></span>{/if}
-					</label>
+					{#if ical}
+						<div class="flex items-center gap-2 rounded-md px-1 py-0.5">
+							<span class="size-2.5 shrink-0 rounded-full" style:background={cal.color}></span>
+							<span class="min-w-0 flex-1 truncate">{cal.name}</span>
+							<span title="Read-only"><Lock class="size-3 text-muted" /></span>
+							{#if list.length > 1}
+								<button
+									class="btn-icon size-5"
+									aria-label="Remove {cal.name}"
+									title="Remove"
+									disabled={saving}
+									onclick={() => remove(cal)}><X class="size-3" /></button
+								>
+							{/if}
+						</div>
+					{:else}
+						<label
+							class="flex cursor-pointer items-center gap-2 rounded-md px-1 py-0.5 hover:bg-surface"
+						>
+							<input
+								type="checkbox"
+								class="accent-primary-500"
+								checked={cal.selected}
+								disabled={saving}
+								onchange={() => toggle(cal)}
+							/>
+							<span class="size-2.5 shrink-0 rounded-full" style:background={cal.color}></span>
+							<span class="min-w-0 flex-1 truncate">{cal.name}</span>
+							{#if cal.primary}<span class="text-muted">Primary</span>{/if}
+							{#if cal.readOnly}<span title="Read-only"><Lock class="size-3 text-muted" /></span
+								>{/if}
+						</label>
+					{/if}
 				</li>
 			{/each}
 		</ul>
 	{/if}
-	{#if shareWith && !failed}
+	{#if ical && !failed}
+		<p class="text-muted">Read-only · refreshed every 5–15 minutes.</p>
+		<form class="flex gap-1.5" onsubmit={add}>
+			<input
+				class="input h-7 min-w-0 flex-1 font-mono text-[11px]"
+				type="url"
+				placeholder="Another secret iCal address"
+				autocomplete="off"
+				bind:value={newId}
+				disabled={saving}
+			/>
+			<button class="btn-outline h-7 text-xs" disabled={saving || !newId.trim()}>Add</button>
+		</form>
+	{:else if shareWith && !failed}
 		<p class="text-muted">
 			Share a calendar with <span class="font-medium break-all text-ink">{shareWith}</span>, then
 			add its ID (Google Calendar → Settings → Integrate calendar).

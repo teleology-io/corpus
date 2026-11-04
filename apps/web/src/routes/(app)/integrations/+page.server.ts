@@ -5,7 +5,8 @@ import { requireCtx } from '#lib/server/ctx.js';
 import { envPrefix, listConnections, openItems } from '#lib/server/integrations.js';
 import { unreadThreadCount } from '#lib/server/slack.js';
 
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals, url, depends }) => {
+	depends('app:integrations', 'app:integration-status');
 	const ctx = requireCtx(locals);
 	const [connections, items, slackUnread, apps, isAdmin] = await Promise.all([
 		listConnections(ctx.userId),

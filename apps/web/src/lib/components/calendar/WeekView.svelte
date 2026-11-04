@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { Bell, Pill } from '@lucide/svelte';
 	import EventCard from './EventCard.svelte';
 	import {
@@ -53,19 +53,34 @@
 	let scroller: HTMLDivElement;
 
 	onMount(() => {
-		scroller.scrollTop = HOUR_PX * 7.5;
 		const t = setInterval(() => (now = new Date()), 60_000);
 		return () => clearInterval(t);
 	});
 
 	const nowMin = $derived(minutesInto(localDate(now, tz), now.toISOString(), tz));
 
+	// On open and whenever the visible range changes: bring the "now" line into view (about a
+	// third of the way down) when today is shown, otherwise start at 7:30.
+	$effect(() => {
+		const range = `${start}:${end}`;
+		untrack(() => {
+			void range;
+			if (!scroller) return;
+			const showsToday = days.includes(localDate(new Date(), tz));
+			const top = showsToday ? (nowMin / 60) * HOUR_PX - scroller.clientHeight / 3 : HOUR_PX * 7.5;
+			scroller.scrollTo({ top: Math.max(0, top) });
+		});
+	});
+
 	const allDay = $derived(
 		occurrences.filter(
 			(o) => o.allDay || new Date(o.end).getTime() - new Date(o.start).getTime() >= 86_400_000
 		)
 	);
-	const timed = $derived(occurrences.filter((o) => !allDay.includes(o)));
+	const timed = $derived.by(() => {
+		const all = new Set(allDay);
+		return occurrences.filter((o) => !all.has(o));
+	});
 
 	function columnFor(date: string) {
 		const items = timed
@@ -80,27 +95,45 @@
 
 	const columns = $derived(days.map((d) => ({ date: d, placed: columnFor(d) })));
 
+	// Local start/end dates per all-day item, computed once per data change rather than per
+	// day per render (each localDate() builds a TZDate).
+	const allDaySpans = $derived(
+		allDay.map((o) => ({
+			o,
+			from: localDate(new Date(o.start), tz),
+			// End is exclusive: an all-day event ending at midnight doesn't cover that day.
+			to: localDate(new Date(new Date(o.end).getTime() - 1), tz)
+		}))
+	);
+
 	function allDayFor(date: string) {
-		// End is exclusive: an all-day event ending at midnight doesn't cover that day.
-		return allDay.filter(
-			(o) =>
-				localDate(new Date(o.start), tz) <= date &&
-				date <= localDate(new Date(new Date(o.end).getTime() - 1), tz)
-		);
+		return allDaySpans.filter((s) => s.from <= date && date <= s.to).map((s) => s.o);
 	}
 
 	function bandsFor(date: string) {
 		return bands.filter((b) => b.start <= date && date <= b.end && b.status === 'on');
 	}
 
-	function markersFor(date: string) {
-		const ds = doses
-			.filter((d) => localDate(new Date(d.at), tz) === date)
-			.map((d) => ({ kind: 'dose' as const, at: d.at, dose: d }));
-		const rs = reminders
-			.filter((r) => localDate(new Date(r.at), tz) === date)
-			.map((r) => ({ kind: 'reminder' as const, at: r.at, reminder: r }));
-		return [...ds, ...rs];
+	type Marker =
+		| { kind: 'dose'; at: string; dose: (typeof doses)[number] }
+		| { kind: 'reminder'; at: string; reminder: (typeof reminders)[number] };
+	const markersByDay = $derived.by(() => {
+		// Rebuilt whole inside $derived and never mutated afterwards, so no reactive map needed.
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity
+		const by = new Map<string, Marker[]>();
+		const add = (date: string, m: Marker) => {
+			const list = by.get(date);
+			if (list) list.push(m);
+			else by.set(date, [m]);
+		};
+		for (const d of doses) add(localDate(new Date(d.at), tz), { kind: 'dose', at: d.at, dose: d });
+		for (const r of reminders)
+			add(localDate(new Date(r.at), tz), { kind: 'reminder', at: r.at, reminder: r });
+		return by;
+	});
+
+	function markersFor(date: string): Marker[] {
+		return markersByDay.get(date) ?? [];
 	}
 
 	// ---------- pointer interactions ----------
@@ -175,7 +208,25 @@
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 	}
 
+	// Pointer moves arrive faster than frames; hit-testing (elementFromPoint +
+	// getBoundingClientRect) once per frame avoids forced layouts between moves.
+	let pendingMove: PointerEvent | null = null;
+	let moveFrame = 0;
 	function onPointerMove(e: PointerEvent) {
+		if (!drag) return;
+		pendingMove = e;
+		if (!moveFrame) moveFrame = requestAnimationFrame(flushMove);
+	}
+
+	function flushMove() {
+		if (moveFrame) cancelAnimationFrame(moveFrame);
+		moveFrame = 0;
+		const e = pendingMove;
+		pendingMove = null;
+		if (e) applyMove(e);
+	}
+
+	function applyMove(e: PointerEvent) {
 		if (!drag) return;
 		if (drag.kind === 'create') {
 			drag.current = snap(minuteAt(e, colEl(drag.date)));
@@ -198,6 +249,7 @@
 	}
 
 	function onPointerUp() {
+		flushMove();
 		const d = drag;
 		drag = null;
 		if (!d) return;
@@ -382,6 +434,7 @@
 							style:left="calc({(p.col / p.cols) * 100}% + 2px)"
 							style:width="calc({100 / p.cols}% - 4px)"
 							onpointerdown={(e) => beginMove(e, p.item, col.date)}
+							onclick={() => !p.item.canEdit && onopen(p.item)}
 							onkeydown={(e) => e.key === 'Enter' && onopen(p.item)}
 						>
 							<EventCard occ={p.item} {tz} height={p.height} />

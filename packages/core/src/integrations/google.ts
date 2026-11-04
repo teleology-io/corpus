@@ -237,7 +237,7 @@ export function parseExdates(lines: string[], tz: string): Date[] {
 }
 
 /** Corpus keeps UNTIL as a UTC instant; Google all-day rules use an inclusive date. */
-function normalizeRule(rule: string, allDay: boolean, tz: string): string {
+export function normalizeRule(rule: string, allDay: boolean, tz: string): string {
 	const m = rule.match(/UNTIL=(\d{8})(?=;|$)/);
 	if (!m || !allDay) return rule;
 	const until = atLocal(isoDate(m[1]!), '23:59:59', tz);

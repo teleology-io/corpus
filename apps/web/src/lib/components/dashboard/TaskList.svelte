@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { refreshAll } from '$app/navigation';
+	import { invalidate } from '$app/navigation';
 	import { Check, Plus, Trash2, ExternalLink, Flag } from '@lucide/svelte';
 	import BrandIcon from '../ui/BrandIcon.svelte';
 	import { api } from '#lib/api.js';
@@ -46,20 +46,20 @@
 				}
 			})
 		);
-		await refreshAll();
+		await invalidate('app:dashboard');
 	}
 
 	async function toggle(t: TaskDTO) {
 		const next = !isDone(t);
 		optimistic[t.id] = next;
 		await attempt(() => api(`/api/tasks/${t.id}`, { method: 'PATCH', body: { completed: next } }));
-		await refreshAll();
+		await invalidate('app:dashboard');
 		delete optimistic[t.id];
 	}
 
 	async function remove(t: TaskDTO) {
 		await attempt(() => api(`/api/tasks/${t.id}`, { method: 'DELETE' }));
-		await refreshAll();
+		await invalidate('app:dashboard');
 	}
 </script>
 

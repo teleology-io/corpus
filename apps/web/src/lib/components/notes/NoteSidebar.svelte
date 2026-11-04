@@ -25,7 +25,19 @@
 	let dragId = $state<string | null>(null);
 	let dropTarget = $state<{ id: string | null; mode: 'inside' | 'before' } | null>(null);
 
-	const children = (parentId: string | null) => tree.filter((n) => n.parentId === parentId);
+	// parentId → children, built once per tree change (was a full-tree filter per node).
+	const byParent = $derived.by(() => {
+		// Rebuilt whole inside $derived and never mutated afterwards, so no reactive map needed.
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity
+		const map = new Map<string | null, (typeof tree)[number][]>();
+		for (const n of tree) {
+			const list = map.get(n.parentId);
+			if (list) list.push(n);
+			else map.set(n.parentId, [n]);
+		}
+		return map;
+	});
+	const children = (parentId: string | null) => byParent.get(parentId) ?? [];
 	const activeId = $derived(page.params.id);
 
 	// Expand ancestors of the open note.
@@ -95,7 +107,9 @@
 			ondragover={(e) => {
 				e.preventDefault();
 				const r = e.currentTarget.getBoundingClientRect();
-				dropTarget = { id: n.id, mode: e.clientY - r.top < r.height * 0.3 ? 'before' : 'inside' };
+				const mode = e.clientY - r.top < r.height * 0.3 ? 'before' : 'inside';
+				// dragover fires continuously; only touch state when the target changes.
+				if (dropTarget?.id !== n.id || dropTarget.mode !== mode) dropTarget = { id: n.id, mode };
 			}}
 			ondrop={(e) => (e.preventDefault(), dropTarget && drop(dropTarget))}
 			class="group relative flex items-center gap-1 rounded-md py-1 pr-1 text-[13px] {on

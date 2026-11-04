@@ -11,7 +11,10 @@
 		UserPlus,
 		ExternalLink,
 		Video,
-		Lock
+		Lock,
+		MapPin,
+		Repeat,
+		Bell
 	} from '@lucide/svelte';
 	import { rulePreset, ruleUntil } from '@corpus/core';
 	import BrandIcon from '../ui/BrandIcon.svelte';
@@ -172,6 +175,53 @@
 
 	const category = $derived(categories.find((c) => c.id === categoryId) ?? null);
 
+	// ----- read-only details view (synced calendars you can't edit) -----
+	const URL_RE = /(https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]])/g;
+	/** Plain text split into text / link parts, so links are clickable without {@html}. */
+	const linkify = (text: string) =>
+		text.split(URL_RE).map((part, i) => ({ text: part, href: i % 2 ? part : null }));
+	const RSVP_LABEL: Record<string, string> = {
+		accepted: 'Going',
+		declined: 'Declined',
+		tentative: 'Maybe',
+		pending: 'Awaiting'
+	};
+	const calendarName = $derived(
+		editing ? (calendars.find((c) => c.id === editing.calendarId)?.name ?? null) : null
+	);
+	const when = $derived.by(() => {
+		if (!editing) return '';
+		const start = new Date(editing.start);
+		const end = new Date(editing.end);
+		const day = (d: Date) =>
+			new Intl.DateTimeFormat(undefined, {
+				weekday: 'short',
+				month: 'short',
+				day: 'numeric',
+				year: 'numeric',
+				timeZone: tz
+			}).format(d);
+		if (editing.allDay) {
+			// All-day ends are exclusive midnights.
+			const last = new Date(end.getTime() - 1);
+			return day(start) === day(last) ? day(start) : `${day(start)} – ${day(last)}`;
+		}
+		const time = (d: Date) =>
+			new Intl.DateTimeFormat(undefined, {
+				hour: 'numeric',
+				minute: '2-digit',
+				timeZone: tz
+			}).format(d);
+		return day(start) === day(end)
+			? `${day(start)} · ${time(start)} – ${time(end)}`
+			: `${day(start)} ${time(start)} – ${day(end)} ${time(end)}`;
+	});
+	const repeatLabel = $derived.by(() => {
+		if (!editing?.rrule) return null;
+		const preset = rulePreset(editing.rrule);
+		return preset === 'custom' || preset === 'none' ? 'Repeats' : `Repeats ${preset}`;
+	});
+
 	function pickCategory(c: CategoryDTO) {
 		categoryId = c.id;
 		color = c.color;
@@ -285,10 +335,12 @@
 
 <Modal
 	bind:open
-	title={editing ? 'Edit Schedule' : 'Create Schedule'}
-	description={step === 1
-		? 'Fill in the data below to add a schedule'
-		: 'Repeat, reminders and people'}
+	title={readOnly ? 'Event details' : editing ? 'Edit Schedule' : 'Create Schedule'}
+	description={readOnly
+		? (calendarName ?? 'Read-only calendar')
+		: step === 1
+			? 'Fill in the data below to add a schedule'
+			: 'Repeat, reminders and people'}
 >
 	{#snippet icon()}<CalendarPlus class="size-5" />{/snippet}
 
@@ -319,7 +371,85 @@
 		</div>
 	{/if}
 
-	{#if step === 1}
+	{#if readOnly && editing}
+		<div class="space-y-4 text-sm">
+			<div class="flex items-start gap-3">
+				<span class="mt-1.5 size-3 shrink-0 rounded-full" style:background={editing.color}></span>
+				<div class="min-w-0">
+					<h3 class="text-base font-semibold break-words">{editing.title}</h3>
+					<p class="mt-0.5 text-muted">{when}</p>
+					{#if repeatLabel}<p class="mt-0.5 flex items-center gap-1.5 text-xs text-muted">
+							<Repeat class="size-3" />{repeatLabel}
+						</p>{/if}
+				</div>
+			</div>
+			{#if editing.location}
+				<p class="flex items-start gap-2">
+					<MapPin class="mt-0.5 size-4 shrink-0 text-muted" />
+					<span class="min-w-0 break-words">
+						{#each linkify(editing.location) as part, i (i)}{#if part.href}<a
+									class="text-primary-600 hover:underline"
+									href={part.href}
+									target="_blank"
+									rel="noreferrer">{part.text}</a
+								>{:else}{part.text}{/if}{/each}
+					</span>
+				</p>
+			{/if}
+			{#if editing.description}
+				<div
+					class="max-h-72 scrollbar-thin overflow-y-auto rounded-lg bg-canvas px-3 py-2 break-words whitespace-pre-wrap"
+				>
+					{#each linkify(editing.description) as part, i (i)}{#if part.href}<a
+								class="text-primary-600 hover:underline"
+								href={part.href}
+								target="_blank"
+								rel="noreferrer">{part.text}</a
+							>{:else}{part.text}{/if}{/each}
+				</div>
+			{/if}
+			{#if editing.attendees.length}
+				<div>
+					<p class="label">Guests · {editing.attendees.length}</p>
+					<ul class="max-h-48 scrollbar-thin space-y-1.5 overflow-y-auto">
+						{#each editing.attendees as a, i (a.id ?? a.email ?? i)}
+							<li class="flex items-center gap-2">
+								<Avatar name={a.name} image={a.image} size={22} />
+								<span class="min-w-0 flex-1 truncate"
+									>{a.name}{#if a.email && a.email !== a.name}<span class="text-muted">
+											· {a.email}</span
+										>{/if}</span
+								>
+								{#if a.rsvp}<span
+										class="shrink-0 text-xs {a.rsvp === 'accepted'
+											? 'text-emerald-600'
+											: a.rsvp === 'declined'
+												? 'text-red-600'
+												: 'text-muted'}">{RSVP_LABEL[a.rsvp] ?? a.rsvp}</span
+									>{/if}
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+			{#if editing.reminders.length}
+				<p class="flex items-center gap-2 text-xs text-muted">
+					<Bell class="size-3.5" />
+					{editing.reminders
+						.map((m) =>
+							m === 0
+								? 'At start'
+								: m % 1440 === 0
+									? `${m / 1440}d before`
+									: m % 60 === 0
+										? `${m / 60}h before`
+										: `${m} min before`
+						)
+						.join(', ')}
+				</p>
+			{/if}
+		</div>
+	{:else if step === 1}
 		<div class="space-y-4">
 			<div>
 				<p class="label">Mark Schedule</p>
@@ -547,7 +677,7 @@
 		</div>
 	{/if}
 
-	{#if editing?.recurring}
+	{#if editing?.recurring && !readOnly}
 		<fieldset class="mt-4 rounded-lg border border-line p-3">
 			<legend class="px-1 text-xs font-semibold">Apply changes to</legend>
 			<div class="flex flex-wrap gap-4 text-sm">

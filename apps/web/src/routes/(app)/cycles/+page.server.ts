@@ -11,7 +11,8 @@ import {
 import { requireCtx } from '#lib/server/ctx.js';
 import { listCycles, listReminders } from '#lib/server/planner.js';
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, depends }) => {
+	depends('app:cycles');
 	const ctx = requireCtx(locals);
 	const today = localDate(new Date(), ctx.tz);
 	const [cycles, reminders] = await Promise.all([listCycles(ctx), listReminders(ctx)]);

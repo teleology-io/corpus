@@ -13,6 +13,7 @@ import {
 } from '@corpus/core/integrations';
 import type { NotificationInput } from '@corpus/core';
 import { syncGoogle } from './google-sync';
+import { syncIcal } from './ical-sync';
 import { syncSlack } from './slack-sync';
 
 const { integrationConnection: conn, integrationItem: item, task } = schema;
@@ -220,7 +221,9 @@ export async function pollConnection(c: Conn) {
 		const token = await accessToken(c);
 		const result =
 			c.provider === 'google-calendar'
-				? await syncGoogle(c, token)
+				? c.authType === 'ical'
+					? await syncIcal(c, token)
+					: await syncGoogle(c, token)
 				: c.provider === 'slack'
 					? await syncSlack(c, token)
 					: await pollFeed(c, provider, token);
@@ -235,6 +238,8 @@ export async function pollConnection(c: Conn) {
 				nextPollAt: new Date(Date.now() + result.intervalSec * 1000)
 			})
 			.where(eq(conn.id, c.id));
+		// Clients use `changes` to decide how much to reload: zero only refreshes connection
+		// status (last polled), not every integration-backed page.
 		await publish(c.userId, {
 			type: 'integration_items',
 			provider: c.provider,

@@ -5,6 +5,8 @@ export interface Person {
 	name: string;
 	email?: string | null;
 	image?: string | null;
+	/** Event attendees only: pending | accepted | declined | tentative */
+	rsvp?: string;
 }
 
 export interface CategoryDTO {

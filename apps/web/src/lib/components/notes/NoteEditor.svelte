@@ -29,13 +29,8 @@
 		LoaderCircle
 	} from '@lucide/svelte';
 	import { Callout, SlashCommand, menuRenderer } from './extensions.svelte.js';
-	import {
-		Dictation,
-		DictationPreview,
-		insertTranscript,
-		setPartial,
-		type DictationStatus
-	} from './dictation.js';
+	import { Dictation, type DictationStatus } from './dictation.js';
+	import { DictationPreview, insertTranscript, setPartial } from './dictation-editor.js';
 	import { markdownFromPaste } from './markdown-paste.js';
 	import type { MenuItem } from './SuggestionMenu.svelte';
 	import { toast } from '#lib/stores/toast.svelte.js';
@@ -75,6 +70,7 @@
 	let editor = $state<Editor | null>(null);
 	// Bump to re-render toolbar active states on selection changes.
 	let tick = $state(0);
+	let hadSelection = false;
 	let dictation: Dictation | null = null;
 	let dictStatus = $state<DictationStatus>('idle');
 	let dictLevel = $state(0);
@@ -147,7 +143,16 @@
 				.filter((u): u is { name: string; color: string } => !!u);
 		let connected = false;
 		let synced = false;
-		const report = () => onstatus?.({ connected, synced, peers: peers() });
+		// Awareness changes fire on every peer caret move; only report when something shown
+		// (connection, sync, who's here) actually changed.
+		let last = '';
+		const report = () => {
+			const p = peers();
+			const sig = `${connected}|${synced}|${p.map((u) => `${u.name}:${u.color}`).join(',')}`;
+			if (sig === last) return;
+			last = sig;
+			onstatus?.({ connected, synced, peers: p });
+		};
 		provider.on(
 			'status',
 			({ status }: { status: string }) => ((connected = status === 'connected'), report())
@@ -251,8 +256,13 @@
 					return true;
 				}
 			},
-			onSelectionUpdate: () => tick++,
-			onTransaction: () => tick++
+			// Toolbar state only matters while a range is selected (bubble menu). Typing with a
+			// collapsed caret, and remote Yjs/caret transactions, skip the 8× isActive() re-run.
+			onTransaction: ({ editor: ed }) => {
+				const sel = !ed.state.selection.empty;
+				if (sel || hadSelection) tick++;
+				hadSelection = sel;
+			}
 		});
 
 		return () => {

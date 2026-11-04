@@ -8,6 +8,7 @@ export * from './types';
 export * from './diff';
 export * from './google';
 export * from './slack';
+export * from './ical';
 
 export const PROVIDERS: Record<ProviderId, Provider> = {
 	github,

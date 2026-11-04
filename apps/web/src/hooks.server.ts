@@ -19,16 +19,64 @@ const PUBLIC_PATHS = [
 	'/sw.js'
 ];
 
+type Resolved = {
+	user: App.Locals['user'];
+	session: App.Locals['session'];
+	workspaceId: string | null;
+};
+
+/**
+ * Short-lived per-process cache of session + workspace resolution, keyed by the raw cookie
+ * header. Every request (page data, API calls, hover preloads) otherwise pays two to three
+ * sequential DB round trips before route code runs. In-flight lookups are shared so a burst
+ * of parallel requests resolves once. Any non-GET request clears the cache, so sign-out,
+ * workspace switches, profile edits and membership changes are seen immediately.
+ */
+const SESSION_TTL_MS = 10_000;
+const sessionCache = new Map<string, { at: number; value: Promise<Resolved> }>();
+
+async function lookup(headers: Headers): Promise<Resolved> {
+	const result = await auth.api.getSession({ headers });
+	// Sign-up creates the session before the personal workspace exists, and a workspace can
+	// be deleted or left later — so resolve (and repair) the active workspace per request.
+	return {
+		user: result?.user ?? null,
+		session: result?.session ?? null,
+		workspaceId: result ? await resolveWorkspace(result.user, result.session) : null
+	};
+}
+
+function resolveSession(event: Parameters<Handle>[0]['event']): Promise<Resolved> {
+	const cookie = event.request.headers.get('cookie');
+	const cacheable =
+		!!cookie && event.request.method === 'GET' && !event.url.pathname.startsWith('/api/auth/');
+	if (!cacheable) return lookup(event.request.headers);
+	const now = Date.now();
+	const hit = sessionCache.get(cookie);
+	if (hit && now - hit.at < SESSION_TTL_MS) return hit.value;
+	const value = lookup(event.request.headers);
+	sessionCache.set(cookie, { at: now, value });
+	value.catch(() => sessionCache.delete(cookie));
+	if (sessionCache.size > 1000) {
+		for (const [k, v] of sessionCache) if (now - v.at >= SESSION_TTL_MS) sessionCache.delete(k);
+	}
+	return value;
+}
+
 const authHandle: Handle = async ({ event, resolve }) => {
 	if (!building) {
-		const result = await auth.api.getSession({ headers: event.request.headers });
-		event.locals.user = result?.user ?? null;
-		event.locals.session = result?.session ?? null;
-		// Sign-up creates the session before the personal workspace exists, and a workspace can
-		// be deleted or left later — so resolve (and repair) the active workspace per request.
-		event.locals.workspaceId = result ? await resolveWorkspace(result.user, result.session) : null;
+		if (event.request.method !== 'GET' && event.request.method !== 'HEAD') sessionCache.clear();
+		const resolved = await resolveSession(event);
+		const expired =
+			resolved.session && new Date(resolved.session.expiresAt).getTime() <= Date.now();
+		event.locals.user = expired ? null : resolved.user;
+		event.locals.session = expired ? null : resolved.session;
+		event.locals.workspaceId = expired ? null : resolved.workspaceId;
 	}
-	return svelteKitHandler({ event, resolve, auth, building });
+	const response = await svelteKitHandler({ event, resolve, auth, building });
+	// Mutations may change the session, user or membership the cache holds.
+	if (event.request.method !== 'GET' && event.request.method !== 'HEAD') sessionCache.clear();
+	return response;
 };
 
 const guard: Handle = async ({ event, resolve }) => {

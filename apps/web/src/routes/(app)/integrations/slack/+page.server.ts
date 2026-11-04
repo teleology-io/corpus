@@ -2,7 +2,8 @@ import type { PageServerLoad } from './$types';
 import { requireCtx } from '#lib/server/ctx.js';
 import { listThreads, slackConnection } from '#lib/server/slack.js';
 
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals, url, depends }) => {
+	depends('app:integrations', 'app:integration-status');
 	const ctx = requireCtx(locals);
 	const conn = await slackConnection(ctx.userId);
 	return {

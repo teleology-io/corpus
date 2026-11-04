@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { goto, refreshAll } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import {
@@ -99,7 +99,7 @@
 				}),
 			'Could not move schedule'
 		);
-		await refreshAll();
+		await invalidate('app:calendar');
 	}
 
 	async function toggleDose(d: DoseDTO) {
@@ -108,7 +108,7 @@
 			api('/api/doses', { body: { cycleId: d.cycleId, at: d.at, status: next } })
 		);
 		toast(next ? `${d.name} marked taken` : `${d.name} unmarked`, { tone: 'success' });
-		await refreshAll();
+		await invalidate('app:calendar');
 	}
 
 	async function copyFeed() {
@@ -290,9 +290,9 @@
 	me={data.user.id}
 	{editing}
 	{initial}
-	onsaved={() => refreshAll()}
+	onsaved={() => invalidate('app:calendar')}
 />
-<TrashModal bind:open={trashOpen} {tz} onchange={() => refreshAll()} />
+<TrashModal bind:open={trashOpen} {tz} onchange={() => invalidate('app:calendar')} />
 
 {#if pendingMove}
 	<Modal

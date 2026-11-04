@@ -1,4 +1,5 @@
 import { addDaysToDate, atLocal, localDate, phaseOn, describeCycle } from '@corpus/core';
+import type { OccurrenceDTO } from '#lib/types.js';
 import type { Ctx } from './ctx.js';
 import { listOccurrences } from './calendar.js';
 import { openItems } from './integrations.js';
@@ -21,12 +22,21 @@ export function dayBounds(tz: string, now = new Date()) {
 	};
 }
 
+/** Same window rule as `expand()`: overlaps [from, to), or a zero-length event starting inside. */
+function overlaps(o: OccurrenceDTO, from: Date, to: Date) {
+	const s = new Date(o.start).getTime();
+	const e = new Date(o.end).getTime();
+	if (e > from.getTime() && s < to.getTime()) return true;
+	return e === s && s >= from.getTime() && s < to.getTime();
+}
+
 export async function dashboard(ctx: Ctx) {
 	const b = dayBounds(ctx.tz);
+	// Shared between the cycle list and both dose lookups (was queried three times).
+	const cyclesP = listCycles(ctx);
 
 	const [
-		eventsToday,
-		eventsTomorrow,
+		events,
 		tasksToday,
 		tasksTomorrow,
 		remindersToday,
@@ -39,8 +49,8 @@ export async function dashboard(ctx: Ctx) {
 		items,
 		threads
 	] = await Promise.all([
-		listOccurrences(ctx, b.todayStart, b.tomorrowStart),
-		listOccurrences(ctx, b.tomorrowStart, b.dayAfterStart),
+		// One expansion over both days, split below (each call is ~6 queries).
+		listOccurrences(ctx, b.todayStart, b.dayAfterStart),
 		listTasks(ctx, {
 			from: b.todayStart,
 			to: b.tomorrowStart,
@@ -50,14 +60,17 @@ export async function dashboard(ctx: Ctx) {
 		listTasks(ctx, { from: b.tomorrowStart, to: b.dayAfterStart, completed: false }),
 		reminderOccurrences(ctx, b.todayStart, b.tomorrowStart),
 		reminderOccurrences(ctx, b.tomorrowStart, b.dayAfterStart),
-		doses(ctx, b.todayStart, b.tomorrowStart),
-		doses(ctx, b.tomorrowStart, b.dayAfterStart),
+		cyclesP.then((c) => doses(ctx, b.todayStart, b.tomorrowStart, c)),
+		cyclesP.then((c) => doses(ctx, b.tomorrowStart, b.dayAfterStart, c)),
 		completedBetween(ctx, b.todayStart, b.tomorrowStart),
 		completedBetween(ctx, b.yesterdayStart, b.todayStart),
-		listCycles(ctx),
+		cyclesP,
 		openItems(ctx.userId, { limit: 30 }),
 		listThreads(ctx.userId, 50)
 	]);
+
+	const eventsToday = events.filter((o) => overlaps(o, b.todayStart, b.tomorrowStart));
+	const eventsTomorrow = events.filter((o) => overlaps(o, b.tomorrowStart, b.dayAfterStart));
 
 	// Workbench boards have no due dates: everything open is on today's list, plus what got done today.
 	const doneIn = (at: string | null, from: Date, to: Date) =>

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { goto, refreshAll } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
 	import { formatDistanceToNowStrict, format } from 'date-fns';
 	import {
 		ArrowLeft,
@@ -70,7 +70,7 @@
 			if (data.selected !== id) return;
 			messages = res.messages;
 			// Opening marked it read; let the list (and its unread dot) catch up.
-			if (current?.unread) void refreshAll();
+			if (current?.unread) void invalidate('app:integrations');
 			await tick();
 			scroller?.scrollTo({ top: scroller.scrollHeight });
 		} catch (e) {
@@ -107,7 +107,7 @@
 		if (!ok) return;
 		draft = '';
 		await load(current.id, false);
-		await refreshAll();
+		await invalidate('app:integrations');
 	}
 
 	async function unfollow() {

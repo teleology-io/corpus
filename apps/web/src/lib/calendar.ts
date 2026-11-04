@@ -88,17 +88,40 @@ export function tzParts(iso: string | Date, tz: string) {
 	return { date: localDate(new Date(iso), tz), hours: z.getHours(), minutes: z.getMinutes() };
 }
 
+// Calendar grids call these per occurrence per day on every render; constructing an
+// Intl.DateTimeFormat or a TZDate each time dominated render cost. Both caches are tiny
+// (one entry per tz/options, one per visible day) and bounded.
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function formatter(opts: Intl.DateTimeFormatOptions) {
+	const key = JSON.stringify(opts);
+	let f = formatters.get(key);
+	if (!f) {
+		if (formatters.size > 200) formatters.clear();
+		f = new Intl.DateTimeFormat('en-US', opts);
+		formatters.set(key, f);
+	}
+	return f;
+}
+
+const midnights = new Map<string, number>();
+function midnight(date: string, tz: string) {
+	const key = `${date}|${tz}`;
+	let ms = midnights.get(key);
+	if (ms === undefined) {
+		if (midnights.size > 2000) midnights.clear();
+		ms = atLocal(date, '00:00', tz).getTime();
+		midnights.set(key, ms);
+	}
+	return ms;
+}
+
 /** Minutes since local midnight of `date` (can exceed 1440 or be negative). */
 export function minutesInto(date: string, iso: string, tz: string) {
-	return (new Date(iso).getTime() - atLocal(date, '00:00', tz).getTime()) / 60_000;
+	return (new Date(iso).getTime() - midnight(date, tz)) / 60_000;
 }
 
 export function formatTime(iso: string | Date, tz: string, opts: { compact?: boolean } = {}) {
-	const s = new Intl.DateTimeFormat('en-US', {
-		hour: 'numeric',
-		minute: '2-digit',
-		timeZone: tz
-	}).format(new Date(iso));
+	const s = formatter({ hour: 'numeric', minute: '2-digit', timeZone: tz }).format(new Date(iso));
 	return opts.compact ? s.replace(':00', '').replace(' ', '').toLowerCase() : s;
 }
 
@@ -112,13 +135,11 @@ export function formatDay(
 	}
 ) {
 	const { y, m, d } = parseDate(date);
-	return new Intl.DateTimeFormat('en-US', { ...opts, timeZone: 'UTC' }).format(
-		new Date(Date.UTC(y, m - 1, d))
-	);
+	return formatter({ ...opts, timeZone: 'UTC' }).format(new Date(Date.UTC(y, m - 1, d)));
 }
 
 export function gmtLabel(tz: string) {
-	const part = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortOffset' })
+	const part = formatter({ timeZone: tz, timeZoneName: 'shortOffset' })
 		.formatToParts(new Date())
 		.find((p) => p.type === 'timeZoneName');
 	return part?.value ?? 'GMT';

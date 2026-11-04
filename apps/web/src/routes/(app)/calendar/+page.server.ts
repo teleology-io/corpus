@@ -10,7 +10,9 @@ import {
 import { cycleBands, doses, reminderOccurrences } from '#lib/server/planner.js';
 import { viewRange, type View } from '#lib/calendar.js';
 
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals, url, depends }) => {
+	// Google/iCal sync writes events, so integration polls refresh the calendar too.
+	depends('app:calendar', 'app:integrations');
 	const ctx = requireCtx(locals);
 	const view = (
 		['week', 'month', 'year'].includes(url.searchParams.get('view') ?? '')

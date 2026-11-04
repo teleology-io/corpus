@@ -3,7 +3,8 @@ import { describeCycle, localDate, phaseOn } from '@corpus/core';
 import { requireCtx } from '#lib/server/ctx.js';
 import { adherence, doses, getCycle } from '#lib/server/planner.js';
 
-export const load: PageServerLoad = async ({ locals, params }) => {
+export const load: PageServerLoad = async ({ locals, params, depends }) => {
+	depends('app:cycles');
 	const ctx = requireCtx(locals);
 	const c = await getCycle(ctx, params.id);
 	const def = { ...c, doseTimes: c.doseTimes.map((t) => t.slice(0, 5)) };

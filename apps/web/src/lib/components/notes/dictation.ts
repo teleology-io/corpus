@@ -1,8 +1,18 @@
 // Editor-agnostic speech-to-text (worker + mic capture). Keep tiptap out of this module:
 // workbench and telescope import it, and the editor bits live in dictation-editor.ts.
+import { waitForModel, type ModelDownload } from './model-cache.js';
+
 /** Keep in sync with VERSION in scripts/fetch-asr-model.mjs (`make models`). */
 const ASR_VERSION = 'v1.13.7';
 const ASR_BASE = `/sherpa/${ASR_VERSION}/`;
+
+/** Same URLs and bucket as cachedFetch in static/asr-worker.js. */
+export const ASR_DOWNLOAD: ModelDownload = {
+	name: 'speech',
+	cacheName: `corpus-asr-${ASR_BASE}`,
+	urls: [`${ASR_BASE}sherpa-onnx-wasm-main-asr.wasm`, `${ASR_BASE}sherpa-onnx-wasm-main-asr.data`],
+	bytes: 205_000_000
+};
 
 export type WorkerMsg =
 	| { type: 'progress'; loaded: number; total: number }
@@ -17,7 +27,8 @@ export type AsrMessage = WorkerMsg;
  * the model is loaded. Single-threaded WASM, so no cross-origin isolation headers are needed;
  * the model files come from the Cache API after the first download.
  */
-export function createAsrWorker(onprogress?: (fraction: number) => void) {
+export async function createAsrWorker(onprogress?: (fraction: number) => void) {
+	await waitForModel(ASR_DOWNLOAD.name, onprogress);
 	return new Promise<Worker>((resolve, reject) => {
 		const worker = new Worker('/asr-worker.js');
 		const onInit = ({ data }: MessageEvent<WorkerMsg>) => {

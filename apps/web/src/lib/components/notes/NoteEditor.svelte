@@ -26,14 +26,19 @@
 		Heading2,
 		Highlighter,
 		Mic,
-		LoaderCircle
+		LoaderCircle,
+		Sparkles
 	} from '@lucide/svelte';
 	import { Callout, SlashCommand, menuRenderer } from './extensions.svelte.js';
 	import { Dictation, type DictationStatus } from './dictation.js';
 	import { DictationPreview, insertTranscript, setPartial } from './dictation-editor.js';
 	import { markdownFromPaste } from './markdown-paste.js';
+	import RewritePanel from './RewritePanel.svelte';
+	import { rewriteSupported } from './rewrite.js';
+	import { RewriteTarget, rewriteBlockReason } from './rewrite-editor.js';
 	import type { MenuItem } from './SuggestionMenu.svelte';
 	import { toast } from '#lib/stores/toast.svelte.js';
+	import { readRewritePrefs } from '#lib/stores/rewrite-prefs.js';
 
 	interface Member {
 		id: string;
@@ -77,11 +82,31 @@
 	let dictProgress = $state<number | null>(null);
 	const dictating = $derived(dictStatus !== 'idle');
 	const hasSelection = $derived((void tick, editor ? !editor.state.selection.empty : false));
+	let rewriteAvailable = $state(false);
+	let rewriteOpen = $state(false);
+	const rewriteBlocked = $derived(
+		(void tick, editor && rewriteOpen ? rewriteBlockReason(editor) : null)
+	);
+
+	function setRewriteOpen(open: boolean) {
+		rewriteOpen = open;
+		const ed = editor;
+		if (!ed || ed.isDestroyed) return;
+		if (!open) ed.commands.focus();
+		ed.view.dispatch(
+			ed.state.tr.setMeta('bubbleMenu', open || !ed.state.selection.empty ? 'show' : 'hide')
+		);
+	}
+
+	function repositionBubble() {
+		if (editor && !editor.isDestroyed)
+			editor.view.dispatch(editor.state.tr.setMeta('bubbleMenu', 'updatePosition'));
+	}
 
 	function toggleDictation() {
 		if (dictation) return void dictation.stop();
 		const ed = editor;
-		if (!ed) return;
+		if (!ed || rewriteOpen) return;
 		dictation = new Dictation({
 			onstatus: (s) => {
 				dictStatus = s;
@@ -129,6 +154,9 @@
 	}
 
 	onMount(() => {
+		if (editable && readRewritePrefs().enabled)
+			void rewriteSupported().then((ok) => (rewriteAvailable = ok));
+
 		const ydoc = new Y.Doc();
 		const provider = new HocuspocusProvider({
 			url: collabUrl,
@@ -210,6 +238,7 @@
 				}),
 				SlashCommand({ onImage: () => fileInput.click(), onDictate: toggleDictation }),
 				DictationPreview,
+				RewriteTarget,
 				Markdown,
 				BubbleMenu.configure({
 					element: bubble,
@@ -217,6 +246,7 @@
 					shouldShow: ({ editor, view, state, from, to }) =>
 						editor.isEditable &&
 						(dictating ||
+							rewriteOpen ||
 							((view.hasFocus() || bubble.contains(document.activeElement)) &&
 								!state.selection.empty &&
 								state.doc.textBetween(from, to).trim().length > 0 &&
@@ -233,6 +263,10 @@
 						'prose prose-sm sm:prose-base dark:prose-invert max-w-none focus:outline-none prose-headings:tracking-tight prose-img:my-3'
 				},
 				handleKeyDown: (_view, event) => {
+					if (rewriteOpen && event.key === 'Escape') {
+						setRewriteOpen(false);
+						return true;
+					}
 					if (!dictation || event.key !== 'Escape') return false;
 					void dictation.stop();
 					return true;
@@ -339,54 +373,73 @@
 	bind:this={bubble}
 	class="invisible absolute z-30 flex w-max items-center gap-0.5 rounded-lg border border-line bg-surface p-1 shadow-pop"
 >
-	{#if !dictating || hasSelection}
-		{#each tools as t (t.label)}
+	{#if rewriteOpen && editor}
+		<RewritePanel
+			{editor}
+			blocked={rewriteBlocked}
+			onclose={() => setRewriteOpen(false)}
+			onlayout={repositionBubble}
+		/>
+	{:else}
+		{#if !dictating || hasSelection}
+			{#each tools as t (t.label)}
+				<button
+					class="flex size-7 items-center justify-center rounded-md {t.on
+						? 'bg-primary-50 text-primary-600'
+						: 'text-gray-600 hover:bg-canvas'}"
+					title={t.label}
+					onmousedown={(e) => e.preventDefault()}
+					onclick={t.run}
+				>
+					<t.icon class="size-3.5" />
+				</button>
+			{/each}
+			<span class="mx-0.5 h-4 w-px bg-line"></span>
+		{/if}
+		{#if rewriteAvailable && !dictating}
 			<button
-				class="flex size-7 items-center justify-center rounded-md {t.on
-					? 'bg-primary-50 text-primary-600'
-					: 'text-gray-600 hover:bg-canvas'}"
-				title={t.label}
+				class="flex size-7 items-center justify-center rounded-md text-gray-600 hover:bg-canvas"
+				title="Rewrite"
 				onmousedown={(e) => e.preventDefault()}
-				onclick={t.run}
+				onclick={() => setRewriteOpen(true)}
 			>
-				<t.icon class="size-3.5" />
+				<Sparkles class="size-3.5" />
 			</button>
-		{/each}
-		<span class="mx-0.5 h-4 w-px bg-line"></span>
-	{/if}
-	<button
-		class="relative flex h-7 items-center gap-1.5 rounded-md px-1.5 {dictating
-			? 'bg-red-50 text-red-600'
-			: 'text-gray-600 hover:bg-canvas'}"
-		title={dictating ? 'Stop dictation (Esc)' : 'Dictate'}
-		aria-pressed={dictating}
-		disabled={dictStatus === 'stopping'}
-		onmousedown={(e) => e.preventDefault()}
-		onclick={toggleDictation}
-	>
-		{#if dictStatus === 'loading' || dictStatus === 'stopping'}
-			<LoaderCircle class="size-3.5 animate-spin" />
-		{:else}
-			<Mic class="size-3.5" />
 		{/if}
-		{#if dictating}
-			<span class="text-[11px] font-medium">
-				{dictStatus === 'loading'
-					? dictProgress !== null && dictProgress < 1
-						? `Downloading model ${Math.round(dictProgress * 100)}%`
-						: 'Loading…'
-					: dictStatus === 'stopping'
-						? 'Finishing…'
-						: 'Listening'}
-			</span>
-			{#if dictStatus === 'listening'}
-				<span
-					class="size-1.5 rounded-full bg-red-500 transition-transform"
-					style:transform="scale({1 + dictLevel * 1.5})"
-				></span>
+		<button
+			class="relative flex h-7 items-center gap-1.5 rounded-md px-1.5 {dictating
+				? 'bg-red-50 text-red-600'
+				: 'text-gray-600 hover:bg-canvas'}"
+			title={dictating ? 'Stop dictation (Esc)' : 'Dictate'}
+			aria-pressed={dictating}
+			disabled={dictStatus === 'stopping'}
+			onmousedown={(e) => e.preventDefault()}
+			onclick={toggleDictation}
+		>
+			{#if dictStatus === 'loading' || dictStatus === 'stopping'}
+				<LoaderCircle class="size-3.5 animate-spin" />
+			{:else}
+				<Mic class="size-3.5" />
 			{/if}
-		{/if}
-	</button>
+			{#if dictating}
+				<span class="text-[11px] font-medium">
+					{dictStatus === 'loading'
+						? dictProgress !== null && dictProgress < 1
+							? `Downloading model ${Math.round(dictProgress * 100)}%`
+							: 'Loading…'
+						: dictStatus === 'stopping'
+							? 'Finishing…'
+							: 'Listening'}
+				</span>
+				{#if dictStatus === 'listening'}
+					<span
+						class="size-1.5 rounded-full bg-red-500 transition-transform"
+						style:transform="scale({1 + dictLevel * 1.5})"
+					></span>
+				{/if}
+			{/if}
+		</button>
+	{/if}
 </div>
 
 <input

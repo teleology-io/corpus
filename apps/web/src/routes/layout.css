@@ -208,6 +208,11 @@
 .ProseMirror .dictation-partial::before {
 	content: ' ';
 }
+/* The text a rewrite will replace, shown once focus has moved to the rewrite panel. */
+.ProseMirror .rewrite-target {
+	background: color-mix(in srgb, var(--color-primary-500) 25%, transparent);
+	border-radius: 2px;
+}
 .drag-handle {
 	width: 1.1rem;
 	height: 1.4rem;

@@ -9,6 +9,17 @@
 	import { attempt, readToastPrefs, saveToastPrefs, toast } from '#lib/stores/toast.svelte.js';
 	import { DEFAULT_TOAST_PREFS, TOAST_SECONDS } from '#lib/stores/toast-prefs.js';
 	import { currentSubscription, disablePush, enablePush, pushSupported } from '#lib/push.js';
+	import {
+		DEFAULT_REWRITE_PREFS,
+		readRewritePrefs,
+		saveRewritePrefs
+	} from '#lib/stores/rewrite-prefs.js';
+	import {
+		removeRewriteModel,
+		rewriteModelStored,
+		rewriteSupported,
+		stopRewriteDownload
+	} from '#lib/components/notes/rewrite.js';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -24,6 +35,9 @@
 	let pushOn = $state(false);
 	let pushAvailable = $state(false);
 	let toastPrefs = $state({ ...DEFAULT_TOAST_PREFS });
+	let rewritePrefs = $state({ ...DEFAULT_REWRITE_PREFS });
+	let rewriteAvailable = $state<boolean | null>(null);
+	let rewriteStored = $state(false);
 	let newCat = $state({ name: '', color: '#2C87F2', icon: 'calendar' });
 
 	// Seed the form once; live refreshes (refreshAll on notifications) must not wipe edits.
@@ -40,6 +54,9 @@
 
 	onMount(async () => {
 		toastPrefs = readToastPrefs();
+		rewritePrefs = readRewritePrefs();
+		void rewriteSupported().then((ok) => (rewriteAvailable = ok));
+		void rewriteModelStored().then((stored) => (rewriteStored = stored));
 		pushAvailable = pushSupported() && !!data.config.vapidKey;
 		if (pushAvailable) pushOn = !!(await currentSubscription());
 	});
@@ -81,6 +98,21 @@
 		}, 'Push notifications');
 		pushOn = ok ? on : !on;
 		if (ok && on) toast('Push enabled on this device', { tone: 'success' });
+	}
+
+	async function removeModel() {
+		const ok = await attempt(() => removeRewriteModel().then(() => true), 'Remove model');
+		if (!ok) return;
+		// Otherwise the next app load would download it straight back.
+		rewritePrefs.enabled = false;
+		saveRewritePrefs($state.snapshot(rewritePrefs));
+		rewriteStored = false;
+		toast('Model removed from this browser', { tone: 'success' });
+	}
+
+	function toggleRewrite() {
+		saveRewritePrefs($state.snapshot(rewritePrefs));
+		if (!rewritePrefs.enabled) stopRewriteDownload();
 	}
 
 	async function addCategory(e: SubmitEvent) {
@@ -280,6 +312,45 @@
 					{#each TOAST_SECONDS as s (s)}<option value={s}>{s} seconds</option>{/each}
 				</select>
 			</label>
+		</div>
+	</section>
+
+	<section class="card p-5" id="notes-rewrite">
+		<label class="flex items-center justify-between gap-4">
+			<span class="flex min-w-0 flex-col">
+				<span class="font-semibold">Rewrite in notes</span>
+				<span class="text-sm text-muted">
+					Improve or clarify selected text. Runs in this browser, so your text stays on this device.
+				</span>
+			</span>
+			<Switch
+				bind:checked={rewritePrefs.enabled}
+				disabled={rewriteAvailable === false}
+				onchange={toggleRewrite}
+				label="Rewrite in notes"
+			/>
+		</label>
+		{#if rewriteAvailable === false}
+			<p class="mt-2 text-xs text-muted">
+				Not available here. It needs a browser with WebGPU, on HTTPS or localhost.
+			</p>
+		{/if}
+		<div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+			<p class="text-xs text-muted">
+				Downloads in the background when you open Corpus, unless this is off or you're on a metered
+				connection. LFM2.5-1.2B-Instruct by Liquid AI, about 850 MB. Used under the
+				<a
+					class="underline"
+					href="https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-ONNX/blob/main/LICENSE"
+					target="_blank"
+					rel="noreferrer">LFM Open License v1.0</a
+				>.
+			</p>
+			{#if rewriteStored}
+				<button class="btn-outline h-8 px-3 text-sm" onclick={removeModel}>
+					Remove downloaded model
+				</button>
+			{/if}
 		</div>
 	</section>
 

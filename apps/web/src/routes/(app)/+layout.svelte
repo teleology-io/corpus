@@ -22,7 +22,16 @@
 				body: JSON.stringify({ timezone: tz })
 			}).then((r) => r.ok && live.softRefresh());
 		}
-		return () => live.stop();
+		// After startup settles, so model downloads don't compete with the first page's requests.
+		const prefetch = setTimeout(() => {
+			void import('#lib/components/notes/model-prefetch.js')
+				.then((m) => m.prefetchModels())
+				.catch((e) => console.warn('Model prefetch failed', e));
+		}, 3000);
+		return () => {
+			clearTimeout(prefetch);
+			live.stop();
+		};
 	});
 
 	afterNavigate(() => (drawer = false));

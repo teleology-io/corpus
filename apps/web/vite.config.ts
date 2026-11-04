@@ -12,6 +12,8 @@ const lan = { host: '0.0.0.0', allowedHosts: [lanName, 'localhost'] };
 export default defineConfig({
 	server: lan,
 	preview: lan,
+	// The rewrite worker pulls in Transformers.js, whose dynamic imports need code splitting.
+	worker: { format: 'es' },
 	ssr: {
 		// Bundle (and tree-shake) date-fns for the server. Left external, the first page render
 		// imported its whole barrel — ~860 module resolutions, ~1.7s on a cold server.

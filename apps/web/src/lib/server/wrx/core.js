@@ -704,6 +704,15 @@ export class Engine {
 		this.pump();
 		return chat;
 	}
+	// Teammate messages this member hasn't received yet. Replies still being written are withheld and
+	// tracked in member.held by run(), so they arrive complete on the member's next turn.
+	unseen(chat, member) {
+		const held = new Set(member.held);
+		const messages = member.sessionId
+			? chat.messages.filter((m, i) => i >= member.seen || held.has(m.id))
+			: chat.messages.slice(-30);
+		return messages.filter((m) => m.memberId !== member.id && m.status !== 'running');
+	}
 	prompt(chat, member, job, w, environment, images = []) {
 		const first = !member.sessionId;
 		const who = (m) =>
@@ -721,9 +730,7 @@ export class Engine {
 					`- @${m.handle} — ${m.name}${m.id === member.id ? ' (this is you)' : ''}${m.id === chat.leadId ? ', thread lead' : ''} · ${m.provider}/${m.mode}${m.role ? ` · ${m.role.replace(/\s+/g, ' ').slice(0, 220)}` : ''}`
 			)
 		].join('\n');
-		const history = (first ? chat.messages.slice(-30) : chat.messages.slice(member.seen)).filter(
-			(m) => m.memberId !== member.id && (m.text || m.role !== 'agent')
-		);
+		const history = this.unseen(chat, member).filter((m) => m.text || m.role !== 'agent');
 		const transcript = history
 			.map(
 				(m) =>
@@ -761,14 +768,16 @@ export class Engine {
 	run(chat, member, job) {
 		const w = this.store.get('workspaces', chat.workspaceId);
 		const environment = w.environmentId ? this.store.get('environments', w.environmentId) : null;
-		const images = (member.sessionId ? chat.messages.slice(member.seen) : chat.messages.slice(-30))
-			.filter((m) => m.memberId !== member.id)
+		const images = this.unseen(chat, member)
 			.flatMap((m) => m.images || [])
 			.map((i) => ({ ...i, path: path.join(this.uploads(chat.id), i.file) }))
 			.filter((i) => fs.existsSync(i.path))
 			.slice(-MAX_IMAGES);
 		const prompt = this.prompt(chat, member, job, w, environment, images);
 		member.seen = chat.messages.length;
+		member.held = chat.messages
+			.filter((m) => m.status === 'running' && m.memberId !== member.id)
+			.map((m) => m.id);
 		const msg = {
 			id: id(),
 			role: 'agent',

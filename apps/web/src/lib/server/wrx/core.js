@@ -6,7 +6,26 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { loadedEnvKeys } from '@corpus/db/env';
+import {
+	Postgres,
+	allocatePorts,
+	applyPaths,
+	assertEnvFileIgnored,
+	baseDatabase,
+	configCommands,
+	readRepoConfig,
+	renderEnv,
+	runShell,
+	slug as directorySlug,
+	snapshotDatabase,
+	startServices,
+	workspaceDatabase,
+	worktreesDirectory,
+	writeEnvFile
+} from './provision.js';
 const exec = promisify(execFile);
+const GIT_WORKTREE_TIMEOUT = 5 * 60000;
 export const id = () => randomUUID();
 export const now = () => new Date().toISOString();
 export function requireText(value, name, max = 200) {
@@ -57,16 +76,24 @@ export function agentSearchPath(env = process.env, home = os.homedir()) {
 	}
 	return [...new Set(dirs.filter(Boolean))];
 }
-export const agentEnv = (env = process.env) => ({
-	...env,
-	PATH: agentSearchPath(env).join(path.delimiter)
-});
+// A .env can name these for its own reasons; removing them would break any process that runs.
+const HOST_ENV = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TERM', 'LANG', 'TMPDIR']);
+// The server's env minus what Corpus's own .env added, for processes working on other repositories.
+export function hostEnv(env = process.env) {
+	const clean = { ...env };
+	for (const key of loadedEnvKeys()) if (!HOST_ENV.has(key)) delete clean[key];
+	return clean;
+}
+export const agentEnv = (env = process.env) => {
+	const clean = hostEnv(env);
+	return { ...clean, PATH: agentSearchPath(clean).join(path.delimiter) };
+};
 const missingCli = (provider) =>
 	provider === 'codex'
 		? 'Codex CLI not found on this computer. Install it (npm install -g @openai/codex) or the Codex editor extension, then try again. Connections shows what Workbench can find.'
 		: 'Claude Code CLI not found on this computer. Install it (see claude.com/claude-code), run claude auth login, then try again.';
 export function dockerEnv(profile) {
-	const env = { ...process.env };
+	const env = hostEnv();
 	delete env.DOCKER_CONTEXT;
 	delete env.DOCKER_HOST;
 	env.DOCKER_HOST = `unix://${path.join(os.homedir(), '.colima', profile, 'docker.sock')}`;
@@ -308,6 +335,17 @@ export class Store {
 				e.busy = false;
 				e.status = 'unknown';
 			}
+		// Background setup doesn't survive a restart. Its steps are idempotent, so Retry resumes it.
+		for (const w of this.state.workspaces) {
+			if (w.provision?.status === 'running') {
+				w.provision.status = 'failed';
+				w.provision.error = 'Workbench restarted during setup';
+			}
+			if (w.database?.busy) {
+				w.database.busy = false;
+				w.database.error = 'Workbench restarted during this operation';
+			}
+		}
 		this.save();
 	}
 	save() {
@@ -383,27 +421,66 @@ export class Engine {
 		const branch = requireText(input.branch, 'Branch');
 		const base = input.base ? requireText(input.base, 'Base branch') : 'HEAD';
 		if (base.startsWith('-')) throw new Error('Invalid base branch');
+		if (input.seed && !['clone', 'blank'].includes(input.seed))
+			throw new Error('Invalid database seed');
 		if (input.environmentId) {
 			const e = this.store.get('environments', input.environmentId);
 			if (e.scope !== 'shared') throw new Error('Only shared environments can be reused');
 		}
 		await command('git', ['check-ref-format', '--branch', branch]);
 		if (branch.startsWith('-')) throw new Error('Invalid branch');
-		await command('git', ['-C', project.path, 'rev-parse', '--verify', `${base}^{commit}`]);
+		const existing = !!input.existingBranch;
+		const ref = existing ? `refs/heads/${branch}` : base;
+		await command('git', ['-C', project.path, 'rev-parse', '--verify', `${ref}^{commit}`]);
+		const repoConfig = await readRepoConfig(project.path, ref, agentEnv());
+		if (repoConfig && project.trustedConfigHash !== repoConfig.hash) {
+			if (input.trustConfigHash !== repoConfig.hash)
+				throw new Error(
+					`Approve this repository's .workbench.json before it runs on this computer`
+				);
+			project.trustedConfigHash = repoConfig.hash;
+		}
 		const wid = id();
-		const directory = path.join(this.store.directory, 'workspaces', wid);
+		const directory = path.join(
+			worktreesDirectory(project),
+			`${directorySlug(name)}-${wid.slice(0, 8)}`
+		);
 		fs.mkdirSync(path.dirname(directory), { recursive: true });
-		await command('git', ['-C', project.path, 'worktree', 'add', '-b', branch, directory, base]);
+		await command(
+			'git',
+			[
+				'-C',
+				project.path,
+				'worktree',
+				'add',
+				...(existing ? [directory, branch] : ['-b', branch, directory, base])
+			],
+			{ timeout: GIT_WORKTREE_TIMEOUT, env: agentEnv() }
+		);
 		const workspace = {
 			id: wid,
 			projectId: project.id,
 			name,
 			branch,
-			base,
+			base: existing ? branch : base,
 			path: directory,
 			environmentId: null,
 			createdAt: now()
 		};
+		if (repoConfig)
+			// The approved config is kept: an agent editing its checkout's copy can't change what a later
+			// Retry or teardown runs on the host.
+			workspace.provision = {
+				status: 'running',
+				step: 'Starting',
+				log: '',
+				error: null,
+				config: repoConfig.config,
+				seed: input.seed || repoConfig.config.database?.seed || null,
+				slot: null,
+				ports: {},
+				env: {}
+			};
 		if (input.environmentId) {
 			this.store.get('environments', input.environmentId);
 			workspace.environmentId = input.environmentId;
@@ -418,7 +495,291 @@ export class Engine {
 		}
 		this.store.state.workspaces.push(workspace);
 		this.changed();
+		if (workspace.provision) void this.provisionWorkspace(workspace);
 		return workspace;
+	}
+	// The config a workspace would run, and whether it still needs approval, before anything is created.
+	async workspaceConfig(input) {
+		const project = this.store.get('projects', input.projectId);
+		const ref = input.existingBranch
+			? `refs/heads/${requireText(input.branch, 'Branch')}`
+			: requireText(input.base || 'HEAD', 'Base branch');
+		if (ref.startsWith('-')) throw new Error('Invalid base branch');
+		const found = await readRepoConfig(project.path, ref, agentEnv());
+		if (!found) return { found: false };
+		return {
+			found: true,
+			hash: found.hash,
+			trusted: project.trustedConfigHash === found.hash,
+			commands: configCommands(found.config),
+			hasDatabase: !!found.config.database,
+			seed: found.config.database?.seed || null
+		};
+	}
+	// Serializes work that would race: port allocation, and copies of one project's template.
+	locked(key, work) {
+		this.locks ??= new Map();
+		const next = (this.locks.get(key) || Promise.resolve()).catch(() => {}).then(work);
+		this.locks.set(key, next);
+		return next;
+	}
+	// Env for scripts a workspace's config runs, so they can find each other's checkouts and ports.
+	scriptEnv(w, project) {
+		return {
+			...agentEnv(),
+			...w.provision.env,
+			WORKBENCH_WORKSPACE_PATH: w.path,
+			WORKBENCH_PRIMARY_PATH: project.path,
+			WORKBENCH_BRANCH: w.branch,
+			WORKBENCH_SLOT: String(w.provision.slot ?? '')
+		};
+	}
+	provisionLog(w) {
+		return (text) => {
+			w.provision.log = (w.provision.log + text).slice(-80000);
+			this.changed();
+		};
+	}
+	postgres(w, project) {
+		return new Postgres(w.provision.config, project.path, {
+			log: this.provisionLog(w),
+			env: agentEnv()
+		});
+	}
+	async provisionWorkspace(w) {
+		const p = w.provision;
+		const project = this.store.get('projects', w.projectId);
+		const { config } = p;
+		const log = this.provisionLog(w);
+		const step = (name) => {
+			p.step = name;
+			log(`\n== ${name}\n`);
+		};
+		p.status = 'running';
+		p.error = null;
+		try {
+			const env = agentEnv();
+			step('Copying files');
+			await applyPaths(config, project.path, w.path, { log, env });
+			const portNames = Object.keys(config.ports);
+			if (portNames.length && p.slot === null) {
+				step('Allocating ports');
+				await this.locked('ports', async () => {
+					const taken = this.store.state.workspaces
+						.map((x) => x.provision?.slot)
+						.filter((slot) => slot !== null && slot !== undefined);
+					const { slot, ports } = await allocatePorts(portNames, taken);
+					p.slot = slot;
+					p.ports = ports;
+				});
+			}
+			if (config.services.shared.length) {
+				step('Starting services');
+				await startServices(config, project.path, { log, env });
+			}
+			let databaseUrl = '';
+			if (config.database) {
+				step('Creating database');
+				databaseUrl = await this.ensureDatabase(w, project);
+			}
+			p.env = renderEnv(config, { ports: p.ports, databaseUrl, workspace: w });
+			if (config.envFile) {
+				step('Writing env file');
+				await assertEnvFileIgnored(w.path, config.envFile, env);
+				writeEnvFile(path.join(w.path, config.envFile), p.env);
+			}
+			const scripted = this.scriptEnv(w, project);
+			if (config.scripts.setup) {
+				step('Running setup');
+				await runShell(config.scripts.setup, { cwd: w.path, env: scripted, log });
+			}
+			if (config.database?.migrate) {
+				step('Running migrations');
+				await runShell(config.database.migrate, { cwd: w.path, env: scripted, log });
+			}
+			p.step = 'Ready';
+			p.status = 'ready';
+			log('\nReady.\n');
+		} catch (error) {
+			p.status = 'failed';
+			p.error = error.message;
+			log(`\n${error.message}\n`);
+		}
+		this.changed();
+		this.pump();
+	}
+	async ensureDatabase(w, project) {
+		const { config, seed } = w.provision;
+		const pg = this.postgres(w, project);
+		const name = workspaceDatabase(w.id);
+		w.database ??= { name, snapshots: [], nextSnapshot: 1, busy: false, error: null };
+		project.database = { database: config.database, services: config.services };
+		await this.locked(`db:${project.id}`, async () => {
+			if (await pg.exists(name)) return;
+			await this.createFromSeed(pg, project, name, seed);
+		});
+		return pg.urlFor(name);
+	}
+	async createFromSeed(pg, project, name, seed) {
+		if (seed === 'blank') return pg.createEmpty(name);
+		const base = baseDatabase(project.id);
+		if (!(await pg.exists(base))) await pg.buildBase(base);
+		await pg.clone(base, name);
+	}
+	retryProvision(workspaceId) {
+		const w = this.store.get('workspaces', workspaceId);
+		if (w.provision?.status !== 'failed')
+			throw new Error('This workspace has no failed setup to retry');
+		void this.provisionWorkspace(w);
+		return {};
+	}
+	// Snapshot, restore, reset and refresh-base all disconnect the workspace's apps, so agents wait.
+	databaseAction(workspaceId, action, snapshot) {
+		const w = this.store.get('workspaces', workspaceId);
+		const project = this.store.get('projects', w.projectId);
+		if (!w.database) throw new Error('This workspace has no database');
+		if (w.database.busy) throw new Error('A database operation is already running');
+		if (w.provision.status === 'running') throw new Error('Workspace setup is still running');
+		if (this.store.state.chats.some((c) => c.workspaceId === w.id && this.chatRunning(c.id)))
+			throw new Error('Stop running agents in this workspace first');
+		const pg = this.postgres(w, project);
+		const db = w.database;
+		const log = this.provisionLog(w);
+		const base = baseDatabase(project.id);
+		const operations = {
+			snapshot: async () => {
+				const name = snapshotDatabase(w.id, db.nextSnapshot);
+				await pg.cloneLive(db.name, name);
+				await pg.allowConnections(name, false);
+				db.nextSnapshot += 1;
+				db.snapshots.push({ name, createdAt: now() });
+			},
+			restore: async () => {
+				if (!db.snapshots.some((s) => s.name === snapshot)) throw new Error('Snapshot not found');
+				await pg.drop(db.name);
+				await pg.clone(snapshot, db.name);
+			},
+			reset: async () => {
+				await pg.drop(db.name);
+				await this.createFromSeed(pg, project, db.name, w.provision.seed);
+				const { migrate } = w.provision.config.database;
+				if (migrate) await runShell(migrate, { cwd: w.path, env: this.scriptEnv(w, project), log });
+			},
+			'refresh-base': () => pg.buildBase(base)
+		};
+		const operation = operations[action];
+		if (!operation) throw new Error('Unknown database action');
+		db.busy = true;
+		db.error = null;
+		log(`\n== Database: ${action}\n`);
+		this.changed();
+		void this.locked(`db:${project.id}`, operation)
+			.catch((error) => {
+				db.error = error.message;
+				log(`\n${error.message}\n`);
+			})
+			.finally(() => {
+				db.busy = false;
+				this.changed();
+				this.pump();
+			});
+		return {};
+	}
+	assertRemovable(w) {
+		if (this.store.state.chats.some((c) => c.workspaceId === w.id && this.chatRunning(c.id)))
+			throw new Error('Stop running agents in this workspace first');
+		if (w.provision?.status === 'running') throw new Error(`"${w.name}" is still being set up`);
+		if (w.database?.busy) throw new Error(`"${w.name}" has a database operation running`);
+		const e = w.environmentId && this.store.get('environments', w.environmentId);
+		if (e?.busy) throw new Error(`Environment "${e.name}" is busy`);
+	}
+	async assertClean(w) {
+		if (!fs.existsSync(w.path)) return;
+		if (await command('git', ['status', '--porcelain'], { cwd: w.path }).catch(() => ''))
+			throw new Error(
+				`Workspace "${w.name}" has uncommitted changes. Commit or discard them first.`
+			);
+	}
+	// Removes a VM and its data disk. Never-started environments have nothing on this computer.
+	async destroyVm(e) {
+		if (e.status === 'not provisioned') return;
+		await command('colima', ['--profile', e.profile, 'delete', '--force', '--data'], {
+			timeout: GIT_WORKTREE_TIMEOUT,
+			env: agentEnv()
+		});
+	}
+	// Removes what a workspace owns outside Workbench's state. A failed worktree removal throws with
+	// the databases intact; anything after that is reported rather than leaving the record half gone.
+	async removeWorkspaceResources(w, project, warnings) {
+		const hasCheckout = w.path !== project.path && fs.existsSync(w.path);
+		const environment = w.environmentId
+			? this.store.state.environments.find((e) => e.id === w.environmentId)
+			: null;
+		const { teardown } = w.provision?.config.scripts ?? {};
+		if (teardown && hasCheckout)
+			await runShell(teardown, {
+				cwd: w.path,
+				env: this.scriptEnv(w, project),
+				log: this.provisionLog(w)
+			}).catch((error) => warnings.push(`Teardown failed: ${error.message}`));
+		if (environment?.scope === 'shared' && environment.status === 'running')
+			await command('docker', ['compose', '-p', `wrx-${w.id.slice(0, 8)}`, 'down'], {
+				timeout: GIT_WORKTREE_TIMEOUT,
+				env: dockerEnv(environment.profile)
+			}).catch((error) => warnings.push(`Compose down failed: ${error.message}`));
+		if (hasCheckout)
+			await command('git', ['-C', project.path, 'worktree', 'remove', w.path], {
+				timeout: GIT_WORKTREE_TIMEOUT,
+				env: agentEnv()
+			});
+		if (w.database)
+			await (async () => {
+				const pg = this.postgres(w, project);
+				for (const name of await pg.owned(w.id)) await pg.drop(name);
+			})().catch((error) => warnings.push(`Could not drop its databases: ${error.message}`));
+		if (environment?.scope === 'isolated') {
+			await this.destroyVm(environment).catch((error) =>
+				warnings.push(`Could not delete VM ${environment.profile}: ${error.message}`)
+			);
+			this.store.state.environments = this.store.state.environments.filter(
+				(e) => e !== environment
+			);
+		}
+	}
+	forgetWorkspaces(ids) {
+		const state = this.store.state;
+		this.queue = this.queue.filter(
+			(j) => !state.chats.some((c) => c.id === j.chatId && ids.has(c.workspaceId))
+		);
+		for (const c of state.chats)
+			if (ids.has(c.workspaceId)) fs.rmSync(this.uploads(c.id), { recursive: true, force: true });
+		state.chats = state.chats.filter((c) => !ids.has(c.workspaceId));
+		state.tasks = state.tasks.filter((t) => !ids.has(t.workspaceId));
+		state.workspaces = state.workspaces.filter((w) => !ids.has(w.id));
+	}
+	async deleteWorkspace(workspaceId) {
+		const w = this.store.get('workspaces', workspaceId);
+		const project = this.store.get('projects', w.projectId);
+		if (w.path === project.path)
+			throw new Error('The main workspace is your repository. Remove the project instead.');
+		this.assertRemovable(w);
+		await this.assertClean(w);
+		const warnings = [];
+		await this.removeWorkspaceResources(w, project, warnings);
+		await command('git', ['-C', project.path, 'worktree', 'prune']).catch(() => {});
+		this.forgetWorkspaces(new Set([w.id]));
+		this.changed();
+		return { warnings };
+	}
+	async deleteEnvironment(environmentId) {
+		const e = this.store.get('environments', environmentId);
+		if (e.busy) throw new Error('An environment operation is already running');
+		if (this.store.state.workspaces.some((w) => w.environmentId === e.id))
+			throw new Error('Detach this environment from its workspaces first');
+		await this.destroyVm(e);
+		this.store.state.environments = this.store.state.environments.filter((x) => x !== e);
+		this.changed();
+		return {};
 	}
 	environment(input) {
 		const scope = input.scope === 'isolated' ? 'isolated' : 'shared';
@@ -639,6 +1000,8 @@ export class Engine {
 			if (
 				this.running.has(`${chat.id}:${member.id}`) ||
 				(Engine.writes(member) && this.writing(w.id)) ||
+				w.provision?.status === 'running' ||
+				w.database?.busy ||
 				(w.environmentId && this.store.get('environments', w.environmentId).busy)
 			)
 				continue;
@@ -713,6 +1076,12 @@ export class Engine {
 			: chat.messages.slice(-30);
 		return messages.filter((m) => m.memberId !== member.id && m.status !== 'running');
 	}
+	// Where worktrees live, not which one is the agent's: its cwd says that, and it may move between them.
+	worktreesContext(w) {
+		const project = this.store.state.projects.find((p) => p.id === w.projectId);
+		if (!project) return '';
+		return `Worktrees: this project's Workbench worktrees live under ${worktreesDirectory(project)}. Its primary checkout is ${project.path}. Your current directory is the checkout you were started in. \`git worktree list\` shows them all with their branches.\n`;
+	}
 	prompt(chat, member, job, w, environment, images = []) {
 		const first = !member.sessionId;
 		const who = (m) =>
@@ -748,7 +1117,7 @@ export class Engine {
 				? 'When a visual would help (mockups, ad creative, social posts, diagrams), create it with your built-in image generation tool. Every image you generate is posted to this thread automatically so teammates and the human can see it; refer to it in words rather than by file path.'
 				: '',
 			first
-				? `Workspace: ${w.path}\nBranch: ${w.branch}\nRuntime: ${environment ? `${environment.name} (${environment.profile}); Docker endpoint ${dockerEnv(environment.profile).DOCKER_HOST}. Agents execute on the host; the VM isolates dependencies only.` : 'No managed dependency VM attached.'}`
+				? `${this.worktreesContext(w)}Runtime: ${environment ? `${environment.name} (${environment.profile}); Docker endpoint ${dockerEnv(environment.profile).DOCKER_HOST}. Agents execute on the host; the VM isolates dependencies only.` : 'No managed dependency VM attached.'}`
 				: '',
 			`Thread members:\n${roster}`,
 			first
@@ -982,7 +1351,10 @@ export class Engine {
 		try {
 			child = this.spawn(member.provider, agentArgs(member, images), {
 				cwd: w.path,
-				env: agentEnv(environment ? dockerEnv(environment.profile) : process.env),
+				env: {
+					...agentEnv(environment ? dockerEnv(environment.profile) : process.env),
+					...w.provision?.env
+				},
 				detached: process.platform !== 'win32',
 				stdio: ['pipe', 'pipe', 'pipe']
 			});
@@ -1054,39 +1426,23 @@ export class Engine {
 	async deleteProject(projectId) {
 		const project = this.store.get('projects', projectId);
 		const workspaces = this.store.state.workspaces.filter((w) => w.projectId === project.id);
-		const ids = new Set(workspaces.map((w) => w.id));
-		if (this.store.state.chats.some((c) => ids.has(c.workspaceId) && this.chatRunning(c.id)))
-			throw new Error('Stop running agents in this project first');
-		const isolated = this.store.state.environments.filter(
-			(e) => e.scope === 'isolated' && ids.has(e.workspaceId)
-		);
-		const live = isolated.find((e) => e.busy || e.status === 'running');
-		if (live) throw new Error(`Stop the ${live.name} VM before removing this project`);
-		const created = fs.existsSync(project.path)
-			? workspaces.filter((w) => w.path !== project.path && fs.existsSync(w.path))
-			: [];
-		for (const w of created)
-			if (await command('git', ['status', '--porcelain'], { cwd: w.path }).catch(() => ''))
-				throw new Error(
-					`Workspace "${w.name}" has uncommitted changes. Commit or discard them first.`
-				);
-		for (const w of created)
-			await command('git', ['-C', project.path, 'worktree', 'remove', w.path]);
-		if (created.length)
-			await command('git', ['-C', project.path, 'worktree', 'prune']).catch(() => {});
-		const state = this.store.state;
-		this.queue = this.queue.filter(
-			(j) => !state.chats.some((c) => c.id === j.chatId && ids.has(c.workspaceId))
-		);
-		for (const c of state.chats)
-			if (ids.has(c.workspaceId)) fs.rmSync(this.uploads(c.id), { recursive: true, force: true });
-		state.chats = state.chats.filter((c) => !ids.has(c.workspaceId));
-		state.tasks = state.tasks.filter((t) => !ids.has(t.workspaceId));
-		state.environments = state.environments.filter((e) => !isolated.includes(e));
-		state.workspaces = state.workspaces.filter((w) => !ids.has(w.id));
-		state.projects = state.projects.filter((p) => p !== project);
+		const repository = fs.existsSync(project.path);
+		for (const w of workspaces) this.assertRemovable(w);
+		if (repository)
+			for (const w of workspaces) if (w.path !== project.path) await this.assertClean(w);
+		const warnings = [];
+		for (const w of workspaces) {
+			if (repository) await this.removeWorkspaceResources(w, project, warnings);
+		}
+		if (repository) await command('git', ['-C', project.path, 'worktree', 'prune']).catch(() => {});
+		if (project.database)
+			await new Postgres(project.database, project.path, { env: agentEnv() })
+				.drop(baseDatabase(project.id))
+				.catch((error) => warnings.push(`Could not drop its base database: ${error.message}`));
+		this.forgetWorkspaces(new Set(workspaces.map((w) => w.id)));
+		this.store.state.projects = this.store.state.projects.filter((p) => p !== project);
 		this.changed();
-		return {};
+		return { warnings };
 	}
 	runtime(environmentId, action, workspaceId) {
 		const e = this.store.get('environments', environmentId);
@@ -1100,7 +1456,7 @@ export class Engine {
 			throw new Error('Stop agents using this environment first');
 		let bin = 'colima';
 		let args;
-		let options = {};
+		let options = { env: agentEnv() };
 		if (action === 'start')
 			args = [
 				'--profile',

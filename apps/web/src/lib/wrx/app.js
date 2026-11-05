@@ -172,7 +172,7 @@ export function mountWrx(root) {
 			}</nav><div class="sidebar-bottom"><button data-action="environments">${icon('box')}Environments<span>${state.environments.length}</span></button><button data-action="computers">${icon('terminal')}Computers</button><button data-action="settings">${icon('settings')}Connections<span class="live-dot"></span></button><div class="user"><span class="avatar">${icon('terminal')}</span><div>Local workbench<small>On your machine. In your control.</small></div></div></div></aside><section class="wrx-main"><header><div class="breadcrumbs">Workbench${p ? ` ${icon('chevron')} <span>${esc(p.name)}</span> ${icon('chevron')} <strong>${esc(w.name)}</strong>` : ''}</div><div class="header-right">${((n) => badge(`${n} agent${n === 1 ? '' : 's'} running`, n ? 'green' : ''))(active.reduce((s, c) => s + c.members.filter((m) => m.status === 'running').length, 0))}<button class="machine-button" data-action="computers">${icon('terminal')} ${esc(state.machine?.name || 'This computer')}${state.remote ? ' · Remote' : ''}</button></div></header>${
 				!w
 					? welcome()
-					: `<section class="workspace-header"><div><div class="eyebrow">PROJECT WORKSPACE</div><h1>${esc(w.name)}<span class="workspace-tag">${icon('branch')}${esc(w.branch)}</span></h1><p>${esc(p.path)}</p></div><div class="actions">${btn('New workspace', 'workspace', 'branch')}${btn('New agent', 'chat', 'plus', 'primary')}</div></section><div class="tabs">${[
+					: `<section class="workspace-header"><div><div class="eyebrow">PROJECT WORKSPACE</div><h1>${esc(w.name)}<span class="workspace-tag">${icon('branch')}${esc(w.branch)}</span></h1><p>${esc(p.path)}</p></div><div class="actions">${w.path === p.path ? '' : btn('Delete workspace', 'workspace-delete', 'trash')}${btn('New workspace', 'workspace', 'branch')}${btn('New agent', 'chat', 'plus', 'primary')}</div></section>${setupBanner(w)}<div class="tabs">${[
 							['overview', 'grid', 'Overview'],
 							['agents', 'chat', 'Agent chats'],
 							['changes', 'code', 'Changes'],
@@ -974,10 +974,11 @@ export function mountWrx(root) {
 		const spaces = state.workspaces.filter((w) => w.projectId === id);
 		confirmDanger(
 			'Remove project?',
-			`<b>${esc(p.name)}</b> will be removed from Workbench with its ${spaces.length} workspace${spaces.length === 1 ? '' : 's'}, conversations and tasks. Your repository at <code>${esc(p.path)}</code> is not touched.${spaces.length > 1 ? ' Worktrees Workbench created are deleted from disk, but their branches stay in the repository. Workspaces with uncommitted changes block removal.' : ''}`,
+			`<b>${esc(p.name)}</b> will be removed from Workbench with its ${spaces.length} workspace${spaces.length === 1 ? '' : 's'}, conversations and tasks. Your repository at <code>${esc(p.path)}</code> is not touched.${spaces.length > 1 ? ' Worktrees Workbench created are deleted from disk with their databases, but their branches stay in the repository. Workspaces with uncommitted changes block removal.' : ''}${state.environments.some((e) => e.scope === 'isolated' && spaces.some((w) => w.environmentId === e.id)) ? " Dedicated VMs are deleted with their data, even if they're running." : ''}`,
 			'Remove project',
 			async () => {
-				await api('project-delete', { projectId: id });
+				const { warnings } = await api('project-delete', { projectId: id });
+				for (const warning of warnings) toast(warning, 'error');
 				if (spaces.some((w) => w.id === workspaceId)) {
 					workspaceId = null;
 					chatId = null;
@@ -1196,14 +1197,57 @@ export function mountWrx(root) {
 			)
 			.join('')}</div>`;
 	}
+	function setupBanner(w) {
+		const p = w.provision;
+		if (p?.status === 'running')
+			return `<div class="workspace-location">${icon('terminal')}<span>Setting up this workspace: ${esc(p.step)}. Agents start when it's ready.</span><button class="text-button" data-tab="runtime">View log</button></div>`;
+		if (p?.status === 'failed')
+			return `<div class="workspace-location">${icon('terminal')}<span>Setup failed: ${esc(p.error || p.step)}</span><button class="text-button" data-action="setup-retry">Retry</button><button class="text-button" data-tab="runtime">View log</button></div>`;
+		return '';
+	}
+	function setupPanel(w) {
+		const p = w?.provision;
+		if (!p) return '';
+		const db = w.database;
+		const blocked = p.status === 'running' || db?.busy;
+		const tone = p.status === 'ready' ? 'green' : '';
+		const label = db?.busy ? 'Database working…' : p.status === 'running' ? p.step : p.status;
+		const ports = Object.entries(p.ports);
+		return `<section class="panel runtime-panel"><div class="panel-heading"><h3>${icon('terminal')}Workspace setup</h3>${badge(label, tone)}</div><div class="runtime-details"><div><span>Checkout</span><code>${esc(w.path)}</code></div>${ports.length ? `<div><span>Ports</span><code>${esc(ports.map(([name, port]) => `${name} ${port}`).join(' · '))}</code></div>` : ''}${db ? `<div><span>Database</span><code>${esc(db.name)}</code></div>` : ''}${p.config.envFile ? `<div><span>Env file</span><code>${esc(p.config.envFile)}</code></div>` : ''}</div><div class="runtime-actions">${p.status === 'failed' ? `<button data-action="setup-retry">${icon('arrow')}Retry setup</button>` : ''}${
+			db
+				? `<button data-action="db-snapshot" ${blocked ? 'disabled' : ''}>${icon('box')}Snapshot database</button><button data-action="db-reset" ${blocked ? 'disabled' : ''}>${icon('terminal')}Reset database</button><button data-action="db-refresh-base" ${blocked ? 'disabled' : ''}>${icon('arrow')}Refresh base</button>${db.snapshots.map((s) => `<button data-restore="${esc(s.name)}" ${blocked ? 'disabled' : ''}>${icon('arrow')}Restore ${esc(new Date(s.createdAt).toLocaleString())}</button>`).join('')}`
+				: ''
+		}</div>${db?.error ? `<p class="error">${esc(db.error)}</p>` : ''}<pre class="runtime-log">${esc(p.log || 'No output yet.')}</pre></section>`;
+	}
 	function runtimeView() {
 		const e = env();
-		return `<div class="section-title"><div><h2>Dependencies with a home.</h2><p>VMs isolate services and databases. Agents run on the host checkout.</p></div>${btn(e ? 'Change environment' : 'Attach environment', 'environment', 'box')}</div>${e ? `<section class="panel runtime-panel"><div class="panel-heading"><h3>${icon('box')}${esc(e.name)}</h3>${badge(e.busy ? 'Working…' : e.status, e.status === 'running' ? 'green' : '')}</div><div class="runtime-details"><div><span>Isolation</span><b>${esc(e.scope)} Colima VM</b></div><div><span>Resources</span><b>${e.cpus} CPU / ${e.memory} GB RAM / ${e.disk} GB disk</b></div><div><span>Profile</span><code>${esc(e.profile)}</code></div><div><span>Docker endpoint</span><code>~/.colima/${esc(e.profile)}/docker.sock</code></div></div><div class="runtime-actions">${['start', 'stop', 'up', 'down', 'ps'].map((action) => `<button data-runtime="${action}" ${e.busy ? 'disabled' : ''}>${icon(action === 'start' ? 'arrow' : 'terminal')}${{ start: 'Start VM', stop: 'Stop VM', up: 'Compose up', down: 'Compose down', ps: 'Service status' }[action]}</button>`).join('')}</div><p class="runtime-note">Compose uses this workspace’s root Compose file and its own project namespace. Down preserves database volumes. Starting a VM may download its base image.</p><pre class="runtime-log">${esc(e.log || 'No runtime operations yet.')}</pre></section>` : `<div class="empty panel">${icon('box')}<h3>Shared when it helps. Isolated when it matters.</h3><p>Attach a shared VM or provision a dedicated dependency VM for this workspace.</p>${btn('Choose environment', 'environment', 'plus', 'primary')}</div>`}`;
+		return `${setupPanel(current())}<div class="section-title"><div><h2>Dependencies with a home.</h2><p>VMs isolate services and databases. Agents run on the host checkout.</p></div>${btn(e ? 'Change environment' : 'Attach environment', 'environment', 'box')}</div>${e ? `<section class="panel runtime-panel"><div class="panel-heading"><h3>${icon('box')}${esc(e.name)}</h3>${badge(e.busy ? 'Working…' : e.status, e.status === 'running' ? 'green' : '')}</div><div class="runtime-details"><div><span>Isolation</span><b>${esc(e.scope)} Colima VM</b></div><div><span>Resources</span><b>${e.cpus} CPU / ${e.memory} GB RAM / ${e.disk} GB disk</b></div><div><span>Profile</span><code>${esc(e.profile)}</code></div><div><span>Docker endpoint</span><code>~/.colima/${esc(e.profile)}/docker.sock</code></div></div><div class="runtime-actions">${['start', 'stop', 'up', 'down', 'ps'].map((action) => `<button data-runtime="${action}" ${e.busy ? 'disabled' : ''}>${icon(action === 'start' ? 'arrow' : 'terminal')}${{ start: 'Start VM', stop: 'Stop VM', up: 'Compose up', down: 'Compose down', ps: 'Service status' }[action]}</button>`).join('')}</div><p class="runtime-note">Compose uses this workspace’s root Compose file and its own project namespace. Down preserves database volumes. Starting a VM may download its base image.</p><pre class="runtime-log">${esc(e.log || 'No runtime operations yet.')}</pre></section>` : `<div class="empty panel">${icon('box')}<h3>Shared when it helps. Isolated when it matters.</h3><p>Attach a shared VM or provision a dedicated dependency VM for this workspace.</p>${btn('Choose environment', 'environment', 'plus', 'primary')}</div>`}`;
 	}
+	async function createWorkspace(input) {
+		const w = await api('workspaces', input);
+		workspaceId = w.id;
+		chatId = null;
+		tab = 'overview';
+		localStorage.setItem('wrx.workspace', w.id);
+	}
+	function approveConfig(input, config) {
+		modal(
+			'Allow this repository to run commands?',
+			"This repository's <code>.workbench.json</code> runs these on this computer as your user. You'll be asked again whenever it changes. Approve only if you trust this repository.",
+			`<pre class="runtime-log">${esc(config.commands.map(([label, text]) => `${label}:\n  ${text}`).join('\n\n') || 'No commands. It only copies files and sets env values.')}</pre>`,
+			'Approve and create',
+			() => createWorkspace({ ...input, trustConfigHash: config.hash })
+		);
+	}
+	async function databaseAction(action, snapshot) {
+		await api('workspace-database', { workspaceId, action, snapshot });
+		await refresh();
+	}
+	const KEEP_OPEN = Symbol('keep dialog open');
 	function modal(title, description, fields, submit, handler) {
 		const d = $('#dialog');
 		d.innerHTML = `<form id="modal-form"><div class="modal-title"><h2>${title}</h2><button type="button" class="square" data-close aria-label="Close">×</button></div><p>${description}</p>${fields}<div id="modal-error" class="error" role="alert"></div><div class="modal-footer"><button type="button" data-close>Cancel</button><button class="primary">${submit}${icon('arrow')}</button></div></form>`;
-		d.showModal();
+		if (!d.open) d.showModal();
 		d.querySelectorAll('[data-close]').forEach((b) => (b.onclick = () => d.close()));
 		$('#modal-form').onsubmit = async (event) => {
 			event.preventDefault();
@@ -1211,7 +1255,7 @@ export function mountWrx(root) {
 			button.disabled = true;
 			try {
 				const form = new FormData(event.target);
-				await handler(Object.fromEntries(form), form);
+				if ((await handler(Object.fromEntries(form), form)) === KEEP_OPEN) return;
 				d.close();
 				await refresh();
 			} catch (e) {
@@ -1238,11 +1282,29 @@ export function mountWrx(root) {
 		},
 		search: () => openSearch(),
 		project: () => openProject(),
-		workspace: () =>
+		workspace: async () => {
+			const base = current().branch === 'detached HEAD' ? 'HEAD' : current().branch;
+			// A config that can't be read is reported when the form is submitted.
+			const config = await api('workspace-config', { projectId: project().id, base }).catch(
+				() => null
+			);
 			modal(
 				'Make room for a new idea',
 				'Create a Git worktree from the current repository HEAD. The repository needs at least one commit.',
-				`${field('Workspace name', 'name', 'e.g. Authentication refresh')}${field('New branch', 'branch', 'feat/auth-refresh')}${field('Base branch or commit', 'base', 'main', current().branch === 'detached HEAD' ? 'HEAD' : current().branch)}${select(
+				`${field('Workspace name', 'name', 'e.g. Authentication refresh')}${field('Branch', 'branch', 'feat/auth-refresh')}<label class="check"><input type="checkbox" name="existingBranch"> This branch already exists</label>${field('Base branch or commit', 'base', 'main', base)}${
+					config?.hasDatabase
+						? select(
+								'Database',
+								'seed',
+								['clone', 'blank']
+									.map(
+										(seed) =>
+											`<option value="${seed}" ${seed === config.seed ? 'selected' : ''}>${seed === 'clone' ? 'Copy of the base database' : 'Blank, migrations only'}</option>`
+									)
+									.join('')
+							)
+						: ''
+				}${select(
 					'Dependency environment',
 					'environmentId',
 					`<option value="">No environment yet</option><option value="isolated">Create a dedicated VM</option>${state.environments
@@ -1252,17 +1314,49 @@ export function mountWrx(root) {
 				)}`,
 				'Create workspace',
 				async (body) => {
-					const w = await api('workspaces', {
+					const input = {
 						...body,
 						projectId: project().id,
+						existingBranch: body.existingBranch === 'on',
 						isolated: body.environmentId === 'isolated',
 						environmentId: body.environmentId === 'isolated' ? null : body.environmentId
-					});
-					workspaceId = w.id;
-					chatId = null;
-					tab = 'overview';
-					localStorage.setItem('wrx.workspace', w.id);
+					};
+					const found = await api('workspace-config', input);
+					if (found.found && !found.trusted) {
+						approveConfig(input, found);
+						return KEEP_OPEN;
+					}
+					await createWorkspace(input);
 				}
+			);
+		},
+		'workspace-delete': () => {
+			const w = current();
+			confirmDanger(
+				'Delete workspace?',
+				`<b>${esc(w.name)}</b> and its conversations and tasks will be removed. Its worktree at <code>${esc(w.path)}</code> is deleted from disk, along with its database, snapshots and any dedicated VM with that VM's data. This can't be undone. The branch <code>${esc(w.branch)}</code> stays in the repository. Uncommitted changes block deletion.`,
+				'Delete workspace',
+				async () => {
+					const { warnings } = await api('workspace-delete', { workspaceId: w.id });
+					for (const warning of warnings) toast(warning, 'error');
+					workspaceId = null;
+					chatId = null;
+					localStorage.removeItem('wrx.workspace');
+				}
+			);
+		},
+		'setup-retry': async () => {
+			await api('workspace-retry', { workspaceId });
+			await refresh();
+		},
+		'db-snapshot': () => databaseAction('snapshot'),
+		'db-refresh-base': () => databaseAction('refresh-base'),
+		'db-reset': () =>
+			confirmDanger(
+				'Reset this database?',
+				"This workspace's database is replaced with a fresh one from its seed, then migrated. Changes that aren't in a snapshot are lost, and running apps are disconnected.",
+				'Reset database',
+				() => api('workspace-database', { workspaceId, action: 'reset' })
 			),
 		chat: () => newChat(),
 		'add-member': () => memberDialog(),
@@ -1360,9 +1454,21 @@ export function mountWrx(root) {
 			),
 		environments: () => {
 			const d = $('#dialog');
-			d.innerHTML = `<div class="modal-title"><h2>Environments</h2><button class="square" data-close aria-label="Close">×</button></div><p>Managed Colima dependency VMs across all projects.</p>${state.environments.map((e) => `<div class="connection-row"><div><b>${esc(e.name)}</b><small>${esc(e.profile)} · ${e.scope}</small></div>${badge(e.busy ? 'Working' : e.status)}</div>`).join('') || '<p>No environments yet. Attach one from a workspace.</p>'}`;
-			d.showModal();
+			d.innerHTML = `<div class="modal-title"><h2>Environments</h2><button class="square" data-close aria-label="Close">×</button></div><p>Managed Colima dependency VMs across all projects.</p>${state.environments.map((e) => `<div class="connection-row"><div><b>${esc(e.name)}</b><small>${esc(e.profile)} · ${e.scope}</small></div>${badge(e.busy ? 'Working' : e.status)}${state.workspaces.some((w) => w.environmentId === e.id) ? '' : `<button class="square" data-delete-environment="${e.id}" title="Delete environment" aria-label="Delete environment ${esc(e.name)}">${icon('trash')}</button>`}</div>`).join('') || '<p>No environments yet. Attach one from a workspace.</p>'}`;
+			if (!d.open) d.showModal();
 			d.querySelector('[data-close]').onclick = () => d.close();
+			d.querySelectorAll('[data-delete-environment]').forEach(
+				(b) =>
+					(b.onclick = () => {
+						const e = state.environments.find((x) => x.id === b.dataset.deleteEnvironment);
+						confirmDanger(
+							'Delete environment?',
+							`<b>${esc(e.name)}</b> and its VM, including container images and volumes, will be deleted. This can't be undone.`,
+							'Delete environment',
+							() => api('environment-delete', { environmentId: e.id })
+						);
+					})
+			);
 		},
 		computers: () => showComputers(),
 		settings: () => {
@@ -1424,6 +1530,15 @@ export function mountWrx(root) {
 				tab = target.dataset.tab;
 				render();
 				if (tab === 'changes') await actions.diff();
+			}
+			if (target.dataset.restore) {
+				const snapshot = target.dataset.restore;
+				confirmDanger(
+					'Restore this snapshot?',
+					"This workspace's database is replaced with the snapshot. Changes made since then are lost, and running apps are disconnected.",
+					'Restore snapshot',
+					() => api('workspace-database', { workspaceId, action: 'restore', snapshot })
+				);
 			}
 			if (target.dataset.runtime) {
 				await api('runtime', {

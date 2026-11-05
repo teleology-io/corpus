@@ -3,6 +3,15 @@ import { dirname, join } from 'node:path';
 import { config } from 'dotenv';
 
 let loaded = false;
+const fileKeys = new Set<string>();
+
+/**
+ * Names set by this app's .env. Workbench strips them from processes it starts for other
+ * repositories: their tools would otherwise treat this app's DATABASE_URL and secrets as their own.
+ */
+export function loadedEnvKeys(): ReadonlySet<string> {
+	return fileKeys;
+}
 
 /** Load the repo-root .env (walks up from cwd) so every app shares one config. */
 export function loadEnv() {
@@ -12,7 +21,8 @@ export function loadEnv() {
 	for (let i = 0; i < 6; i++) {
 		const file = join(dir, '.env');
 		if (existsSync(file)) {
-			config({ path: file, quiet: true });
+			const { parsed } = config({ path: file, quiet: true });
+			for (const key of Object.keys(parsed ?? {})) fileKeys.add(key);
 			return;
 		}
 		const parent = dirname(dir);

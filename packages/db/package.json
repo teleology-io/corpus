@@ -4,6 +4,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./env": "./src/env.ts",
 		"./schema": "./src/schema/index.ts",
 		"./notify": "./src/notify.ts",
 		"./access": "./src/access.ts",

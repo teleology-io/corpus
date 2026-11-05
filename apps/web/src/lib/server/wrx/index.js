@@ -389,6 +389,21 @@ export async function handleWrx({ request, url, route, userId }) {
 			case 'workspaces':
 				result = await engine.workspace(body);
 				break;
+			case 'workspace-config':
+				result = await engine.workspaceConfig(body);
+				break;
+			case 'workspace-retry':
+				result = engine.retryProvision(body.workspaceId);
+				break;
+			case 'workspace-database':
+				result = engine.databaseAction(body.workspaceId, body.action, body.snapshot);
+				break;
+			case 'workspace-delete':
+				result = await engine.deleteWorkspace(body.workspaceId);
+				break;
+			case 'environment-delete':
+				result = await engine.deleteEnvironment(body.environmentId);
+				break;
 			case 'project-delete':
 				result = await engine.deleteProject(body.projectId);
 				break;

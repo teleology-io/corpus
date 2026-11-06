@@ -9,6 +9,7 @@ import {
 	type ReviewerResult,
 	type ReviewerRole
 } from './findings';
+import type { ProgressReporter } from './progress';
 import { crosscheckPrompt, reviewPrompt } from './prompts';
 import {
 	CODEX_ALLOWED_FOR_PR_REVIEW,
@@ -56,9 +57,14 @@ export function resolveSlots(
 
 export interface ReviewDeps {
 	/** Runs one reviewer in the bundle. */
-	run: (slot: ReviewSlot, prompt: string) => Promise<AgentRun>;
+	run: (
+		slot: ReviewSlot,
+		prompt: string,
+		onActivity?: (action: string | null) => void
+	) => Promise<AgentRun>;
 	/** Latest head, to catch a push that landed during the review. */
 	currentHead: () => Promise<string>;
+	progress?: ProgressReporter;
 }
 
 export interface ReviewOutcome {
@@ -81,8 +87,8 @@ export async function reviewPullRequest(input: {
 	const { slots, bundleDir, treeState, deps } = input;
 	let costUsd = 0;
 	const errors: string[] = [];
-	const call = async (slot: ReviewSlot, prompt: string) => {
-		const run = await deps.run(slot, prompt);
+	const call = async (slot: ReviewSlot, prompt: string, role: ReviewerRole) => {
+		const run = await deps.run(slot, prompt, (action) => deps.progress?.activity(role, action));
 		costUsd += run.costUsd;
 		if (run.error) errors.push(run.error);
 		return run;
@@ -92,14 +98,20 @@ export async function reviewPullRequest(input: {
 	const firstPass = async (i: number): Promise<ReviewerResult | null> => {
 		const prompt = reviewPrompt(ROLES[i], bundleDir, treeState);
 		for (let attempt = 0; attempt < 2; attempt++) {
-			const run = await call(slots[i], prompt);
+			deps.progress?.reviewer(ROLES[i], attempt ? 'retrying' : 'working');
+			const run = await call(slots[i], prompt, ROLES[i]);
 			if (run.error) continue;
 			const parsed = parseReview(run.text, ROLES[i]);
-			if (parsed) return parsed;
+			if (parsed) {
+				deps.progress?.reviewer(ROLES[i], 'done');
+				return parsed;
+			}
 			errors.push(`The ${ROLES[i]} returned output that could not be read.`);
 		}
+		deps.progress?.reviewer(ROLES[i], 'failed');
 		return null;
 	};
+	deps.progress?.stage('reviewing');
 	const results = await Promise.all(ROLES.map((_, i) => firstPass(i)));
 
 	let findings = results.flatMap((r) => r?.findings ?? []);
@@ -107,11 +119,18 @@ export async function reviewPullRequest(input: {
 	// Each reviewer tests the other's blockers. Only run when both finished: a reviewer that failed
 	// already makes this review failed, and its findings should reach you untouched.
 	if (results.every(Boolean)) {
+		if (findings.some((f) => f.severity === 'blocker')) deps.progress?.stage('crosschecking');
 		const checks = await Promise.all(
 			ROLES.map(async (role, i) => {
 				const blockers = findings.filter((f) => f.severity === 'blocker' && f.reviewer !== role);
 				if (!blockers.length) return [];
-				const run = await call(slots[i], crosscheckPrompt(role, bundleDir, treeState, blockers));
+				deps.progress?.reviewer(role, 'checking');
+				const run = await call(
+					slots[i],
+					crosscheckPrompt(role, bundleDir, treeState, blockers),
+					role
+				);
+				deps.progress?.reviewer(role, 'done');
 				return { blockers, results: run.error ? null : parseCrosscheck(run.text) };
 			})
 		);

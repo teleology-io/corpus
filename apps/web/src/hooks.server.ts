@@ -1,7 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import type { Handle } from '@sveltejs/kit/hooks';
 import { sequence } from '@sveltejs/kit/hooks';
-import { svelteKitHandler } from 'better-auth/svelte-kit';
 import { building } from '$app/env';
 import { auth, resolveWorkspace } from '@corpus/auth';
 
@@ -74,7 +73,11 @@ const authHandle: Handle = async ({ event, resolve }) => {
 		event.locals.workspaceId = expired ? null : resolved.workspaceId;
 	}
 	try {
-		return await svelteKitHandler({ event, resolve, auth, building });
+		// Matched by path, not with svelteKitHandler: that also requires the request's origin to equal
+		// PUBLIC_APP_URL, which 404s sign-in from a LAN address. auth.handler still checks trustedOrigins.
+		if (!building && event.url.pathname.startsWith('/api/auth/'))
+			return await auth.handler(event.request);
+		return await resolve(event);
 	} finally {
 		// Mutations may change the session, user or membership the cache holds.
 		if (event.request.method !== 'GET' && event.request.method !== 'HEAD') sessionCache.clear();

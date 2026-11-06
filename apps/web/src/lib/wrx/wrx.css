@@ -3447,6 +3447,88 @@ body:has(.recording-bar) .wrx.conversation-fullscreen {
 	color: var(--muted);
 	font-size: 12px;
 }
+.wrx .review-progress-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 12px;
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.wrx .review-progress-head ol {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 16px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.wrx .review-progress-head li.done {
+	color: var(--success);
+}
+.wrx .review-progress-head li.current {
+	color: var(--foreground);
+	font-weight: 600;
+}
+.wrx .review-reviewer {
+	display: flex;
+	gap: 10px;
+	padding: 8px 0;
+	border-top: 1px solid var(--border);
+}
+.wrx .review-reviewer > i {
+	flex: none;
+	width: 8px;
+	height: 8px;
+	margin-top: 6px;
+	border-radius: 50%;
+	background: var(--muted);
+}
+.wrx .review-reviewer.working > i,
+.wrx .review-reviewer.checking > i {
+	background: var(--accent);
+	animation: wrx-pulse 1.4s infinite;
+}
+.wrx .review-reviewer.retrying > i {
+	background: var(--warning);
+	animation: wrx-pulse 1.4s infinite;
+}
+.wrx .review-reviewer.done > i {
+	background: var(--success);
+}
+.wrx .review-reviewer.failed > i {
+	background: var(--error);
+}
+.wrx .review-reviewer > div {
+	min-width: 0;
+	flex: 1;
+}
+.wrx .review-reviewer strong {
+	text-transform: capitalize;
+}
+.wrx .review-reviewer span {
+	color: var(--text-secondary);
+}
+.wrx .review-reviewer small,
+.wrx .review-reviewer code {
+	display: block;
+	margin-top: 2px;
+	color: var(--muted);
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+.wrx .review-reviewer .review-warning {
+	margin: 4px 0 0;
+	color: var(--warning);
+	font-size: 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+	.wrx .review-reviewer > i {
+		animation: none !important;
+	}
+}
 .wrx .review-preview {
 	border-top: 1px solid var(--border);
 	margin-top: 12px;

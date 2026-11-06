@@ -10,7 +10,12 @@ const lanName = `${os.hostname().replace(/\.local$/i, '')}.local`.toLowerCase();
 const lan = { host: '0.0.0.0', allowedHosts: [lanName, 'localhost'] };
 
 export default defineConfig({
-	server: lan,
+	server: {
+		...lan,
+		// Workbench state lives here, including whole PR trees unpacked for Integration Review.
+		// Watching them reloads the server mid-request whenever a review starts or ends.
+		watch: { ignored: ['**/.wrx/**'] }
+	},
 	preview: lan,
 	// The rewrite worker pulls in Transformers.js, whose dynamic imports need code splitting.
 	worker: { format: 'es' },

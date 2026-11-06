@@ -17,8 +17,9 @@ import {
 import { agentEnv, command } from '../wrx/core.js';
 import { buildBundle, removeTree } from './bundle';
 import type { Finding } from './findings';
-import { resolveSlots, reviewPullRequest } from './orchestrate';
+import { resolveSlots, reviewPullRequest, ROLES } from './orchestrate';
 import { buildGithubReview } from './post';
+import { createProgress, progressReporter, progressView, type ReviewProgress } from './progress';
 import { reviewEnv, runAgent, type ReviewProvider, type Spawn } from './runner';
 
 const { prReview: review, integrationItem: item, integrationConnection: conn } = schema;
@@ -27,6 +28,11 @@ const { prReview: review, integrationItem: item, integrationConnection: conn } =
 const active: Map<string, string> = ((
 	globalThis as { __prReviewActive?: Map<string, string> }
 ).__prReviewActive ??= new Map());
+
+// Review id -> what that run is doing. Survives HMR for the same reason.
+const liveProgress: Map<string, ReviewProgress> = ((
+	globalThis as { __prReviewProgress?: Map<string, ReviewProgress> }
+).__prReviewProgress ??= new Map());
 
 const bundleDir = (userId: string, id: string) =>
 	path.join(
@@ -90,12 +96,19 @@ export async function listExternalReviews(userId: string) {
 		.from(review)
 		.where(eq(review.userId, userId))
 		.orderBy(desc(review.createdAt));
-	return items.map((i) => ({
-		...i,
-		author: (i.payload as { author?: string } | null)?.author ?? null,
-		payload: undefined,
-		review: reviews.find((r) => r.itemId === i.id) ?? null
-	}));
+	const withProgress = (r: (typeof reviews)[number]) => {
+		const progress = liveProgress.get(r.id);
+		return { ...r, progress: progress ? progressView(progress) : null };
+	};
+	return items.map((i) => {
+		const latest = reviews.find((r) => r.itemId === i.id);
+		return {
+			...i,
+			author: (i.payload as { author?: string } | null)?.author ?? null,
+			payload: undefined,
+			review: latest ? withProgress(latest) : null
+		};
+	});
 }
 
 async function ownItem(userId: string, itemId: string) {
@@ -147,7 +160,12 @@ export async function startExternalReview(userId: string, itemId: string) {
 			})
 			.returning();
 		active.set(userId, row.id);
-		void execute(userId, row.id, token, ref, pr).finally(() => active.delete(userId));
+		const progress = createProgress(ROLES);
+		liveProgress.set(row.id, progress);
+		void execute(userId, row.id, token, ref, pr, progress).finally(() => {
+			active.delete(userId);
+			liveProgress.delete(row.id);
+		});
 		return row;
 	} catch (e) {
 		active.delete(userId);
@@ -160,7 +178,8 @@ async function execute(
 	id: string,
 	token: string,
 	ref: PullRef,
-	pr: Awaited<ReturnType<typeof pullDetails>>
+	pr: Awaited<ReturnType<typeof pullDetails>>,
+	progress: ReviewProgress
 ) {
 	const dir = bundleDir(userId, id);
 	try {
@@ -186,9 +205,10 @@ async function execute(
 			headSha: pr.headSha,
 			deps: {
 				// cwd is the bundle root, so the PR's own tree/ isn't loaded as project config.
-				run: (slot, prompt) =>
-					runAgent({ slot, prompt, cwd: dir, env, spawn: spawn as unknown as Spawn }),
-				currentHead: async () => (await pullDetails(token, ref)).headSha
+				run: (slot, prompt, onActivity) =>
+					runAgent({ slot, prompt, cwd: dir, env, spawn: spawn as unknown as Spawn, onActivity }),
+				currentHead: async () => (await pullDetails(token, ref)).headSha,
+				progress: progressReporter(progress)
 			}
 		});
 		await db

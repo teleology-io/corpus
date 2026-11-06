@@ -63,10 +63,33 @@ export function reviewArgs(slot: ReviewSlot) {
 	];
 }
 
+const MAX_ACTION_LENGTH = 160;
+
+/** A short line for one tool call, with bundle paths made relative. Untrusted: it can quote PR file names. */
+export function describeTool(
+	block: { name?: unknown; input?: unknown },
+	cwd: string
+): string | null {
+	if (typeof block.name !== 'string') return null;
+	const input = (block.input ?? {}) as Record<string, unknown>;
+	const text = (value: unknown) =>
+		typeof value === 'string' ? value.replaceAll(`${cwd}/tree/`, '').replaceAll(`${cwd}/`, '') : '';
+	let action = block.name;
+	if (block.name === 'Read') action = `Read ${text(input.file_path)}`;
+	if (block.name === 'Glob') action = `Find ${text(input.pattern)}`;
+	if (block.name === 'Grep') {
+		const where = text(input.path);
+		action = `Search "${text(input.pattern)}"${where ? ` in ${where}` : ''}`;
+	}
+	return action.trim().slice(0, MAX_ACTION_LENGTH);
+}
+
 /** Final text and cost from either CLI's JSON event stream. */
 export function readEvent(
 	line: string,
-	state: { text: string; costUsd: number; error: string | null }
+	state: { text: string; costUsd: number; error: string | null },
+	onActivity?: (action: string | null) => void,
+	cwd = ''
 ) {
 	let data: {
 		type?: string;
@@ -84,6 +107,13 @@ export function readEvent(
 	} catch {
 		return;
 	}
+	const content = data.type === 'assistant' ? (data.message as { content?: unknown })?.content : [];
+	const actions = (Array.isArray(content) ? content : [])
+		.filter((block) => block?.type === 'tool_use')
+		.map((block) => describeTool(block, cwd))
+		.filter(Boolean);
+	if (actions.length) for (const action of actions) onActivity?.(action);
+	else onActivity?.(null);
 	if (data.type === 'result') {
 		if (typeof data.result === 'string') state.text = data.result;
 		if (data.total_cost_usd) state.costUsd = data.total_cost_usd;
@@ -103,6 +133,7 @@ export function runAgent(input: {
 	env: Record<string, string>;
 	spawn: Spawn;
 	timeoutMs?: number;
+	onActivity?: (action: string | null) => void;
 }): Promise<AgentRun> {
 	return new Promise((resolve) => {
 		const state = { text: '', costUsd: 0, error: null as string | null };
@@ -150,12 +181,12 @@ export function runAgent(input: {
 			pending += chunk;
 			const lines = pending.split('\n');
 			pending = lines.pop() ?? '';
-			for (const line of lines) readEvent(line, state);
+			for (const line of lines) readEvent(line, state, input.onActivity, input.cwd);
 		});
 		child.stderr?.on('data', (chunk: string) => (stderr = (stderr + chunk).slice(-4000)));
 		child.on('error', (error) => settle(error.message));
 		child.on('close', (code) => {
-			if (pending) readEvent(pending, state);
+			if (pending) readEvent(pending, state, input.onActivity, input.cwd);
 			settle(
 				code === 0 ? null : state.error || stderr.trim() || `Reviewer exited with code ${code}`
 			);

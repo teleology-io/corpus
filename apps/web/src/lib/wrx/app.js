@@ -1245,9 +1245,45 @@ export function mountWrx(root) {
 		if (reviewPreview?.reviewId !== reviewId) return '';
 		return `<section class="review-preview"><h4>Preview: this posts to GitHub as your account, comment-only</h4>${reviewPreview.headMoved ? '<p class="review-warning">New commits landed since this review. Re-review before posting.</p>' : ''}<pre>${esc(reviewPreview.body)}</pre>${reviewPreview.comments.map((c) => `<code>${esc(c.path)}:${esc(c.line)}</code><pre>${esc(c.body)}</pre>`).join('')}<div class="actions"><button data-review-preview-close>Cancel</button>${reviewPreview.headMoved ? '' : `<button class="primary" data-review-post="${esc(reviewId)}">Post to GitHub</button>`}</div></section>`;
 	}
+	const REVIEW_STAGES = [
+		['preparing', 'Get the code'],
+		['reviewing', 'Two reviewers read it'],
+		['crosschecking', 'Test blockers']
+	];
+	const REVIEWER_STATES = {
+		waiting: 'Waiting',
+		working: 'Reading',
+		retrying: 'Retrying after a failed attempt',
+		checking: 'Testing the other reviewer’s blockers',
+		done: 'Done',
+		failed: 'Failed'
+	};
+	const REVIEWER_QUIET_WARNING_SECONDS = 180;
+	function reviewDuration(seconds) {
+		if (seconds < 60) return `${seconds}s`;
+		return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+	}
+	function reviewProgress(p) {
+		if (!p) return '<p class="review-note">Starting the review…</p>';
+		const current = REVIEW_STAGES.findIndex(([stage]) => stage === p.stage);
+		const steps = REVIEW_STAGES.map(([, label], i) => {
+			const state = i < current ? 'done' : i === current ? 'current' : '';
+			return `<li class="${state}">${esc(label)}${i === 2 ? ' <small>if any</small>' : ''}</li>`;
+		}).join('');
+		const reviewers = p.reviewers
+			.map((r) => {
+				const active = ['working', 'retrying', 'checking'].includes(r.state);
+				const quiet = active && r.quietSeconds >= REVIEWER_QUIET_WARNING_SECONDS;
+				const detail = active
+					? `${r.actions} action${r.actions === 1 ? '' : 's'} · last activity ${reviewDuration(r.quietSeconds)} ago`
+					: '';
+				return `<div class="review-reviewer ${esc(r.state)}"><i></i><div><strong>${esc(r.role)}</strong> <span>${esc(REVIEWER_STATES[r.state] ?? r.state)}</span>${detail ? `<small>${esc(detail)}</small>` : ''}${active && r.lastAction ? `<code>${esc(r.lastAction)}</code>` : ''}${quiet ? `<p class="review-warning">Quiet for ${esc(reviewDuration(r.quietSeconds))}. It may just be thinking. Each run stops by itself at 20 minutes.</p>` : ''}</div></div>`;
+			})
+			.join('');
+		return `<div class="review-progress"><div class="review-progress-head"><ol>${steps}</ol><span>${esc(reviewDuration(p.elapsedSeconds))}</span></div>${reviewers}</div>`;
+	}
 	function reviewBody(r) {
-		if (r.status === 'running')
-			return '<p class="review-note">Two reviewers are reading this PR. This can take several minutes.</p>';
+		if (r.status === 'running') return reviewProgress(r.progress);
 		const sorted = [...r.findings].sort(
 			(a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
 		);

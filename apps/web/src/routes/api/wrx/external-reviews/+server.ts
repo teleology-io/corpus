@@ -4,9 +4,11 @@ import { requireCtx } from '#lib/server/ctx.js';
 import { workbenchAllowed } from '#lib/server/wrx/access.js';
 import {
 	dismissFinding,
+	getReviewerSettings,
 	listExternalReviews,
 	postGithubReview,
 	previewGithubReview,
+	saveReviewerSettings,
 	startExternalReview
 } from '#lib/server/pr-review/service.js';
 
@@ -32,6 +34,11 @@ export const POST: RequestHandler = async (event) => {
 			return json(await previewGithubReview(userId, body.reviewId));
 		case 'post':
 			return json(await postGithubReview(userId, body.reviewId));
+		case 'settings':
+			return json(getReviewerSettings(userId));
+		case 'save-settings':
+			saveReviewerSettings(userId, body.reviewers);
+			return json({});
 		default:
 			error(400, 'Unknown action');
 	}

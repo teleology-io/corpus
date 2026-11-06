@@ -17,8 +17,15 @@ import {
 import { agentEnv, command } from '../wrx/core.js';
 import { buildBundle, removeTree } from './bundle';
 import type { Finding } from './findings';
-import { resolveSlots, reviewPullRequest, ROLES } from './orchestrate';
+import { DEFAULT_SLOTS, resolveSlots, reviewPullRequest, ROLES } from './orchestrate';
 import { buildGithubReview } from './post';
+import { PERSONAS } from './prompts';
+import {
+	InvalidReviewerSettings,
+	normalizeReviewerSettings,
+	readReviewerSettings,
+	writeReviewerSettings
+} from './reviewers';
 import { createProgress, progressReporter, progressView, type ReviewProgress } from './progress';
 import { reviewEnv, runAgent, type ReviewProvider, type Spawn } from './runner';
 
@@ -34,13 +41,32 @@ const liveProgress: Map<string, ReviewProgress> = ((
 	globalThis as { __prReviewProgress?: Map<string, ReviewProgress> }
 ).__prReviewProgress ??= new Map());
 
-const bundleDir = (userId: string, id: string) =>
-	path.join(
-		path.resolve(process.env.WRX_DATA || '.wrx'),
-		userId.replace(/[^\w-]/g, '_'),
-		'pr-reviews',
-		id
-	);
+const userDir = (userId: string) =>
+	path.join(path.resolve(process.env.WRX_DATA || '.wrx'), userId.replace(/[^\w-]/g, '_'));
+const bundleDir = (userId: string, id: string) => path.join(userDir(userId), 'pr-reviews', id);
+const settingsFile = (userId: string) => path.join(userDir(userId), 'review-settings.json');
+
+/** Each reviewer as the settings dialog edits it, with the built-in persona to restore. */
+export function getReviewerSettings(userId: string) {
+	const settings = readReviewerSettings(settingsFile(userId));
+	return {
+		reviewers: ROLES.map((role) => ({
+			role,
+			model: settings[role].model,
+			persona: settings[role].persona ?? PERSONAS[role],
+			defaultPersona: PERSONAS[role]
+		}))
+	};
+}
+
+export function saveReviewerSettings(userId: string, input: unknown) {
+	try {
+		writeReviewerSettings(settingsFile(userId), normalizeReviewerSettings(input));
+	} catch (e) {
+		if (e instanceof InvalidReviewerSettings) error(400, e.message);
+		throw e;
+	}
+}
 
 async function installed(): Promise<Record<ReviewProvider, boolean>> {
 	const probe = (name: string) =>
@@ -183,7 +209,14 @@ async function execute(
 ) {
 	const dir = bundleDir(userId, id);
 	try {
-		const { slots, notices } = resolveSlots(undefined, await installed());
+		const settings = readReviewerSettings(settingsFile(userId));
+		const { slots, notices } = resolveSlots(
+			ROLES.map((role, i) => ({
+				provider: DEFAULT_SLOTS[i].provider,
+				model: settings[role].model
+			})),
+			await installed()
+		);
 		if (!slots) throw new Error(notices.join(' '));
 		fs.rmSync(dir, { recursive: true, force: true });
 		const bundle = await buildBundle({
@@ -196,9 +229,10 @@ async function execute(
 			.update(review)
 			.set({ treeSha: bundle.treeSha, slots, notices })
 			.where(eq(review.id, id));
-		const env = reviewEnv(process.env, agentEnv().PATH);
+		const env = reviewEnv(agentEnv());
 		const outcome = await reviewPullRequest({
 			slots,
+			personas: { integrator: settings.integrator.persona, breaker: settings.breaker.persona },
 			bundleDir: dir,
 			treeState: bundle.treeState,
 			partial: bundle.partial,

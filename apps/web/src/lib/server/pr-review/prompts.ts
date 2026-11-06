@@ -112,7 +112,7 @@ Finish with one fenced review-crosscheck block:
 { "results": [{ "id": "...", "status": "confirmed" | "refuted", "uncertain": false,
   "evidence": ["path:line and what it shows"] }] }`;
 
-const PERSONAS: Record<ReviewerRole, string> = {
+export const PERSONAS: Record<ReviewerRole, string> = {
 	integrator: INTEGRATOR_PROMPT,
 	breaker: BREAKER_PROMPT
 };
@@ -121,9 +121,17 @@ function fill(template: string, bundle: string, treeState: string) {
 	return template.replaceAll('{bundle}', bundle).replaceAll('{tree_state}', treeState);
 }
 
-/** The prompt for round 1: persona first, then the shared method and output contract. */
-export function reviewPrompt(role: ReviewerRole, bundle: string, treeState: string) {
-	return `${PERSONAS[role]}\n\n${fill(SKILL_PROMPT, bundle, treeState)}`;
+/**
+ * The prompt for round 1: persona first, then the shared method and output contract. Only the persona
+ * can be customised: the rest holds the untrusted-content rules and the format the parser reads.
+ */
+export function reviewPrompt(
+	role: ReviewerRole,
+	bundle: string,
+	treeState: string,
+	persona?: string | null
+) {
+	return `${persona ?? PERSONAS[role]}\n\n${fill(SKILL_PROMPT, bundle, treeState)}`;
 }
 
 /** The prompt for round 2. `blockers` is reviewer output, so it travels as JSON data. */
@@ -131,12 +139,13 @@ export function crosscheckPrompt(
 	role: ReviewerRole,
 	bundle: string,
 	treeState: string,
-	blockers: unknown[]
+	blockers: unknown[],
+	persona?: string | null
 ) {
 	const skill = fill(SKILL_PROMPT, bundle, treeState);
 	const section = (from: string, to: string) => skill.slice(skill.indexOf(from), skill.indexOf(to));
 	return [
-		PERSONAS[role],
+		persona ?? PERSONAS[role],
 		section('EVIDENCE', 'WORK IN THIS ORDER'),
 		// Round 2 reads the same hostile bundle, plus claims written by a reviewer that read it.
 		section('UNTRUSTED CONTENT', 'OUTPUT'),

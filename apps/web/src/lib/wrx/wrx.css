@@ -3447,6 +3447,23 @@ body:has(.recording-bar) .wrx.conversation-fullscreen {
 	color: var(--muted);
 	font-size: 12px;
 }
+.wrx .reviewer-settings {
+	display: grid;
+	gap: 10px;
+	justify-items: stretch;
+	margin: 0 0 14px;
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+}
+.wrx .reviewer-settings legend {
+	padding: 0 6px;
+	font-weight: 600;
+	text-transform: capitalize;
+}
+.wrx .reviewer-settings .text-button {
+	justify-self: start;
+}
 .wrx .review-progress-head {
 	display: flex;
 	align-items: baseline;

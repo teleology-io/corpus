@@ -1325,7 +1325,7 @@ export function mountWrx(root) {
 				return `<section class="panel review-card"><div class="review-card-head"><div><a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(title)}</a><small>${esc(subtitle || '')}${author ? ` · ${esc(author)}` : ''}</small></div><div class="review-card-actions">${badge(label, color)}${start}</div></div>${r ? `<div class="review-card-body">${reviewBody(r)}</div>` : ''}</section>`;
 			})
 			.join('');
-		return `<div class="section-title"><div><h2>External reviews</h2><p>A first pass on other people's pull requests, private until you post it. It doesn't replace your review.</p></div></div>${externalReviewsError ? `<p class="review-warning">${esc(externalReviewsError)}</p>` : ''}${cards || `<div class="empty">${icon('branch')}<h3>Nothing waiting on you.</h3><p>Open pull requests that request your review appear here. Connect GitHub under Integrations if you haven't.</p></div>`}`;
+		return `<div class="section-title"><div><h2>External reviews</h2><p>A first pass on other people's pull requests, private until you post it. It doesn't replace your review.</p></div><button data-action="review-settings">Reviewers</button></div>${externalReviewsError ? `<p class="review-warning">${esc(externalReviewsError)}</p>` : ''}${cards || `<div class="empty">${icon('branch')}<h3>Nothing waiting on you.</h3><p>Open pull requests that request your review appear here. Connect GitHub under Integrations if you haven't.</p></div>`}`;
 	}
 	function setupBanner(w) {
 		const p = w.provision;
@@ -1399,7 +1399,57 @@ export function mountWrx(root) {
 		`<label>${label}<input name="${name}" placeholder="${placeholder}" value="${esc(value)}" required></label>`;
 	const select = (label, name, options) =>
 		`<label>${label}<select name="${name}">${options}</select></label>`;
+	async function reviewerSettingsDialog() {
+		const [{ reviewers }, catalog] = await Promise.all([
+			api('external-reviews', { action: 'settings' }),
+			api('models').catch(() => ({}))
+		]);
+		const models = catalog.claude || [];
+		const fields = reviewers
+			.map(({ role, model, persona }) => {
+				const custom = !!model && !models.some((option) => option.value === model);
+				const options = [
+					{ value: '', label: 'CLI default' },
+					...models,
+					{ value: '__custom__', label: 'Custom model…' }
+				]
+					.map(
+						(option) =>
+							`<option value="${esc(option.value)}" ${option.value === (custom ? '__custom__' : model) ? 'selected' : ''}>${esc(option.label)}</option>`
+					)
+					.join('');
+				return `<fieldset class="reviewer-settings"><legend>${esc(role)}</legend>${select('Model', `${role}Model`, options)}<label data-custom-model="${esc(role)}" ${custom ? '' : 'hidden'}>Custom model<input name="${esc(role)}CustomModel" value="${esc(custom ? model : '')}" placeholder="Model ID, such as a Bedrock inference profile"></label><label>Persona<textarea name="${esc(role)}Persona" rows="8">${esc(persona)}</textarea></label><button type="button" class="text-button" data-persona-default="${esc(role)}">Restore default persona</button></fieldset>`;
+			})
+			.join('');
+		modal(
+			'Reviewers',
+			'Changes apply from the next review. The review method, safety rules and output format stay fixed, so results can still be read.',
+			fields,
+			'Save',
+			async (body) => {
+				const saved = {};
+				for (const { role } of reviewers) {
+					const custom = body[`${role}Model`] === '__custom__';
+					const model = custom ? body[`${role}CustomModel`]?.trim() : body[`${role}Model`];
+					if (custom && !model) throw new Error(`Enter a custom model ID for the ${role}`);
+					saved[role] = { model, persona: body[`${role}Persona`] };
+				}
+				await api('external-reviews', { action: 'save-settings', reviewers: saved });
+			}
+		);
+		const form = $('#modal-form');
+		for (const { role, defaultPersona } of reviewers) {
+			form.elements[`${role}Model`].onchange = (event) => {
+				form.querySelector(`[data-custom-model="${role}"]`).hidden =
+					event.target.value !== '__custom__';
+			};
+			form.querySelector(`[data-persona-default="${role}"]`).onclick = () => {
+				form.elements[`${role}Persona`].value = defaultPersona;
+			};
+		}
+	}
 	const actions = {
+		'review-settings': reviewerSettingsDialog,
 		'conversation-fullscreen': () => {
 			const transcript = $('#transcript');
 			const top = transcript?.scrollTop ?? 0;

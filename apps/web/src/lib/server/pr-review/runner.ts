@@ -26,9 +26,24 @@ export const CODEX_ALLOWED_FOR_PR_REVIEW = false;
 
 // Exact names, plus the prefixes the CLIs use for auth and config. Everything else stays behind,
 // so server secrets such as DATABASE_URL can't reach an agent reading a stranger's PR, however
-// they were set. Workbench's agentEnv only removes what Corpus's own .env loaded.
-const ENV_NAMES = new Set(['HOME', 'USER', 'LOGNAME', 'SHELL', 'TERM', 'LANG', 'TMPDIR', 'PATH']);
-const ENV_PREFIXES = ['LC_', 'ANTHROPIC_', 'CLAUDE_', 'CODEX_', 'OPENAI_', 'AWS_REGION'];
+// they were set. Workbench's agentEnv only removes what Corpus's own .env loaded, so callers pass
+// its result through here as well. AWS_ carries Bedrock's credentials: these runs have no shell or
+// web tools, which is what keeps them from being read or sent anywhere.
+const ENV_NAMES = new Set([
+	'HOME',
+	'USER',
+	'LOGNAME',
+	'SHELL',
+	'TERM',
+	'LANG',
+	'TMPDIR',
+	'PATH',
+	'HTTP_PROXY',
+	'HTTPS_PROXY',
+	'NO_PROXY',
+	'NODE_EXTRA_CA_CERTS'
+]);
+const ENV_PREFIXES = ['LC_', 'ANTHROPIC_', 'CLAUDE_', 'CODEX_', 'OPENAI_', 'AWS_'];
 
 export function reviewEnv(env: Record<string, string | undefined>, searchPath?: string) {
 	const clean: Record<string, string> = {};

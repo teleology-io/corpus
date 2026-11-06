@@ -78,13 +78,15 @@ export interface ReviewOutcome {
 
 export async function reviewPullRequest(input: {
 	slots: [ReviewSlot, ReviewSlot];
+	/** Replaces a reviewer's built-in persona. */
+	personas?: Partial<Record<ReviewerRole, string | null>>;
 	bundleDir: string;
 	treeState: string;
 	partial: boolean;
 	headSha: string;
 	deps: ReviewDeps;
 }): Promise<ReviewOutcome> {
-	const { slots, bundleDir, treeState, deps } = input;
+	const { slots, personas, bundleDir, treeState, deps } = input;
 	let costUsd = 0;
 	const errors: string[] = [];
 	const call = async (slot: ReviewSlot, prompt: string, role: ReviewerRole) => {
@@ -96,7 +98,7 @@ export async function reviewPullRequest(input: {
 
 	// One retry on unusable output. A reviewer that still fails makes the whole review failed.
 	const firstPass = async (i: number): Promise<ReviewerResult | null> => {
-		const prompt = reviewPrompt(ROLES[i], bundleDir, treeState);
+		const prompt = reviewPrompt(ROLES[i], bundleDir, treeState, personas?.[ROLES[i]]);
 		for (let attempt = 0; attempt < 2; attempt++) {
 			deps.progress?.reviewer(ROLES[i], attempt ? 'retrying' : 'working');
 			const run = await call(slots[i], prompt, ROLES[i]);
@@ -127,7 +129,7 @@ export async function reviewPullRequest(input: {
 				deps.progress?.reviewer(role, 'checking');
 				const run = await call(
 					slots[i],
-					crosscheckPrompt(role, bundleDir, treeState, blockers),
+					crosscheckPrompt(role, bundleDir, treeState, blockers, personas?.[role]),
 					role
 				);
 				deps.progress?.reviewer(role, 'done');

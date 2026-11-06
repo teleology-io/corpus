@@ -178,6 +178,7 @@ export function mountWrx(root) {
 							['changes', 'code', 'Changes'],
 							['files', 'folder', 'Files'],
 							['tasks', 'check', 'Tasks'],
+							['reviews', 'branch', 'External reviews'],
 							['runtime', 'box', 'Environment']
 						]
 							.map(
@@ -186,7 +187,7 @@ export function mountWrx(root) {
 							)
 							.join(
 								''
-							)}</div><div class="content">${tab === 'overview' ? overview(chats) : tab === 'agents' ? agentView(chats) : tab === 'changes' ? changes() : tab === 'files' ? filesView() : tab === 'tasks' ? tasksView() : runtimeView()}</div>`
+							)}</div><div class="content">${tab === 'overview' ? overview(chats) : tab === 'agents' ? agentView(chats) : tab === 'changes' ? changes() : tab === 'files' ? filesView() : tab === 'tasks' ? tasksView() : tab === 'reviews' ? reviewsView() : runtimeView()}</div>`
 			}<footer><span><i class="live-dot"></i> Corpus / developer workbench</span><span>${esc(state.machine?.name || 'LOCAL FIRST')} <span class="footer-divider">/</span> v0.1.0</span></footer></section>`
 		);
 		const box = $('#message');
@@ -1197,6 +1198,99 @@ export function mountWrx(root) {
 			)
 			.join('')}</div>`;
 	}
+	// External reviews: other people's PRs. Everything shown here passes through esc(), because PR text
+	// and reviewer output are untrusted.
+	let externalReviews = null;
+	let externalReviewsError = '';
+	let externalReviewsLoading = false;
+	let externalReviewsTimer = null;
+	let reviewPreview = null;
+	async function loadExternalReviews() {
+		if (externalReviewsLoading) return;
+		externalReviewsLoading = true;
+		clearTimeout(externalReviewsTimer);
+		try {
+			externalReviews = await api('external-reviews');
+			externalReviewsError = '';
+		} catch (error) {
+			externalReviews ??= [];
+			externalReviewsError = error.message;
+		}
+		externalReviewsLoading = false;
+		if (tab === 'reviews') render();
+		if (tab === 'reviews' && externalReviews.some((r) => r.review?.status === 'running'))
+			externalReviewsTimer = setTimeout(loadExternalReviews, 5000);
+	}
+	async function reviewAction(body) {
+		await api('external-reviews', body);
+		await loadExternalReviews();
+	}
+	// "No issues" and "couldn't finish" must never look alike.
+	const REVIEW_STATES = {
+		running: ['Reviewing…', ''],
+		clean: ['No issues found', 'green'],
+		findings: ['Findings', 'amber'],
+		partial: ['Incomplete review', 'red'],
+		failed: ['Review failed', 'red'],
+		interrupted: ['Interrupted', 'red'],
+		stale: ['New commits since review', 'red']
+	};
+	const SEVERITY_ORDER = { blocker: 0, major: 1, minor: 2 };
+	function reviewFinding(reviewId, f) {
+		const dismissed = f.outcome === 'dismissed';
+		const where = f.file ? `${f.file}${f.line ? `:${f.line}` : ''}` : '';
+		return `<article class="review-finding ${esc(f.severity)}${dismissed ? ' dismissed' : ''}"><header><span class="severity">${esc(f.severity)}</span>${f.disputed ? '<span class="severity disputed">disputed</span>' : ''}${f.outcome === 'posted' ? '<span class="severity disputed">posted</span>' : ''}<strong>${esc(f.title)}</strong>${f.dropped ? '' : `<button class="text-button" data-review-dismiss="${esc(reviewId)}" data-finding="${esc(f.id)}">${dismissed ? 'Restore' : 'Dismiss'}</button>`}</header>${where ? `<code>${esc(where)}</code>` : ''}${f.trigger ? `<p><b>Trigger</b> ${esc(f.trigger)}</p>` : ''}${f.impact ? `<p><b>Impact</b> ${esc(f.impact)}</p>` : ''}${f.fix ? `<p><b>Fix</b> ${esc(f.fix)}</p>` : ''}${f.evidence?.length ? `<ul>${f.evidence.map((e) => `<li><code>${esc(e)}</code></li>`).join('')}</ul>` : ''}${f.dropped ? `<p><b>Refuted by the other reviewer</b></p><ul>${f.dropped.evidence.map((e) => `<li><code>${esc(e)}</code></li>`).join('')}</ul>` : ''}<small>Found by ${esc(f.reviewer)}</small></article>`;
+	}
+	function reviewPreviewPanel(reviewId) {
+		if (reviewPreview?.reviewId !== reviewId) return '';
+		return `<section class="review-preview"><h4>Preview: this posts to GitHub as your account, comment-only</h4>${reviewPreview.headMoved ? '<p class="review-warning">New commits landed since this review. Re-review before posting.</p>' : ''}<pre>${esc(reviewPreview.body)}</pre>${reviewPreview.comments.map((c) => `<code>${esc(c.path)}:${esc(c.line)}</code><pre>${esc(c.body)}</pre>`).join('')}<div class="actions"><button data-review-preview-close>Cancel</button>${reviewPreview.headMoved ? '' : `<button class="primary" data-review-post="${esc(reviewId)}">Post to GitHub</button>`}</div></section>`;
+	}
+	function reviewBody(r) {
+		if (r.status === 'running')
+			return '<p class="review-note">Two reviewers are reading this PR. This can take several minutes.</p>';
+		const sorted = [...r.findings].sort(
+			(a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
+		);
+		const live = sorted.filter((f) => !f.dropped);
+		const dropped = sorted.filter((f) => f.dropped);
+		const canPost = !r.postedUrl && live.some((f) => f.outcome !== 'dismissed');
+		return [
+			r.error ? `<p class="review-warning">${esc(r.error)}</p>` : '',
+			...r.notices.map((n) => `<p class="review-note">${esc(n)}</p>`),
+			r.notReviewed.length
+				? `<p class="review-warning">Not reviewed: ${r.notReviewed.map((n) => `${esc(n.path)}${n.reason ? ` (${esc(n.reason)})` : ''}`).join(', ')}</p>`
+				: '',
+			live.map((f) => reviewFinding(r.id, f)).join(''),
+			r.questions.length
+				? `<div class="review-note"><b>Questions</b><ul>${r.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ul></div>`
+				: '',
+			dropped.length
+				? `<details class="review-dropped"><summary>${dropped.length} refuted finding${dropped.length === 1 ? '' : 's'}</summary>${dropped.map((f) => reviewFinding(r.id, f)).join('')}</details>`
+				: '',
+			`<div class="review-meta"><span>${esc(r.headSha.slice(0, 10))} · $${Number(r.costUsd).toFixed(2)}</span>${r.postedUrl ? `<a href="${esc(r.postedUrl)}" target="_blank" rel="noreferrer">Posted to GitHub</a>` : canPost ? `<button class="text-button" data-review-preview="${esc(r.id)}">Preview and post</button>` : ''}</div>`,
+			reviewPreviewPanel(r.id)
+		].join('');
+	}
+	function reviewsView() {
+		if (externalReviews === null) {
+			queueMicrotask(loadExternalReviews);
+			return '<div class="section-title"><div><h2>External reviews</h2><p>Loading…</p></div></div>';
+		}
+		const running = externalReviews.some((x) => x.review?.status === 'running');
+		const cards = externalReviews
+			.map(({ id: itemId, title, subtitle, url, author, review: r }) => {
+				const [label, color] = r
+					? (REVIEW_STATES[r.status] ?? [r.status, 'red'])
+					: ['Not reviewed', ''];
+				const start =
+					r?.status === 'running'
+						? ''
+						: `<button ${running ? 'disabled' : ''} data-review-start="${esc(itemId)}">${r ? 'Re-review' : 'Review'}</button>`;
+				return `<section class="panel review-card"><div class="review-card-head"><div><a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(title)}</a><small>${esc(subtitle || '')}${author ? ` · ${esc(author)}` : ''}</small></div><div class="review-card-actions">${badge(label, color)}${start}</div></div>${r ? `<div class="review-card-body">${reviewBody(r)}</div>` : ''}</section>`;
+			})
+			.join('');
+		return `<div class="section-title"><div><h2>External reviews</h2><p>A first pass on other people's pull requests, private until you post it. It doesn't replace your review.</p></div></div>${externalReviewsError ? `<p class="review-warning">${esc(externalReviewsError)}</p>` : ''}${cards || `<div class="empty">${icon('branch')}<h3>Nothing waiting on you.</h3><p>Open pull requests that request your review appear here. Connect GitHub under Integrations if you haven't.</p></div>`}`;
+	}
 	function setupBanner(w) {
 		const p = w.provision;
 		if (p?.status === 'running')
@@ -1530,6 +1624,38 @@ export function mountWrx(root) {
 				tab = target.dataset.tab;
 				render();
 				if (tab === 'changes') await actions.diff();
+				if (tab === 'reviews') await loadExternalReviews();
+			}
+			if (target.dataset.reviewStart) {
+				await reviewAction({ action: 'start', itemId: target.dataset.reviewStart });
+				toast('Review started');
+			}
+			if (target.dataset.reviewDismiss)
+				await reviewAction({
+					action: 'dismiss',
+					reviewId: target.dataset.reviewDismiss,
+					findingId: target.dataset.finding
+				});
+			if (target.dataset.reviewPreview) {
+				const reviewId = target.dataset.reviewPreview;
+				reviewPreview = {
+					reviewId,
+					...(await api('external-reviews', { action: 'preview', reviewId }))
+				};
+				render();
+			}
+			if (target.dataset.reviewPreviewClose !== undefined) {
+				reviewPreview = null;
+				render();
+			}
+			if (target.dataset.reviewPost) {
+				const posted = await api('external-reviews', {
+					action: 'post',
+					reviewId: target.dataset.reviewPost
+				});
+				reviewPreview = null;
+				await loadExternalReviews();
+				toast(posted.url ? 'Posted to GitHub' : 'Posted');
 			}
 			if (target.dataset.restore) {
 				const snapshot = target.dataset.restore;
@@ -1865,7 +1991,7 @@ export function mountWrx(root) {
 			tab = 'overview';
 			localStorage.setItem('wrx.workspace', ws);
 		}
-		if (['overview', 'agents', 'files', 'tasks', 'runtime'].includes(params.get('tab')))
+		if (['overview', 'agents', 'files', 'tasks', 'reviews', 'runtime'].includes(params.get('tab')))
 			tab = params.get('tab');
 		if (params.get('chat')) {
 			if (params.get('chat') !== chatId) stopDictation();

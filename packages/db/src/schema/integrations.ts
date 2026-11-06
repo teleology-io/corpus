@@ -1,6 +1,7 @@
 import { relations, sql } from 'drizzle-orm';
 import {
 	boolean,
+	doublePrecision,
 	index,
 	integer,
 	jsonb,
@@ -105,6 +106,40 @@ export const integrationItem = pgTable(
 		index('integration_item_open_idx')
 			.on(t.connectionId, t.externalUpdatedAt)
 			.where(sql`${t.resolvedAt} is null`)
+	]
+);
+
+/** One Integration Review of one head commit of someone else's pull request. */
+export const prReview = pgTable(
+	'pr_review',
+	{
+		id: id(),
+		itemId: uuid('item_id')
+			.notNull()
+			.references(() => integrationItem.id, { onDelete: 'cascade' }),
+		userId: userRef('user_id').notNull(),
+		headSha: text('head_sha').notNull(),
+		/** The commit reviewers read: GitHub's test merge when available, otherwise the head. */
+		treeSha: text('tree_sha'),
+		/** running | clean | findings | partial | failed | interrupted | stale */
+		status: text('status').notNull().default('running'),
+		slots: jsonb('slots').$type<{ provider: string; model: string }[]>().notNull().default([]),
+		notices: jsonb('notices').$type<string[]>().notNull().default([]),
+		costUsd: doublePrecision('cost_usd').notNull().default(0),
+		findings: jsonb('findings').$type<Record<string, unknown>[]>().notNull().default([]),
+		questions: jsonb('questions').$type<string[]>().notNull().default([]),
+		notReviewed: jsonb('not_reviewed')
+			.$type<{ path: string; reason: string }[]>()
+			.notNull()
+			.default([]),
+		error: text('error'),
+		postedUrl: text('posted_url'),
+		createdAt: createdAt(),
+		updatedAt: updatedAt()
+	},
+	(t) => [
+		uniqueIndex('pr_review_item_head_unique').on(t.itemId, t.headSha),
+		index('pr_review_user_idx').on(t.userId, t.createdAt)
 	]
 );
 

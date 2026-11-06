@@ -6,6 +6,7 @@ import type { Provider, ProviderId } from './types';
 
 export * from './types';
 export * from './diff';
+export * from './github-pr';
 export * from './google';
 export * from './slack';
 export * from './ical';

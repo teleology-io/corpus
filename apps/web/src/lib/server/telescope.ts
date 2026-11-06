@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '@corpus/db';
 import { videoRole } from '@corpus/db/access';
@@ -93,8 +93,9 @@ export async function createDraft(ctx: Ctx, input: z.infer<typeof draftInput>) {
 	if (!ext) error(400, 'Unsupported video type');
 	const fileKey = `videos/${randomToken(18)}${ext}`;
 	const uploadId = await storage().createUpload(fileKey, base);
+	const named = input.title?.trim();
 	const title =
-		input.title?.trim() ||
+		named ||
 		`Recording ${new Date().toLocaleString('en-US', { timeZone: ctx.tz, dateStyle: 'medium', timeStyle: 'short' })}`;
 	const [row] = await db
 		.insert(video)
@@ -102,6 +103,7 @@ export async function createDraft(ctx: Ctx, input: z.infer<typeof draftInput>) {
 			workspaceId: ctx.workspaceId,
 			ownerId: ctx.userId,
 			title,
+			autoTitledAt: named ? new Date() : null,
 			mime: base,
 			fileKey,
 			uploadId
@@ -204,7 +206,22 @@ export const videoPatch = z.object({ title: z.string().trim().min(1).max(200) })
 
 export async function updateVideo(ctx: Ctx, id: string, patch: z.infer<typeof videoPatch>) {
 	await requireVideo(ctx, id);
-	await db.update(video).set({ title: patch.title }).where(eq(video.id, id));
+	// A rename settles the title, so an auto title still generating can't overwrite it.
+	await db
+		.update(video)
+		.set({ title: patch.title, autoTitledAt: new Date() })
+		.where(eq(video.id, id));
+}
+
+/** Sets the title from the transcript, at most once and never over the owner's rename. */
+export async function applyAutoTitle(ctx: Ctx, id: string, patch: z.infer<typeof videoPatch>) {
+	await requireVideo(ctx, id);
+	const rows = await db
+		.update(video)
+		.set({ title: patch.title, autoTitledAt: new Date() })
+		.where(and(eq(video.id, id), isNull(video.autoTitledAt)))
+		.returning({ id: video.id });
+	return { applied: rows.length > 0 };
 }
 
 /**
@@ -252,8 +269,9 @@ export const transcriptInput = z.union([
 	z.object({ failed: z.literal(true) })
 ]);
 
+/** `autoTitle` tells the client to generate a title, which only it can do (the model is on-device). */
 export async function saveTranscript(ctx: Ctx, id: string, input: z.infer<typeof transcriptInput>) {
-	await requireVideo(ctx, id);
+	const row = await requireVideo(ctx, id);
 	await db
 		.update(video)
 		.set(
@@ -262,6 +280,7 @@ export async function saveTranscript(ctx: Ctx, id: string, input: z.infer<typeof
 				: { transcript: input.segments, transcriptStatus: 'done' }
 		)
 		.where(eq(video.id, id));
+	return { autoTitle: !('failed' in input) && input.segments.length > 0 && !row.autoTitledAt };
 }
 
 // ── Views ───────────────────────────────────────────────────────────────────────────────

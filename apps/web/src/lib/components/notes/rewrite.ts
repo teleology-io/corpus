@@ -198,6 +198,15 @@ export async function rewriteModelStored() {
 	return typeof caches !== 'undefined' && caches.has(REWRITE_CACHE);
 }
 
+/** Every file is on disk, so using the model can't start a large download. */
+export async function rewriteModelComplete() {
+	// Checked first because caches.open would create the bucket, and rewriteModelStored looks for it.
+	if (typeof caches === 'undefined' || !(await caches.has(REWRITE_CACHE))) return false;
+	const cache = await caches.open(REWRITE_CACHE);
+	const hits = await Promise.all(REWRITE_DOWNLOAD.urls.map((url) => cache.match(url)));
+	return hits.every(Boolean);
+}
+
 /** Frees the disk space. */
 export async function removeRewriteModel() {
 	stopRewriteDownload();

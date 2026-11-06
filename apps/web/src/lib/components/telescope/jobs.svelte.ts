@@ -1,3 +1,4 @@
+import { autoTitleVideo } from './auto-title.js';
 import { transcribe, type TranscribeProgress } from './transcribe.js';
 
 export interface TranscriptJob {
@@ -20,6 +21,7 @@ async function save(id: string, body: unknown) {
 		body: JSON.stringify(body)
 	});
 	if (!res.ok) throw new Error('Could not save transcript');
+	return (await res.json()) as { autoTitle: boolean };
 }
 
 /** Transcribes `media` (or downloads the stored video first) and saves the result. */
@@ -33,8 +35,9 @@ export async function startTranscription(id: string, media?: Blob) {
 			media = await res.blob();
 		}
 		const segments = await transcribe(media, (p) => (jobs[id]!.progress = p));
-		await save(id, { segments });
+		const { autoTitle } = await save(id, { segments });
 		jobs[id]!.status = 'done';
+		if (autoTitle) void autoTitleVideo(id, segments);
 	} catch (e) {
 		const message = (e as Error).message || 'Transcription failed';
 		jobs[id] = { ...jobs[id]!, status: 'failed', error: message };

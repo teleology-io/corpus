@@ -49,6 +49,8 @@ export const telescopeVideo = pgTable(
 		transcript: jsonb('transcript').$type<TranscriptSegment[]>(),
 		/** pending | done | failed */
 		transcriptStatus: text('transcript_status').notNull().default('pending'),
+		/** Set once the title is settled, by the transcript-based auto title or the owner's rename. */
+		autoTitledAt: tstz('auto_titled_at'),
 		createdAt: createdAt(),
 		updatedAt: updatedAt()
 	},

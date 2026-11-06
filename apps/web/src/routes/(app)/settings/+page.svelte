@@ -320,7 +320,8 @@
 			<span class="flex min-w-0 flex-col">
 				<span class="font-semibold">Rewrite in notes</span>
 				<span class="text-sm text-muted">
-					Improve or clarify selected text. Runs in this browser, so your text stays on this device.
+					Improve or clarify selected text, and title new Telescope recordings from their transcript.
+					Runs in this browser, so your text stays on this device.
 				</span>
 			</span>
 			<Switch

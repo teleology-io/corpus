@@ -1482,6 +1482,18 @@ export function mountWrx(root) {
 			}
 		);
 	}
+	function commandDialog(task) {
+		modal(
+			task ? `Edit ${esc(task.name)}` : 'Add a command',
+			`Saved for every workspace in this project. It runs in the worktree with the workspace's ports and env values, but not in a shell, so <code>&amp;&amp;</code> and <code>$FOO</code> stay literal. To use a shell, write <code>sh -c "…"</code>.`,
+			`${field('Name', 'name', 'e.g. Dev server', task?.name)}${field('Command', 'line', 'e.g. bin/dev --port 3000', task?.text)}<label>Folder, if not the checkout's root<input name="cwd" placeholder="e.g. services/api" value="${esc(task?.cwd)}"></label>`,
+			task ? 'Save command' : 'Add command',
+			async (body) => {
+				await api('run-command', { workspaceId, commandId: task?.custom, ...body });
+				await loadRunTasks();
+			}
+		);
+	}
 	function runView() {
 		const runs = (state.commandRuns || []).filter((r) => r.workspaceId === workspaceId).reverse();
 		if (runner.workspace !== workspaceId) {
@@ -1537,13 +1549,13 @@ export function mountWrx(root) {
 				? ''
 				: t.variant
 					? `<button data-run-variant-edit="${esc(t.variant.id)}" data-run-task="${esc(t.parent.id)}">Edit</button><button data-run-variant-delete="${esc(t.variant.id)}">Remove</button>`
-					: `<button data-run-variant-add="${esc(t.id)}">${icon('plus')}Variant</button>`;
+					: `${t.custom ? `<button data-run-command-edit="${esc(t.id)}">Edit</button><button data-run-command-delete="${esc(t.custom)}">Remove</button>` : ''}<button data-run-variant-add="${esc(t.id)}">${icon('plus')}Variant</button>`;
 			return `<div class="run-item ${t.variant ? 'run-variant' : ''}"><div class="run-task"><div class="run-task-text"><b>${esc(t.name)}</b><code>${esc(t.line)}</code>${t.detail ? `<small>${esc(t.detail)}</small>` : ''}</div><div class="run-task-actions">${own.length ? runBadge(own[0]) : ''}${toggle}${manage}${action}</div></div>${open ? runOutput(t, own, shown) : ''}</div>`;
 		};
 		const taskList = !runner.tasks
 			? '<div class="empty compact panel"><p>Looking for commands…</p></div>'
 			: !tasks.length && !runner.error
-				? `<div class="empty panel">${icon('terminal')}<h3>No commands found.</h3><p>Workbench looks in this checkout's root for package.json scripts, Make and Just targets, pyproject.toml scripts, Go and Rust projects, and a Compose file.</p></div>`
+				? `<div class="empty panel">${icon('terminal')}<h3>No commands found.</h3><p>Workbench looks in this checkout's root for common project files, and in the workspaces they list. Add a command to run something else.</p><button data-run-command-add>${icon('plus')}Add command</button></div>`
 				: [...sources]
 						.map(
 							([source, list]) =>
@@ -1570,7 +1582,7 @@ export function mountWrx(root) {
 		const clear = runs.some((r) => r.status !== 'running')
 			? '<button data-run-clear>Clear finished</button>'
 			: '';
-		return `<div class="section-title"><div><h2>Run this checkout.</h2><p>Commands this branch declares, run in its worktree with its ports, env values and Docker target. They run on this computer as you.</p></div><div class="run-title-actions">${clear}<button data-run-refresh>${icon('refresh')}Refresh</button></div></div>${notes.map((n) => `<p class="runtime-note run-warning">${esc(n)}</p>`).join('')}${runner.error ? `<p class="error">${esc(runner.error)}</p>` : ''}${taskList}`;
+		return `<div class="section-title"><div><h2>Run this checkout.</h2><p>Commands this branch declares and ones you've added, run in its worktree with its ports, env values and Docker target. They run on this computer as you.</p></div><div class="run-title-actions">${clear}<button data-run-command-add>${icon('plus')}Add command</button><button data-run-refresh>${icon('refresh')}Refresh</button></div></div>${notes.map((n) => `<p class="runtime-note run-warning">${esc(n)}</p>`).join('')}${runner.error ? `<p class="error">${esc(runner.error)}</p>` : ''}${taskList}`;
 	}
 	async function createWorkspace(input) {
 		const w = await api('workspaces', input);
@@ -1989,6 +2001,21 @@ export function mountWrx(root) {
 				runner.opened.add(run.taskId);
 				runner.selected.delete(run.taskId);
 				await refresh();
+			} else if (target.dataset.runCommandAdd !== undefined) {
+				commandDialog();
+			} else if (target.dataset.runCommandEdit) {
+				commandDialog(runner.tasks.find((t) => t.id === target.dataset.runCommandEdit));
+			} else if (target.dataset.runCommandDelete) {
+				const commandId = target.dataset.runCommandDelete;
+				confirmDanger(
+					'Remove this command?',
+					'It and its variants are removed for every workspace in this project. Past runs stay until you delete them.',
+					'Remove command',
+					async () => {
+						await api('run-command-delete', { workspaceId, commandId });
+						await loadRunTasks();
+					}
+				);
 			} else if (target.dataset.runVariantAdd) {
 				variantDialog(runner.tasks.find((t) => t.id === target.dataset.runVariantAdd));
 			} else if (target.dataset.runVariantEdit) {

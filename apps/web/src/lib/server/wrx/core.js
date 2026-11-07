@@ -24,13 +24,17 @@ import {
 	worktreesDirectory,
 	writeEnvFile
 } from './provision.js';
+import { discoverCommands } from './discover.js';
 import {
 	commandLine,
-	discoverCommands,
+	customTask,
+	parseCommand,
 	parseEnvLines,
 	parseFlags,
+	parseFolder,
 	readLogTail,
-	withFlags
+	withFlags,
+	withVirtualenv
 } from './runner.js';
 const exec = promisify(execFile);
 const GIT_WORKTREE_TIMEOUT = 5 * 60000;
@@ -1459,7 +1463,11 @@ export class Engine {
 		};
 	}
 	commandsFor(w) {
-		return discoverCommands(w.path, { composeProject: composeProject(w) });
+		const saved = this.store.state.projects.find((p) => p.id === w.projectId)?.runCommands || [];
+		return [
+			...discoverCommands(w.path, { composeProject: composeProject(w) }),
+			...saved.map(customTask)
+		];
 	}
 	runLogFile(runId) {
 		return path.join(this.store.directory, 'run-logs', `${runId}.log`);
@@ -1518,7 +1526,43 @@ export class Engine {
 		this.changed();
 		return {};
 	}
-	// Takes a task id, never a command: only what this checkout declares right now can be started.
+	// Custom commands belong to the project, like variants, so every worktree has them.
+	runCommandSave(input) {
+		const w = this.store.get('workspaces', input.workspaceId);
+		const project = this.store.get('projects', w.projectId);
+		const name = requireText(input.name, 'Command name', 60);
+		const line = String(input.line ?? '').trim();
+		if (line.length > 1000) throw new Error('Command is too long (maximum 1000 characters)');
+		parseCommand(line);
+		const cwd = parseFolder(input.cwd);
+		project.runCommands ??= [];
+		if (project.runCommands.some((c) => c.name === name && c.id !== input.commandId))
+			throw new Error(`There is already a custom command named "${name}"`);
+		const fields = { name, line, cwd };
+		let saved;
+		if (input.commandId) {
+			saved = project.runCommands.find((c) => c.id === input.commandId);
+			if (!saved) throw new Error('This command no longer exists');
+			Object.assign(saved, fields);
+		} else {
+			saved = { id: id(), ...fields };
+			project.runCommands.push(saved);
+		}
+		this.changed();
+		return saved;
+	}
+	runCommandDelete(workspaceId, commandId) {
+		const w = this.store.get('workspaces', workspaceId);
+		const project = this.store.get('projects', w.projectId);
+		project.runCommands = (project.runCommands || []).filter((c) => c.id !== commandId);
+		project.runVariants = (project.runVariants || []).filter(
+			(v) => v.taskId !== `custom:${commandId}`
+		);
+		this.changed();
+		return {};
+	}
+	// Takes a task id, never a command: only what this checkout declares right now, or a command saved
+	// on the project, can be started.
 	runStart(workspaceId, taskId, variantId) {
 		const w = this.store.get('workspaces', workspaceId);
 		if (w.provision?.status === 'running') throw new Error('Workspace setup is still running');
@@ -1527,6 +1571,9 @@ export class Engine {
 		if (environment?.busy) throw new Error('An environment operation is running');
 		const task = this.commandsFor(w).find((t) => t.id === taskId);
 		if (!task) throw new Error('This command is no longer in the workspace. Refresh the list.');
+		const cwd = task.cwd ? path.join(w.path, task.cwd) : w.path;
+		if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory())
+			throw new Error(`This checkout has no folder named ${task.cwd || w.path}`);
 		let variant = null;
 		if (variantId) {
 			variant = this.store
@@ -1563,7 +1610,8 @@ export class Engine {
 		const header = `$ ${run.line}\n${envNames.length ? `Env values set: ${envNames.join(', ')}\n` : ''}`;
 		fs.writeFileSync(file, header, { mode: 0o600 });
 		commandRuns.push(run);
-		if (task.command === 'docker' && !environment) w.composeOnHost = true;
+		// Removing the workspace takes down this project name, which a custom command doesn't use.
+		if (task.command === 'docker' && !task.custom && !environment) w.composeOnHost = true;
 		const finish = (status, exitCode, error) => {
 			if (run.status !== 'running') return;
 			run.status = status;
@@ -1577,8 +1625,8 @@ export class Engine {
 		let child;
 		try {
 			child = this.spawn(invocation.command, invocation.args, {
-				cwd: w.path,
-				env: { ...this.workspaceEnv(w, environment), ...variant?.env },
+				cwd,
+				env: { ...withVirtualenv(this.workspaceEnv(w, environment), cwd, w.path), ...variant?.env },
 				detached: process.platform !== 'win32',
 				stdio: ['ignore', 'pipe', 'pipe']
 			});

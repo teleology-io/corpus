@@ -454,6 +454,12 @@ export async function handleWrx({ request, url, route, userId }) {
 			case 'run-variant-delete':
 				result = engine.runVariantDelete(body.workspaceId, body.variantId);
 				break;
+			case 'run-command':
+				result = engine.runCommandSave(body);
+				break;
+			case 'run-command-delete':
+				result = engine.runCommandDelete(body.workspaceId, body.commandId);
+				break;
 			case 'run-delete':
 				result = engine.runDelete(body.runId);
 				break;

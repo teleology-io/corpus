@@ -1,156 +1,13 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment -- plain JS, like the rest of wrx */
 // @ts-nocheck — plain JS, like the rest of wrx.
-// Finds the commands a checkout declares, for the Run tab. Only reads known files: nothing here runs
-// repository code, and a command is an executable and argument array, never a shell string. Dynamic or
-// parameterized declarations are skipped rather than evaluated.
+// How the Run tab turns a command into a process and its output into text.
 import fs from 'node:fs';
 import path from 'node:path';
+import { findVirtualenv } from './discover.js';
 
-const READ_LIMIT = 1 << 20;
-const TASK_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
-const PYTHON_ENTRY =
-	/^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*["'][A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*["']\s*(#.*)?$/;
-const LOCKFILES = [
-	['pnpm-lock.yaml', 'pnpm'],
-	['yarn.lock', 'yarn'],
-	['bun.lock', 'bun'],
-	['bun.lockb', 'bun'],
-	['package-lock.json', 'npm']
-];
-const PACKAGE_MANAGERS = new Set(LOCKFILES.map(([, manager]) => manager));
-// The same names, in the same order, as Compose actions on the Environment tab.
-const COMPOSE_FILES = ['compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml'];
-
-function isFile(file) {
-	try {
-		return fs.statSync(file).isFile();
-	} catch {
-		return false;
-	}
-}
-
-function readLimited(file) {
-	let fd;
-	try {
-		fd = fs.openSync(file, 'r');
-		if (!fs.fstatSync(fd).isFile()) return null;
-		const buffer = Buffer.alloc(READ_LIMIT);
-		return buffer.toString('utf8', 0, fs.readSync(fd, buffer, 0, READ_LIMIT, 0));
-	} catch {
-		return null;
-	} finally {
-		if (fd !== undefined) fs.closeSync(fd);
-	}
-}
-
-function task(source, name, command, args = [], detail = '') {
-	return { id: `${source}:${name}`, name, source, command, args, detail };
-}
-
-export function packageManager(directory, declared) {
-	const named = typeof declared === 'string' ? declared.split('@')[0] : '';
-	if (PACKAGE_MANAGERS.has(named)) return named;
-	return LOCKFILES.find(([file]) => isFile(path.join(directory, file)))?.[1] ?? 'npm';
-}
-
-function packageTasks(directory) {
-	const raw = readLimited(path.join(directory, 'package.json'));
-	if (raw === null) return [];
-	let parsed;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		return [];
-	}
-	const scripts = parsed?.scripts;
-	if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) return [];
-	const manager = packageManager(directory, parsed.packageManager);
-	return Object.keys(scripts)
-		.filter((name) => name && !name.startsWith('-') && typeof scripts[name] === 'string')
-		.sort()
-		.map((name) => task('package.json', name, manager, ['run', name], scripts[name]));
-}
-
-// Top-level `name:` rules only. Variables, pattern rules and recipes with parameters don't match.
-function ruleNames(raw) {
-	const names = new Set();
-	for (const line of raw.split(/\r?\n/)) {
-		if (!line || line[0] === ' ' || line[0] === '\t' || line[0] === '#') continue;
-		const colon = line.indexOf(':');
-		if (colon < 0 || line[colon + 1] === '=') continue;
-		const name = line.slice(0, colon);
-		if (TASK_NAME.test(name)) names.add(name);
-	}
-	return [...names];
-}
-
-function pythonNames(raw) {
-	const names = new Set();
-	let section = '';
-	for (const line of raw.split(/\r?\n/).map((l) => l.trim())) {
-		if (line.startsWith('[')) section = line;
-		else if (section === '[project.scripts]') {
-			const match = line.match(PYTHON_ENTRY);
-			if (match) names.add(match[1]);
-		}
-	}
-	return [...names];
-}
-
-// A case-insensitive filesystem opens Makefile and makefile as one file, so they're listed once.
-function textTasks(directory) {
-	const tasks = [];
-	const inspected = new Set();
-	for (const file of [
-		'Makefile',
-		'makefile',
-		'GNUmakefile',
-		'justfile',
-		'Justfile',
-		'pyproject.toml'
-	]) {
-		const full = path.join(directory, file);
-		if (!isFile(full)) continue;
-		const stat = fs.statSync(full);
-		const identity = `${stat.dev}:${stat.ino}`;
-		if (inspected.has(identity)) continue;
-		inspected.add(identity);
-		const raw = readLimited(full);
-		if (raw === null) continue;
-		if (file === 'pyproject.toml') {
-			for (const name of pythonNames(raw)) tasks.push(task(file, name, name));
-		} else if (file.toLowerCase() === 'justfile') {
-			// A leading underscore is Just's convention for a private recipe.
-			for (const name of ruleNames(raw))
-				if (!name.startsWith('_')) tasks.push(task(file, name, 'just', [name]));
-		} else {
-			for (const name of ruleNames(raw)) tasks.push(task(file, name, 'make', ['-f', file, name]));
-		}
-	}
-	return tasks;
-}
-
-function composeTasks(directory, composeProject) {
-	const file = COMPOSE_FILES.find((f) => isFile(path.join(directory, f)));
-	if (!file) return [];
-	// Foreground `up`, so its output streams here and Stop stops the containers.
-	const base = ['compose', ...(composeProject ? ['-p', composeProject] : []), '-f', file];
-	return [
-		task(file, 'Compose up', 'docker', [...base, 'up']),
-		task(file, 'Compose down', 'docker', [...base, 'down'])
-	];
-}
-
-export function discoverCommands(directory, { composeProject } = {}) {
-	const tasks = packageTasks(directory);
-	if (isFile(path.join(directory, 'go.mod')))
-		tasks.push(task('go.mod', 'Test Go packages', 'go', ['test', './...']));
-	if (isFile(path.join(directory, 'Cargo.toml')))
-		tasks.push(task('Cargo.toml', 'Test Rust packages', 'cargo', ['test']));
-	return [...tasks, ...textTasks(directory), ...composeTasks(directory, composeProject)];
-}
-
-export const commandLine = (t) => [t.command, ...t.args].join(' ');
+// For display and for agents. A task is never run from this string.
+export const commandLine = (t) =>
+	`${t.cwd ? `cd ${t.cwd} && ` : ''}${[t.command, ...t.args].join(' ')}`;
 
 // Splits a variant's flags the way a shell would split words, and nothing else: `$FOO`, `&&` and
 // globs stay literal, since no shell ever sees them.
@@ -176,6 +33,60 @@ export function parseFlags(text = '') {
 	if (quote) throw new Error('Flags have an unclosed quote');
 	if (word !== null) args.push(word);
 	return args;
+}
+
+const SHELL_OPERATORS = new Set(['&&', '||', '|', ';', '>', '>>', '<', '&']);
+
+// A custom command's text as an executable and arguments. What would only work in a shell is refused
+// here, since it would otherwise fail later with a confusing "isn't installed".
+export function parseCommand(text = '') {
+	const [command, ...args] = parseFlags(text);
+	if (!command) throw new Error('Enter a command to run');
+	if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(command))
+		throw new Error('Set env values on a variant of this command, not in the command itself');
+	if (args.some((arg) => SHELL_OPERATORS.has(arg)))
+		throw new Error(`Commands don't run in a shell. To use one, write: sh -c "your command"`);
+	return { command, args };
+}
+
+// A command saved on the project, as a task like any a checkout declares.
+export function customTask(saved) {
+	return {
+		id: `custom:${saved.id}`,
+		name: saved.name,
+		source: 'Custom',
+		...parseCommand(saved.line),
+		detail: '',
+		custom: saved.id,
+		text: saved.line,
+		...(saved.cwd ? { cwd: saved.cwd } : {})
+	};
+}
+
+// A folder inside the checkout, as a clean relative path. '' is the checkout itself.
+export function parseFolder(text = '') {
+	const folder = String(text).trim();
+	if (!folder) return '';
+	const clean = path.posix.normalize(folder.replaceAll('\\', '/')).replace(/\/+$/, '');
+	if (path.posix.isAbsolute(clean) || /^[A-Za-z]:/.test(clean) || clean.split('/').includes('..'))
+		throw new Error('Folder must be inside this checkout');
+	return clean === '.' ? '' : clean;
+}
+
+// What activating a project's virtualenv would do, using the nearest one to where the command runs.
+export function withVirtualenv(env, ...directories) {
+	for (const directory of directories) {
+		const venv = findVirtualenv(directory);
+		if (!venv) continue;
+		const bin = path.join(venv, process.platform === 'win32' ? 'Scripts' : 'bin');
+		const pathKey = Object.keys(env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+		return {
+			...env,
+			VIRTUAL_ENV: venv,
+			[pathKey]: env[pathKey] ? `${bin}${path.delimiter}${env[pathKey]}` : bin
+		};
+	}
+	return env;
 }
 
 // `NAME=value` per line. `export` and surrounding quotes are accepted, so a line pasted from a shell

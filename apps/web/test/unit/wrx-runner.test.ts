@@ -4,17 +4,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Engine, Store } from '../../src/lib/server/wrx/core.js';
+import { discoverCommands, packageManager } from '../../src/lib/server/wrx/discover.js';
 import {
-	discoverCommands,
-	packageManager,
+	parseCommand,
 	parseEnvLines,
 	parseFlags,
+	parseFolder,
 	readLogTail,
-	withFlags
+	withFlags,
+	withVirtualenv
 } from '../../src/lib/server/wrx/runner.js';
 
 let dir: string;
-const write = (name: string, text: string) => fs.writeFileSync(path.join(dir, name), text);
+const write = (name: string, text: string) => {
+	fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+	fs.writeFileSync(path.join(dir, name), text);
+};
 const lines = (options?: { composeProject?: string }) =>
 	discoverCommands(dir, options).map((t: { command: string; args: string[] }) =>
 		[t.command, ...t.args].join(' ')
@@ -64,7 +69,55 @@ describe('discoverCommands', () => {
 				'build:'
 			].join('\n')
 		);
-		expect(lines()).toEqual(['make -f Makefile build', 'make -f Makefile test']);
+		expect(lines()).toEqual([
+			'make -f Makefile build',
+			'make -f Makefile a',
+			'make -f Makefile b',
+			'make -f Makefile test'
+		]);
+	});
+
+	it('does not mistake Make variables, conditionals or define bodies for targets', () => {
+		write(
+			'Makefile',
+			[
+				'FOO::=x',
+				'FOO ::= x',
+				'BAR = a:b',
+				'BAZ ?= a:b',
+				'ifeq (a,b:c)',
+				'include x:y',
+				'-include x:y',
+				'define BODY',
+				'inner: no',
+				'endef',
+				'lint:: deps'
+			].join('\n')
+		);
+		expect(lines()).toEqual(['make -f Makefile lint']);
+	});
+
+	it('reads Just recipe forms that run without arguments', () => {
+		write(
+			'.justfile',
+			[
+				'version := "1"',
+				'@quiet:',
+				'[private]',
+				'hidden:',
+				'[group("x")]',
+				'# a comment between',
+				'grouped:',
+				'[doc("a: b")]',
+				'[private, no-cd]',
+				'hidden2:',
+				'deploy env="a:b" *rest: quiet',
+				'plus +rest:',
+				'mixed a b="x":',
+				'with-env $FOO="y":'
+			].join('\n')
+		);
+		expect(lines()).toEqual(['just quiet', 'just grouped', 'just deploy', 'just with-env']);
 	});
 
 	it('finds parameterless Just recipes and skips private and parameterized ones', () => {
@@ -98,10 +151,291 @@ describe('discoverCommands', () => {
 		expect(lines()).toEqual(['serve']);
 	});
 
-	it('adds test commands for Go and Rust', () => {
+	it('adds test, build and lint commands for Go and Rust', () => {
 		write('go.mod', 'module x');
 		write('Cargo.toml', '');
-		expect(lines()).toEqual(['go test ./...', 'cargo test']);
+		expect(lines()).toEqual([
+			'go test ./...',
+			'go build ./...',
+			'go vet ./...',
+			'cargo test',
+			'cargo build',
+			'cargo clippy',
+			'cargo fmt --check'
+		]);
+	});
+
+	it('runs Go main packages at the root and under cmd', () => {
+		write('go.mod', 'module x');
+		write('main.go', '// doc\npackage main\n');
+		write('cmd/api/main.go', 'package main\n');
+		write('cmd/lib/lib.go', 'package lib\n');
+		write('cmd/only-test/x_test.go', 'package main\n');
+		expect(lines().slice(0, 2)).toEqual(['go run .', 'go run ./cmd/api']);
+	});
+
+	it('runs Rust binaries, naming them when cargo would refuse to guess', () => {
+		write('Cargo.toml', '[package]\nname = "app"\n');
+		expect(lines()).not.toContain('cargo run');
+		write('src/main.rs', '');
+		expect(lines()[0]).toBe('cargo run');
+		write('src/bin/tool.rs', '');
+		expect(lines().slice(0, 2)).toEqual(['cargo run --bin app', 'cargo run --bin tool']);
+		write('Cargo.toml', '[package]\nname = "app"\ndefault-run = "app"\n');
+		expect(lines()[0]).toBe('cargo run');
+		expect(lines()).toContain('cargo run --bin tool');
+	});
+
+	it('offers no cargo run for a virtual workspace', () => {
+		write('Cargo.toml', '[workspace]\nmembers = ["a"]\n');
+		write('src/main.rs', '');
+		expect(lines()).not.toContain('cargo run');
+	});
+
+	it('reads Poetry, PDM and Hatch scripts', () => {
+		write(
+			'pyproject.toml',
+			[
+				'[tool.poetry.scripts]',
+				'serve = "a.b:c"',
+				'[tool.pdm.scripts]',
+				'_ = { env_file = ".env" }',
+				'lint = "ruff"',
+				'[tool.pdm.scripts.fmt]',
+				'cmd = "x"',
+				'[tool.hatch.envs.default.scripts]',
+				'cov = "x"',
+				'[tool.hatch.envs.docs.scripts]',
+				'build = "x"'
+			].join('\n')
+		);
+		expect(lines()).toEqual(
+			expect.arrayContaining([
+				'poetry run serve',
+				'pdm run lint',
+				'pdm run fmt',
+				'hatch run cov',
+				'hatch run docs:build'
+			])
+		);
+		expect(lines().join()).not.toContain('run _');
+	});
+
+	it('runs Python tools through the project runner', () => {
+		write('pyproject.toml', '[project.scripts]\nserve = "a.b:c"\n[tool.ruff]\nline-length = 1\n');
+		write('requirements-dev.txt', 'pytest==8\n');
+		write('uv.lock', '');
+		expect(lines()).toEqual([
+			'uv run serve',
+			'uv run pytest',
+			'uv run ruff check .',
+			'uv run ruff format --check .'
+		]);
+	});
+
+	it('finds Django, and only Django, from manage.py', () => {
+		write('manage.py', 'print("not it")');
+		expect(lines()).toEqual([]);
+		write('manage.py', 'os.environ.setdefault("DJANGO_SETTINGS_MODULE", "a")');
+		expect(lines()[0]).toBe('python3 manage.py runserver');
+		write('.venv/pyvenv.cfg', '');
+		expect(lines()[0]).toBe('python manage.py runserver');
+	});
+
+	it('uses the Gradle and Maven wrappers when a checkout has them', () => {
+		write('build.gradle.kts', 'plugins {\n  application\n  id("org.springframework.boot")\n}');
+		expect(lines()).toEqual(['gradle bootRun', 'gradle run', 'gradle test', 'gradle build']);
+		write('gradlew', '');
+		expect(lines()[0]).toBe('./gradlew bootRun');
+		fs.rmSync(path.join(dir, 'build.gradle.kts'));
+		fs.rmSync(path.join(dir, 'gradlew'));
+		write('pom.xml', '<artifactId>spring-boot-starter</artifactId>');
+		write('mvnw', '');
+		expect(lines()).toEqual(['./mvnw spring-boot:run', './mvnw test', './mvnw package']);
+	});
+
+	it('reads Composer scripts without their event hooks, and Laravel commands', () => {
+		write(
+			'composer.json',
+			JSON.stringify({
+				scripts: { test: ['a', 'b'], 'post-install-cmd': 'x', 'lint:fix': 'y' }
+			})
+		);
+		write('artisan', '');
+		write('phpunit.xml', '');
+		expect(lines()).toEqual([
+			'composer run-script lint:fix',
+			'composer run-script test',
+			'php artisan serve',
+			'php artisan test',
+			'php artisan migrate'
+		]);
+		expect(discoverCommands(dir)[1].detail).toBe('a && b');
+	});
+
+	it('reads Rake tasks, Rails and bundled tools', () => {
+		write(
+			'Rakefile',
+			[
+				'task :build do',
+				'task test: :build',
+				'task "release"',
+				'RSpec::Core::RakeTask.new(:spec)',
+				'namespace :db do',
+				'  task :nested',
+				'end'
+			].join('\n')
+		);
+		expect(lines()).toEqual(['rake build', 'rake release', 'rake spec', 'rake test']);
+		write('Gemfile', 'gem "rspec"\ngem "rubocop"');
+		write('spec/a_spec.rb', '');
+		write('bin/rails', '');
+		expect(lines()).toEqual([
+			'./bin/rails server',
+			'./bin/rails test',
+			'./bin/rails db:migrate',
+			'bundle exec rake build',
+			'bundle exec rake release',
+			'bundle exec rake spec',
+			'bundle exec rake test',
+			'bundle exec rspec',
+			'bundle exec rubocop'
+		]);
+	});
+
+	it('finds mix commands, with Phoenix when it is a dependency', () => {
+		write('mix.exs', '{:phoenix, "~> 1.7"}');
+		expect(lines()).toEqual([
+			'mix phx.server',
+			'mix test',
+			'mix compile',
+			'mix format --check-formatted'
+		]);
+	});
+
+	it('names the dotnet target only when the folder holds several', () => {
+		write('App.csproj', '<OutputType>Exe</OutputType>');
+		expect(lines()).toEqual(['dotnet run --project App.csproj', 'dotnet test', 'dotnet build']);
+		write('App.sln', '');
+		expect(lines()).toEqual([
+			'dotnet run --project App.csproj',
+			'dotnet test App.sln',
+			'dotnet build App.sln'
+		]);
+		write('App.csproj', '<Project Sdk="Microsoft.NET.Sdk"></Project>');
+		expect(lines()).toEqual(['dotnet test App.sln', 'dotnet build App.sln']);
+	});
+
+	it('reads Deno tasks from JSON with comments', () => {
+		write(
+			'deno.jsonc',
+			'{\n// "x": "http://no"\n"tasks": { /* c */ "dev": "deno run http://a.b/c", "b": { "command": "x" }, },\n}'
+		);
+		expect(lines()).toEqual(['deno task b', 'deno task dev', 'deno test']);
+		expect(discoverCommands(dir)[1].detail).toBe('deno run http://a.b/c');
+	});
+
+	it('reads Taskfile tasks and skips internal and templated ones', () => {
+		write(
+			'Taskfile.yml',
+			[
+				'version: "3"',
+				'vars:',
+				'  NOPE: no',
+				'tasks:',
+				'  build:',
+				'    cmds:',
+				'      - go build',
+				'  hidden:',
+				'    internal: true',
+				'  "db:migrate":',
+				'    cmds: [x]',
+				'  short: go test',
+				'  "{{.NAME}}":',
+				'    cmds: [x]',
+				'includes:',
+				'  other: x'
+			].join('\n')
+		);
+		expect(lines()).toEqual(['task build', 'task db:migrate', 'task short']);
+	});
+
+	describe('workspaces', () => {
+		const scripts = (name: string) =>
+			write(`${name}/package.json`, JSON.stringify({ scripts: { dev: 'x' } }));
+
+		it('lists package scripts with the root package manager, to run in their folder', () => {
+			write('package.json', JSON.stringify({ scripts: { all: 'x' }, workspaces: ['apps/*'] }));
+			write('yarn.lock', '');
+			scripts('apps/web');
+			scripts('other/no');
+			expect(lines()).toEqual(['yarn run all', 'yarn run dev']);
+			expect(discoverCommands(dir)[1]).toMatchObject({
+				id: 'apps/web/package.json:dev',
+				source: 'apps/web/package.json',
+				cwd: 'apps/web',
+				command: 'yarn'
+			});
+		});
+
+		it('reads the object form of workspaces', () => {
+			write('package.json', JSON.stringify({ workspaces: { packages: ['libs/**'] } }));
+			scripts('libs/a/b');
+			expect(discoverCommands(dir).map((t: { cwd: string }) => t.cwd)).toEqual(['libs/a/b']);
+		});
+
+		it('reads pnpm-workspace.yaml, with exclusions, and needs no root package.json', () => {
+			write(
+				'pnpm-workspace.yaml',
+				[
+					'packages:',
+					"  - 'apps/*'",
+					'  - packages/** # all',
+					'  - "!packages/skip"',
+					'catalog:',
+					'  - nope/*'
+				].join('\n')
+			);
+			for (const name of ['apps/a', 'packages/b/c', 'packages/skip', 'nope/d']) scripts(name);
+			const found = discoverCommands(dir);
+			expect(found.map((t: { cwd: string }) => t.cwd)).toEqual(['apps/a', 'packages/b/c']);
+			expect(found[0].command).toBe('pnpm');
+		});
+
+		it('does not follow links or leave the checkout', () => {
+			const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-outside-'));
+			try {
+				fs.writeFileSync(path.join(outside, 'package.json'), '{"scripts":{"x":"y"}}');
+				write('package.json', JSON.stringify({ workspaces: ['apps/*', '../*', outside] }));
+				fs.mkdirSync(path.join(dir, 'apps'));
+				fs.symlinkSync(outside, path.join(dir, 'apps', 'link'));
+				expect(discoverCommands(dir)).toEqual([]);
+			} finally {
+				fs.rmSync(outside, { recursive: true, force: true });
+			}
+		});
+
+		it('skips node_modules', () => {
+			write('package.json', JSON.stringify({ workspaces: ['**'] }));
+			scripts('node_modules/dep');
+			scripts('apps/a');
+			expect(discoverCommands(dir).map((t: { cwd: string }) => t.cwd)).toEqual(['apps/a']);
+		});
+
+		it('reads go.work modules in both forms', () => {
+			write('go.work', 'go 1.22\nuse ./one\nuse (\n\t./two // two\n\t../away\n)\n');
+			write('one/go.mod', 'module one');
+			write('two/go.mod', 'module two');
+			write('two/main.go', 'package main');
+			const found = discoverCommands(dir);
+			expect(found.map((t: { cwd: string }) => t.cwd)).toEqual(
+				expect.arrayContaining(['one', 'two'])
+			);
+			expect(found.find((t: { args: string[] }) => t.args[0] === 'run')).toMatchObject({
+				id: 'two/go.mod:Run',
+				cwd: 'two'
+			});
+		});
 	});
 
 	it('adds Compose commands under the project name it is given', () => {
@@ -145,6 +479,61 @@ describe('parseFlags', () => {
 
 	it('refuses an unclosed quote', () => {
 		expect(() => parseFlags('"open')).toThrow(/unclosed/);
+	});
+});
+
+describe('parseCommand', () => {
+	it('splits a command into an executable and arguments', () => {
+		expect(parseCommand('bin/dev --port "3 0"')).toEqual({
+			command: 'bin/dev',
+			args: ['--port', '3 0']
+		});
+		expect(parseCommand(`sh -c "a && b"`).args).toEqual(['-c', 'a && b']);
+	});
+
+	it('refuses what would only work in a shell', () => {
+		expect(() => parseCommand('  ')).toThrow(/Enter a command/);
+		expect(() => parseCommand('FOO=1 npm test')).toThrow(/variant/);
+		expect(() => parseCommand('make a && make b')).toThrow(/sh -c/);
+		expect(() => parseCommand('ls | wc')).toThrow(/sh -c/);
+	});
+});
+
+describe('parseFolder', () => {
+	it('cleans a relative folder', () => {
+		expect(parseFolder('')).toBe('');
+		expect(parseFolder(' . ')).toBe('');
+		expect(parseFolder('./a//b/')).toBe('a/b');
+		expect(parseFolder('a\\b')).toBe('a/b');
+	});
+
+	it('refuses anything outside the checkout', () => {
+		for (const bad of ['/etc', '..', '../a', 'a/../..', 'C:\\x'])
+			expect(() => parseFolder(bad), bad).toThrow(/inside this checkout/);
+	});
+});
+
+describe('withVirtualenv', () => {
+	const bin = (folder: string) => path.join(dir, folder, 'bin');
+
+	it('leaves the env alone without one', () => {
+		const env = { PATH: '/usr/bin' };
+		expect(withVirtualenv(env, dir)).toBe(env);
+	});
+
+	it('activates the first one found, and needs a real virtualenv', () => {
+		fs.mkdirSync(bin('venv'), { recursive: true });
+		expect(withVirtualenv({ PATH: '/usr/bin' }, dir)).toEqual({ PATH: '/usr/bin' });
+		write('venv/pyvenv.cfg', '');
+		expect(withVirtualenv({ PATH: '/usr/bin' }, path.join(dir, 'missing'), dir)).toEqual({
+			PATH: `${bin('venv')}${path.delimiter}/usr/bin`,
+			VIRTUAL_ENV: path.join(dir, 'venv')
+		});
+		write('.venv/pyvenv.cfg', '');
+		expect(withVirtualenv({}, dir)).toEqual({
+			PATH: bin('.venv'),
+			VIRTUAL_ENV: path.join(dir, '.venv')
+		});
 	});
 });
 
@@ -500,6 +889,108 @@ describe('Engine commands', () => {
 			expect(engine.runTasks('second')[0].variants).toHaveLength(1);
 			expect(engine.runTasks('third')[0].variants).toEqual([]);
 		});
+	});
+
+	describe('custom commands', () => {
+		const save = (fields: object = {}) =>
+			engine.runCommandSave({ workspaceId, name: 'Serve', line: 'bin/dev --port 3000', ...fields });
+
+		it('runs as saved, with no shell, and lists under Custom', () => {
+			const saved = save();
+			const task = engine
+				.runTasks(workspaceId)
+				.find((t: { custom?: string }) => t.custom === saved.id);
+			expect(task).toMatchObject({ source: 'Custom', line: 'bin/dev --port 3000' });
+			const run = engine.runStart(workspaceId, task.id);
+			expect(spawned[0]).toMatchObject({ bin: 'bin/dev', args: ['--port', '3000'] });
+			expect(run).toMatchObject({ name: 'Serve', source: 'Custom' });
+		});
+
+		it('runs in its folder, and says so when a checkout lacks it', () => {
+			const saved = save({ cwd: './services/api/' });
+			expect(saved.cwd).toBe('services/api');
+			const key = `custom:${saved.id}`;
+			expect(() => engine.runStart(workspaceId, key)).toThrow(/no folder named services\/api/);
+			expect(spawned).toEqual([]);
+			fs.mkdirSync(path.join(dir, 'repo', 'services', 'api'), { recursive: true });
+			const run = engine.runStart(workspaceId, key);
+			expect(spawned[0].options.cwd).toBe(path.join(dir, 'repo', 'services', 'api'));
+			expect(run.line).toBe('cd services/api && bin/dev --port 3000');
+		});
+
+		it('takes variants, and removes them with the command', () => {
+			const saved = save();
+			const key = `custom:${saved.id}`;
+			const variant = engine.runVariantSave({ workspaceId, taskId: key, name: 'x', flags: '-v' });
+			engine.runStart(workspaceId, key, variant.id);
+			expect(spawned[0].args).toEqual(['--port', '3000', '-v']);
+			engine.runCommandDelete(workspaceId, saved.id);
+			expect(engine.store.get('projects', 'p').runVariants).toEqual([]);
+			expect(() => engine.runStart(workspaceId, key)).toThrow(/no longer/);
+		});
+
+		it('validates what it saves and edits in place', () => {
+			expect(() => save({ name: ' ' })).toThrow(/name/);
+			expect(() => save({ line: ' ' })).toThrow(/Enter a command/);
+			expect(() => save({ line: 'a && b' })).toThrow(/sh -c/);
+			expect(() => save({ cwd: '../up' })).toThrow(/inside this checkout/);
+			const saved = save();
+			expect(() => save()).toThrow(/already a custom command/);
+			expect(() => save({ commandId: 'gone', name: 'Other' })).toThrow(/no longer exists/);
+			const edited = save({ commandId: saved.id, line: 'bin/other' });
+			expect(edited.id).toBe(saved.id);
+			expect(engine.store.get('projects', 'p').runCommands).toHaveLength(1);
+		});
+
+		it('is shared by every workspace in the project and not by others', () => {
+			save();
+			const { state } = engine.store;
+			state.workspaces.push({ ...state.workspaces[0], id: 'second' });
+			state.projects.push({ id: 'q', name: 'other', path: state.workspaces[0].path });
+			state.workspaces.push({ ...state.workspaces[0], id: 'third', projectId: 'q' });
+			const custom = (id: string) =>
+				engine.runTasks(id).filter((t: { source: string }) => t.source === 'Custom');
+			expect(custom('second')).toHaveLength(1);
+			expect(custom('third')).toEqual([]);
+		});
+
+		it('does not mark the workspace as using host Compose', () => {
+			const saved = save({ name: 'ps', line: 'docker ps' });
+			engine.runStart(workspaceId, `custom:${saved.id}`);
+			expect(engine.store.state.workspaces[0].composeOnHost).toBeUndefined();
+		});
+	});
+
+	it('runs a workspace package in its own folder', () => {
+		const repo = path.join(dir, 'repo');
+		const packageJson = path.join(repo, 'package.json');
+		fs.writeFileSync(packageJson, JSON.stringify({ workspaces: ['apps/*'] }));
+		fs.mkdirSync(path.join(repo, 'apps', 'web'), { recursive: true });
+		fs.writeFileSync(
+			path.join(repo, 'apps', 'web', 'package.json'),
+			JSON.stringify({ scripts: { dev: 'vite' } })
+		);
+		const run = engine.runStart(workspaceId, 'apps/web/package.json:dev');
+		expect(spawned[0].options.cwd).toBe(path.join(repo, 'apps', 'web'));
+		expect(run.line).toBe('cd apps/web && npm run dev');
+	});
+
+	it('activates the checkout virtualenv, which a variant can override', () => {
+		const repo = path.join(dir, 'repo');
+		fs.mkdirSync(path.join(repo, '.venv'));
+		fs.writeFileSync(path.join(repo, '.venv', 'pyvenv.cfg'), '');
+		const variant = engine.runVariantSave({
+			workspaceId,
+			taskId: 'package.json:test',
+			name: 'x',
+			env: 'VIRTUAL_ENV=/other'
+		});
+		engine.runStart(workspaceId, 'package.json:dev');
+		engine.runStart(workspaceId, 'package.json:test', variant.id);
+		const env = (i: number) => spawned[i].options.env as { PATH: string; VIRTUAL_ENV: string };
+		expect(env(0).VIRTUAL_ENV).toBe(path.join(repo, '.venv'));
+		expect(env(0).PATH.split(path.delimiter)[0]).toBe(path.join(repo, '.venv', 'bin'));
+		expect(env(1).VIRTUAL_ENV).toBe('/other');
 	});
 
 	it('tells a new agent which commands the checkout has', () => {

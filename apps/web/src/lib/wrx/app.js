@@ -11,7 +11,7 @@ const attachments = new Map(); // chatId → [{ name, type, data (base64), url (
 
 export function mountWrx(root) {
 	root.innerHTML =
-		'<div id="app"></div><dialog id="dialog"></dialog><dialog id="switcher" class="switcher" aria-label="Switch workspace"></dialog>';
+		'<div id="app"></div><dialog id="dialog"></dialog><dialog id="switcher" class="switcher" aria-label="Switch workspace" autofocus></dialog><dialog id="conversations" class="conversations-drawer" aria-label="Conversations" autofocus></dialog>';
 	let destroyed = false,
 		events = null;
 	const listeners = [];
@@ -42,6 +42,7 @@ export function mountWrx(root) {
 			'<circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4M5 5l3 3m8 8 3 3M5 19l3-3m8-8 3-3"/>',
 		search: '<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',
 		chevron: '<path d="m9 6 6 6-6 6"/>',
+		menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
 		folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
 		file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/>',
 		music:
@@ -132,7 +133,7 @@ export function mountWrx(root) {
 	}
 	function switcherHtml() {
 		const tree = projectTree(state.projects, current(), true);
-		return `<div class="switcher-body"><div class="modal-title"><h2>Switch workspace</h2><button class="square" data-close aria-label="Close">×</button></div><nav class="switcher-tree" aria-label="Projects">${
+		return `<div class="switcher-body"><div class="modal-title"><h2>Switch workspace</h2></div><nav class="switcher-tree" aria-label="Projects">${
 			tree ||
 			`<div class="switcher-empty"><p>Add your first project</p><button class="primary" data-action="project">${icon('plus')}Add project</button></div>`
 		}</nav><div class="sidebar-bottom">${tree ? `<button data-action="project">${icon('plus')}Add project</button>` : ''}<button data-action="search">${icon('search')}Search</button><button data-action="environments">${icon('box')}Environments<span>${state.environments.length}</span></button><button data-action="computers">${icon('terminal')}Computers</button><button data-action="settings">${icon('settings')}Connections</button></div></div>`;
@@ -181,6 +182,7 @@ export function mountWrx(root) {
 	function render() {
 		if (destroyed) return;
 		if ($('#switcher').open) patch($('#switcher'), switcherHtml());
+		if ($('#conversations').open) patch($('#conversations'), conversationsHtml());
 		const w = current(),
 			p = project();
 		const chats = state.chats.filter((c) => c.workspaceId === w?.id);
@@ -691,6 +693,28 @@ export function mountWrx(root) {
 		await session.start();
 	}
 	const stopDictation = () => voice.session?.stop();
+	// Shared by the desktop conversation column and the mobile conversations drawer.
+	function conversationListHtml(chats, chat) {
+		const list = chats
+			.slice()
+			.reverse()
+			.map((c) => {
+				const lives = c.members.filter((m) => m.status === 'running');
+				const live = lives[0];
+				const last = c.messages.findLast((m) => m.role !== 'system' && m.text);
+				return `<div class="conversation-row"><button class="conversation ${chat?.id === c.id ? 'selected' : ''}" data-chat="${c.id}"><span class="conversation-title">${live ? '<i class="live-dot"></i>' : ''}${esc(c.title)}</span><span class="avatar-stack">${c.members.slice(0, 5).map(avatar).join('')}${c.members.length > 5 ? `<small>+${c.members.length - 5}</small>` : ''}</span><small>${live ? `${lives.map((m) => `@${esc(m.handle)}`).join(', ')} ${lives.length > 1 ? 'are' : 'is'} working…` : c.status === 'queued' ? 'Queued' : last ? esc(`${last.role === 'user' ? 'You' : member(c, last.memberId)?.name || 'Agent'}: ${last.text.replace(/\s+/g, ' ').slice(0, 60)}`) : `${c.members.length} agent${c.members.length === 1 ? '' : 's'} · ${esc(c.status)}`}</small></button><button class="row-delete" data-delete-chat="${c.id}" title="Delete conversation" aria-label="Delete conversation ${esc(c.title)}">${icon('trash')}</button></div>`;
+			})
+			.join('');
+		return `<div class="panel-heading"><h3>Conversations</h3><button class="square" data-action="chat" aria-label="New conversation">${icon('plus')}</button></div>${list || '<p class="muted inset">Start a thread to begin.</p>'}`;
+	}
+	function conversationsHtml() {
+		const w = current();
+		const chats = state.chats.filter((c) => c.workspaceId === w?.id);
+		return `<div class="conversation-list">${conversationListHtml(
+			chats,
+			chats.find((c) => c.id === chatId)
+		)}</div>`;
+	}
 	function agentView(chats) {
 		let chat = chats.find((c) => c.id === chatId);
 		if (!chat && chats.length) {
@@ -708,18 +732,8 @@ export function mountWrx(root) {
 		const working = chat?.members.filter((m) => m.status === 'running') || [];
 		const running = working[0];
 		const queued = chat?.members.filter((m) => m.status === 'queued') || [];
-		const list = chats
-			.slice()
-			.reverse()
-			.map((c) => {
-				const lives = c.members.filter((m) => m.status === 'running');
-				const live = lives[0];
-				const last = c.messages.findLast((m) => m.role !== 'system' && m.text);
-				return `<div class="conversation-row"><button class="conversation ${chat?.id === c.id ? 'selected' : ''}" data-chat="${c.id}"><span class="conversation-title">${live ? '<i class="live-dot"></i>' : ''}${esc(c.title)}</span><span class="avatar-stack">${c.members.slice(0, 5).map(avatar).join('')}${c.members.length > 5 ? `<small>+${c.members.length - 5}</small>` : ''}</span><small>${live ? `${lives.map((m) => `@${esc(m.handle)}`).join(', ')} ${lives.length > 1 ? 'are' : 'is'} working…` : c.status === 'queued' ? 'Queued' : last ? esc(`${last.role === 'user' ? 'You' : member(c, last.memberId)?.name || 'Agent'}: ${last.text.replace(/\s+/g, ' ').slice(0, 60)}`) : `${c.members.length} agent${c.members.length === 1 ? '' : 's'} · ${esc(c.status)}`}</small></button><button class="row-delete" data-delete-chat="${c.id}" title="Delete conversation" aria-label="Delete conversation ${esc(c.title)}">${icon('trash')}</button></div>`;
-			})
-			.join('');
 		const draft = drafts.get(chatId) || '';
-		return `<div class="agent-layout"><div class="conversation-list"><div class="panel-heading"><h3>Conversations</h3><button class="square" data-action="chat" aria-label="New conversation">${icon('plus')}</button></div>${list || '<p class="muted inset">Start a thread to begin.</p>'}</div><section class="conversation-main">${chat ? `<div class="chat-heading"><div class="chat-title"><h3>${esc(chat.title)}</h3><small>${chat.members.length} agent${chat.members.length === 1 ? '' : 's'} · ${esc(running ? 'working' : chat.status)}${chat.members.some((m) => m.costUsd) ? ` · ${money(chat.members.reduce((s, m) => s + (m.costUsd || 0), 0))}` : ''}</small></div><div class="roster">${chat.members.map((m) => `<button class="member ${m.status}" data-member="${m.id}" title="${esc(`${m.name} (@${m.handle}) · ${m.provider} / ${MODE_LABELS[m.mode]}${m.role ? `\n${m.role}` : ''}`)}">${avatar(m)}<span>${esc(m.name)}</span>${m.id === chat.leadId ? '<em title="Thread lead">★</em>' : ''}<i class="member-state"></i></button>`).join('')}${btn('Add agent', 'add-member', 'plus')}<button data-action="conversation-fullscreen" aria-label="${conversationFullscreen ? 'Minimize conversation' : 'Expand conversation to full screen'}" aria-pressed="${conversationFullscreen}" title="${conversationFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(conversationFullscreen ? 'minimize' : 'expand')}<span>${conversationFullscreen ? 'Minimize' : 'Full screen'}</span></button>${running || queued.length ? btn('Stop', 'cancel', 'check') : ''}</div></div><div id="transcript" class="transcript">${!chat.messages.length ? `<div class="empty thread-welcome"><span class="logo">✻</span><h3>What should the team work on?</h3><p>Messages go to the thread lead, <b>@${esc(member(chat, chat.leadId)?.handle || '')}</b>, unless you @mention someone.<br>Agents hand work to each other with @mentions. Read-only agents work in parallel; agents that edit files take turns.</p><div class="tips"><span><kbd>@</kbd> mention an agent</span><span><kbd>@all</kbd> everyone</span><span><kbd>/</kbd> commands</span><span><kbd>Esc</kbd> stop</span></div></div>` : chat.messages.map((m) => messageView(chat, m)).join('')}${running ? `<div class="working"><span class="spark">✻</span>${working.map((m) => `<b>${esc(m.name)}</b>`).join(', ')} ${working.length > 1 ? 'are' : 'is'} working…${queued.length ? ` <span>Up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</span>` : ''}<span class="esc">esc to stop</span></div>` : queued.length ? `<div class="working"><i class="live-dot"></i> Waiting for the workspace · up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</div>` : ''}${chat.events.length ? `<details class="activity-log" data-open="events:${chat.id}" ${openKeys.has(`events:${chat.id}`) ? 'open' : ''}><summary>Activity & diagnostics (${chat.events.length})</summary><pre class="activity">${esc(chat.events.join('\n'))}</pre></details>` : ''}</div><button class="jump hidden" data-action="jump" aria-label="Scroll to latest">↓</button>${todoBar(chat)}<form id="message-form" class="composer"><div id="composer-menu">${menuView()}</div><div id="attachments" class="attachments" ${attachments.get(chatId)?.length ? '' : 'hidden'}>${attachmentsView(chatId)}</div><div id="dictation-status" class="dictation-status ${voice.partial ? 'partial' : ''}" ${voice.status === 'idle' ? 'hidden' : ''} aria-live="polite"><i></i><span>${esc(dictationText())}</span></div><textarea id="message" name="message" placeholder="Message ${esc(chat.title)} — @mention agents, / for commands" rows="3" aria-label="Message to agents"></textarea><div class="composer-bar"><div class="composer-left"><button type="button" class="ib" data-action="mention" title="Mention an agent" aria-label="Mention an agent">@</button><button type="button" class="ib" data-action="slash" title="Commands" aria-label="Commands">/</button><button type="button" class="ib" data-action="attach" title="Attach images — or drop / paste them" aria-label="Attach images">${icon('image')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><button type="button" id="mic" class="ib mic ${voice.status}" data-action="dictate" title="${micTitle()}" aria-label="Voice input" aria-pressed="${voice.status === 'listening'}">${icon('mic')}</button><span id="recipients" class="recipients">${recipientsLabel(chat, draft)}</span></div><div class="composer-right"><small>Enter to send · ⇧Enter for a new line</small><button class="primary" aria-label="Send">Send ${icon('arrow')}</button></div></div></form>` : `<div class="empty"><h3>Your team is ready.</h3><p>Start a thread with one or more agents — a lead, designer, engineer, marketer…</p>${btn('New conversation', 'chat', 'plus', 'primary')}</div>`}</section></div>`;
+		return `<div class="agent-layout"><div class="conversation-list">${conversationListHtml(chats, chat)}</div><section class="conversation-main">${chat ? `<div class="chat-heading"><button class="square conversations-toggle" data-action="conversations" aria-label="Conversations" aria-haspopup="dialog">${icon('menu')}${chats.some((c) => c.id !== chat.id && c.members.some((m) => m.status === 'running')) ? '<i class="live-dot"></i>' : ''}</button><div class="chat-title"><h3>${esc(chat.title)}</h3><small>${chat.members.length} agent${chat.members.length === 1 ? '' : 's'} · ${esc(running ? 'working' : chat.status)}${chat.members.some((m) => m.costUsd) ? ` · ${money(chat.members.reduce((s, m) => s + (m.costUsd || 0), 0))}` : ''}</small></div><div class="roster">${chat.members.map((m) => `<button class="member ${m.status}" data-member="${m.id}" title="${esc(`${m.name} (@${m.handle}) · ${m.provider} / ${MODE_LABELS[m.mode]}${m.role ? `\n${m.role}` : ''}`)}">${avatar(m)}<span>${esc(m.name)}</span>${m.id === chat.leadId ? '<em title="Thread lead">★</em>' : ''}<i class="member-state"></i></button>`).join('')}${btn('Add agent', 'add-member', 'plus')}<button data-action="conversation-fullscreen" aria-label="${conversationFullscreen ? 'Minimize conversation' : 'Expand conversation to full screen'}" aria-pressed="${conversationFullscreen}" title="${conversationFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(conversationFullscreen ? 'minimize' : 'expand')}<span>${conversationFullscreen ? 'Minimize' : 'Full screen'}</span></button>${running || queued.length ? btn('Stop', 'cancel', 'check') : ''}</div></div><div id="transcript" class="transcript">${!chat.messages.length ? `<div class="empty thread-welcome"><span class="logo">✻</span><h3>What should the team work on?</h3><p>Messages go to the thread lead, <b>@${esc(member(chat, chat.leadId)?.handle || '')}</b>, unless you @mention someone.<br>Agents hand work to each other with @mentions. Read-only agents work in parallel; agents that edit files take turns.</p><div class="tips"><span><kbd>@</kbd> mention an agent</span><span><kbd>@all</kbd> everyone</span><span><kbd>/</kbd> commands</span><span><kbd>Esc</kbd> stop</span></div></div>` : chat.messages.map((m) => messageView(chat, m)).join('')}${running ? `<div class="working"><span class="spark">✻</span>${working.map((m) => `<b>${esc(m.name)}</b>`).join(', ')} ${working.length > 1 ? 'are' : 'is'} working…${queued.length ? ` <span>Up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</span>` : ''}<span class="esc">esc to stop</span></div>` : queued.length ? `<div class="working"><i class="live-dot"></i> Waiting for the workspace · up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</div>` : ''}${chat.events.length ? `<details class="activity-log" data-open="events:${chat.id}" ${openKeys.has(`events:${chat.id}`) ? 'open' : ''}><summary>Activity & diagnostics (${chat.events.length})</summary><pre class="activity">${esc(chat.events.join('\n'))}</pre></details>` : ''}</div><button class="jump hidden" data-action="jump" aria-label="Scroll to latest">↓</button>${todoBar(chat)}<form id="message-form" class="composer"><div id="composer-menu">${menuView()}</div><div id="attachments" class="attachments" ${attachments.get(chatId)?.length ? '' : 'hidden'}>${attachmentsView(chatId)}</div><div id="dictation-status" class="dictation-status ${voice.partial ? 'partial' : ''}" ${voice.status === 'idle' ? 'hidden' : ''} aria-live="polite"><i></i><span>${esc(dictationText())}</span></div><textarea id="message" name="message" placeholder="Message ${esc(chat.title)} — @mention agents, / for commands" rows="3" aria-label="Message to agents"></textarea><div class="composer-bar"><div class="composer-left"><button type="button" class="ib" data-action="mention" title="Mention an agent" aria-label="Mention an agent">@</button><button type="button" class="ib" data-action="slash" title="Commands" aria-label="Commands">/</button><button type="button" class="ib" data-action="attach" title="Attach images — or drop / paste them" aria-label="Attach images">${icon('image')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><button type="button" id="mic" class="ib mic ${voice.status}" data-action="dictate" title="${micTitle()}" aria-label="Voice input" aria-pressed="${voice.status === 'listening'}">${icon('mic')}</button><span id="recipients" class="recipients">${recipientsLabel(chat, draft)}</span></div><div class="composer-right"><small>Enter to send · ⇧Enter for a new line</small><button class="primary" aria-label="Send">Send ${icon('arrow')}</button></div></div></form>` : `<div class="empty"><h3>Your team is ready.</h3><p>Start a thread with one or more agents — a lead, designer, engineer, marketer…</p>${btn('New conversation', 'chat', 'plus', 'primary')}</div>`}</section></div>`;
 	}
 	const recipientsLabel = (chat, text) =>
 		`→ ${recipients(chat, text)
@@ -1745,6 +1759,11 @@ export function mountWrx(root) {
 			patch(d, switcherHtml());
 			if (!d.open) d.showModal();
 		},
+		conversations: () => {
+			const d = $('#conversations');
+			patch(d, conversationsHtml());
+			if (!d.open) d.showModal();
+		},
 		project: () => openProject(),
 		workspace: async () => {
 			const base = current().branch === 'detached HEAD' ? 'HEAD' : current().branch;
@@ -1959,8 +1978,12 @@ export function mountWrx(root) {
 	// workspace or action, so follow-up dialogs open on their own. Esc closes it natively.
 	on($('#switcher'), 'click', (event) => {
 		const d = $('#switcher');
-		if (event.target === d || event.target.closest('[data-close], [data-action], [data-workspace]'))
-			d.close();
+		if (event.target === d || event.target.closest('[data-action], [data-workspace]')) d.close();
+	});
+	// Picking or starting a conversation closes the drawer; deleting one keeps it open.
+	on($('#conversations'), 'click', (event) => {
+		const d = $('#conversations');
+		if (event.target === d || event.target.closest('[data-action], [data-chat]')) d.close();
 	});
 	on(root, 'click', async (event) => {
 		const target = event.target.closest('button');

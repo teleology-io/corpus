@@ -10,7 +10,8 @@ const drafts = new Map();
 const attachments = new Map(); // chatId → [{ name, type, data (base64), url (data: preview) }]
 
 export function mountWrx(root) {
-	root.innerHTML = '<div id="app"></div><dialog id="dialog"></dialog>';
+	root.innerHTML =
+		'<div id="app"></div><dialog id="dialog"></dialog><dialog id="switcher" class="switcher" aria-label="Switch workspace"></dialog>';
 	let destroyed = false,
 		events = null;
 	const listeners = [];
@@ -102,6 +103,40 @@ export function mountWrx(root) {
 			render();
 		}
 	});
+	// Project → workspace rows, shared by the sidebar and the mobile "Switch workspace" sheet.
+	function projectTree(projects, w, sheet = false) {
+		return projects
+			.map(
+				(p) =>
+					`<div class="project-label">${icon('code')}<span>${esc(p.name)}</span>${sheet ? '' : `<button class="row-delete" data-delete-project="${p.id}" title="Remove project" aria-label="Remove project ${esc(p.name)}">${icon('trash')}</button>`}</div>${state.workspaces
+						.filter((x) => x.projectId === p.id)
+						.map((x) => {
+							const chats = state.chats.filter((c) => c.workspaceId === x.id);
+							const live = chats.some((c) => c.status === 'running');
+							const selected = w?.id === x.id;
+							const running =
+								chats.reduce(
+									(n, c) => n + c.members.filter((m) => m.status === 'running').length,
+									0
+								) || chats.filter((c) => c.status === 'running').length;
+							const status = !live
+								? ''
+								: sheet
+									? `<small class="running"><i class="live-dot"></i>${running} running</small>`
+									: '<i class="live-dot"></i>';
+							return `<button class="workspace-link ${selected ? 'selected' : ''}" data-workspace="${x.id}"${sheet && selected ? ' aria-current="true"' : ''}>${icon('branch')}<span>${esc(x.name)}</span>${status}${sheet && selected ? icon('check') : ''}</button>`;
+						})
+						.join('')}`
+			)
+			.join('');
+	}
+	function switcherHtml() {
+		const tree = projectTree(state.projects, current(), true);
+		return `<div class="switcher-body"><div class="modal-title"><h2>Switch workspace</h2><button class="square" data-close aria-label="Close">×</button></div><nav class="switcher-tree" aria-label="Projects">${
+			tree ||
+			`<div class="switcher-empty"><p>Add your first project</p><button class="primary" data-action="project">${icon('plus')}Add project</button></div>`
+		}</nav><div class="sidebar-bottom">${tree ? `<button data-action="project">${icon('plus')}Add project</button>` : ''}<button data-action="search">${icon('search')}Search</button><button data-action="environments">${icon('box')}Environments<span>${state.environments.length}</span></button><button data-action="computers">${icon('terminal')}Computers</button><button data-action="settings">${icon('settings')}Connections</button></div></div>`;
+	}
 	function chooseWorkspace(id) {
 		stopDictation();
 		workspaceId = id;
@@ -145,6 +180,7 @@ export function mountWrx(root) {
 	}
 	function render() {
 		if (destroyed) return;
+		if ($('#switcher').open) patch($('#switcher'), switcherHtml());
 		const w = current(),
 			p = project();
 		const chats = state.chats.filter((c) => c.workspaceId === w?.id);
@@ -160,22 +196,11 @@ export function mountWrx(root) {
 		patch(
 			$('#app'),
 			`<aside class="sidebar"><div class="sidebar-top"><span class="eyebrow">YOUR WORKBENCH</span><button class="square" data-action="project" aria-label="Add project">${icon('plus')}</button></div><button class="search" data-action="search" aria-label="Search Corpus">${icon('search')}<span>Search Corpus…</span><kbd>${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd></button><nav><div class="nav-label">PROJECTS <span>${state.projects.length}</span></div>${
-				filtered
-					.map(
-						(p) =>
-							`<div class="project-label">${icon('code')}<span>${esc(p.name)}</span><button class="row-delete" data-delete-project="${p.id}" title="Remove project" aria-label="Remove project ${esc(p.name)}">${icon('trash')}</button></div>${state.workspaces
-								.filter((x) => x.projectId === p.id)
-								.map(
-									(x) =>
-										`<button class="workspace-link ${w?.id === x.id ? 'selected' : ''}" data-workspace="${x.id}">${icon('branch')}<span>${esc(x.name)}</span>${state.chats.some((c) => c.workspaceId === x.id && c.status === 'running') ? '<i class="live-dot"></i>' : ''}</button>`
-								)
-								.join('')}`
-					)
-					.join('') || '<p class="nav-empty">Your projects will appear here.</p>'
+				projectTree(filtered, w) || '<p class="nav-empty">Your projects will appear here.</p>'
 			}</nav><div class="sidebar-bottom"><button data-action="environments">${icon('box')}Environments<span>${state.environments.length}</span></button><button data-action="computers">${icon('terminal')}Computers</button><button data-action="settings">${icon('settings')}Connections<span class="live-dot"></span></button><div class="user"><span class="avatar">${icon('terminal')}</span><div>Local workbench<small>On your machine. In your control.</small></div></div></div></aside><section class="wrx-main"><header><div class="breadcrumbs">Workbench${p ? ` ${icon('chevron')} <span>${esc(p.name)}</span> ${icon('chevron')} <strong>${esc(w.name)}</strong>` : ''}</div><div class="header-right">${((n) => badge(`${n} agent${n === 1 ? '' : 's'} running`, n ? 'green' : ''))(active.reduce((s, c) => s + c.members.filter((m) => m.status === 'running').length, 0))}<button class="machine-button" data-action="computers">${icon('terminal')} ${esc(state.machine?.name || 'This computer')}${state.remote ? ' · Remote' : ''}</button></div></header>${
 				!w
 					? welcome()
-					: `<section class="workspace-header"><div><div class="eyebrow">PROJECT WORKSPACE</div><h1>${esc(w.name)}<span class="workspace-tag">${icon('branch')}${esc(w.branch)}</span></h1><p>${esc(p.path)}</p></div><div class="actions">${w.path === p.path ? '' : btn('Delete workspace', 'workspace-delete', 'trash')}${btn('New workspace', 'workspace', 'branch')}${btn('New agent', 'chat', 'plus', 'primary')}</div></section>${setupBanner(w)}<div class="tabs">${[
+					: `<section class="workspace-header"><div><div class="eyebrow">PROJECT WORKSPACE</div><h1><span class="workspace-name">${esc(w.name)}</span><button class="workspace-switch" data-action="switcher" aria-haspopup="dialog" aria-label="${esc(w.name)}, switch workspace"><span>${esc(w.name)}</span>${icon('chevron')}</button><span class="workspace-tag">${icon('branch')}${esc(w.branch)}</span></h1><p>${esc(p.path)}</p></div><div class="actions">${w.path === p.path ? '' : btn('Delete workspace', 'workspace-delete', 'trash')}${btn('New workspace', 'workspace', 'branch')}${btn('New agent', 'chat', 'plus', 'primary')}</div></section>${setupBanner(w)}<div class="tabs">${[
 							['overview', 'grid', 'Overview'],
 							['agents', 'chat', 'Agent chats'],
 							['changes', 'code', 'Changes'],
@@ -205,6 +230,22 @@ export function mountWrx(root) {
 		} else renderedChat = null;
 		for (const log of $('#app').querySelectorAll('.run-output .runtime-log'))
 			if (!scrolledRunLogs.has(log.id)) log.scrollTop = log.scrollHeight;
+		// On narrow screens the tab strip scrolls sideways; bring the active tab into view only when the
+		// tab (or workspace) changes, so live refreshes never yank the strip around. Only scrollLeft is
+		// touched, so the page itself never scrolls.
+		const tabKey = w ? `${w.id}:${tab}` : null;
+		if (tabKey !== renderedTab) {
+			renderedTab = tabKey;
+			const strip = $('#app .tabs'),
+				active = strip?.querySelector('.active');
+			if (strip && active && strip.scrollWidth > strip.clientWidth) {
+				const left = active.offsetLeft - strip.offsetLeft,
+					right = left + active.offsetWidth;
+				if (left < strip.scrollLeft) strip.scrollLeft = left - 18;
+				else if (right > strip.scrollLeft + strip.clientWidth)
+					strip.scrollLeft = right - strip.clientWidth + 32;
+			}
+		}
 	}
 	function welcome() {
 		return `<div class="welcome"><span class="hero-icon">${icon('branch')}</span><div class="eyebrow">A PLACE TO GET WORK DONE</div><h1>Your next branch.<br>Your next breakthrough.</h1><p>Bring your repository. Give every task its own workspace,<br>the right agent, and an environment that fits.</p>${btn('Open a local repository', 'project', 'plus', 'primary large')}<div class="welcome-features"><div>${icon('branch')}<b>Room to experiment</b><span>Real Git worktrees. Separate branches.</span></div><div>${icon('chat')}<b>Think, build, review</b><span>Claude and Codex, with context.</span></div><div>${icon('box')}<b>Dependencies, contained</b><span>Shared runtimes or dedicated VMs.</span></div></div><small>No projects yet. Start with an existing Git repository.</small></div>`;
@@ -284,6 +325,7 @@ export function mountWrx(root) {
 	let menu = null,
 		mentionColors = {},
 		renderedChat = null,
+		renderedTab = null,
 		deferred = false;
 	const member = (chat, memberId) => chat?.members.find((m) => m.id === memberId);
 	const avatar = (m) =>
@@ -1698,6 +1740,11 @@ export function mountWrx(root) {
 			$('[data-action="conversation-fullscreen"]')?.focus({ preventScroll: true });
 		},
 		search: () => openSearch(),
+		switcher: () => {
+			const d = $('#switcher');
+			patch(d, switcherHtml());
+			if (!d.open) d.showModal();
+		},
 		project: () => openProject(),
 		workspace: async () => {
 			const base = current().branch === 'detached HEAD' ? 'HEAD' : current().branch;
@@ -1908,6 +1955,13 @@ export function mountWrx(root) {
 			toast('Workspace path copied');
 		}
 	};
+	// The sheet closes (restoring focus to its trigger) before the root handler runs the chosen
+	// workspace or action, so follow-up dialogs open on their own. Esc closes it natively.
+	on($('#switcher'), 'click', (event) => {
+		const d = $('#switcher');
+		if (event.target === d || event.target.closest('[data-close], [data-action], [data-workspace]'))
+			d.close();
+	});
 	on(root, 'click', async (event) => {
 		const target = event.target.closest('button');
 		if (!target) return;

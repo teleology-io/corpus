@@ -2,15 +2,17 @@
 import {
 	applyCrosscheck,
 	finalStatus,
+	liveFindings,
 	parseCrosscheck,
 	parseReview,
+	parseVoice,
 	type Finding,
 	type ReviewStatus,
 	type ReviewerResult,
 	type ReviewerRole
 } from './findings';
 import type { ProgressReporter } from './progress';
-import { crosscheckPrompt, reviewPrompt } from './prompts';
+import { crosscheckPrompt, reviewPrompt, voicePrompt } from './prompts';
 import {
 	CODEX_ALLOWED_FOR_PR_REVIEW,
 	type AgentRun,
@@ -72,6 +74,7 @@ export interface ReviewOutcome {
 	findings: Finding[];
 	questions: string[];
 	notReviewed: { path: string; reason: string }[];
+	notices: string[];
 	costUsd: number;
 	error: string | null;
 }
@@ -80,6 +83,8 @@ export async function reviewPullRequest(input: {
 	slots: [ReviewSlot, ReviewSlot];
 	/** Replaces a reviewer's built-in persona. */
 	personas?: Partial<Record<ReviewerRole, string | null>>;
+	/** Rewords the finished findings in this voice. */
+	voice?: { slot: ReviewSlot; text: string } | null;
 	bundleDir: string;
 	treeState: string;
 	partial: boolean;
@@ -151,6 +156,7 @@ export async function reviewPullRequest(input: {
 		findings,
 		questions: results.flatMap((r) => r?.questions ?? []),
 		notReviewed: results.flatMap((r) => r?.notReviewed ?? []),
+		notices: [] as string[],
 		costUsd,
 		error: null
 	};
@@ -158,5 +164,31 @@ export async function reviewPullRequest(input: {
 	if (status === 'failed') return { ...base, status, error: errors.join(' ') || 'Review failed' };
 
 	if ((await deps.currentHead()) !== input.headSha) return { ...base, status: 'stale' };
-	return { ...base, status };
+
+	// Last, so it only rewords what survived. Failing here costs the wording, never a finding.
+	const live = liveFindings(findings);
+	if (!input.voice || !live.length) return { ...base, status };
+	deps.progress?.stage('voicing');
+	const prompt = voicePrompt(input.voice.text, live);
+	let voiced: Map<string, string> | null = null;
+	for (let attempt = 0; attempt < 2 && !voiced; attempt++) {
+		const run = await deps.run(input.voice.slot, prompt);
+		costUsd += run.costUsd;
+		voiced = run.error ? null : parseVoice(run.text);
+	}
+	const reworded = voiced ?? new Map<string, string>();
+	const missed = live.filter((f) => !reworded.has(f.id)).length;
+	return {
+		...base,
+		status,
+		costUsd,
+		findings: findings.map((f) =>
+			!f.dropped && reworded.has(f.id) ? { ...f, voiced: reworded.get(f.id) } : f
+		),
+		notices: missed
+			? [
+					`${missed} of ${live.length} findings kept the reviewers' wording: your voice couldn't be applied.`
+				]
+			: []
+	};
 }

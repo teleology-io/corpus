@@ -6,9 +6,12 @@ import type { Finding } from './findings';
 const quiet = (text: string) => text.replace(/@(?=[\w-])/g, '@​');
 
 function renderFinding(f: Finding) {
+	const label = `${f.severity}${f.disputed ? ' (disputed)' : ''}`;
+	// The label stays outside the rewording, so no voice can change how serious a finding reads.
+	if (f.voiced) return quiet(`**${label}**\n\n${f.voiced}`);
 	return quiet(
 		[
-			`**${f.severity}${f.disputed ? ' (disputed)' : ''}: ${f.title}**`,
+			`**${label}: ${f.title}**`,
 			f.trigger && `Trigger: ${f.trigger}`,
 			f.impact && `Impact: ${f.impact}`,
 			f.fix && `Fix: ${f.fix}`

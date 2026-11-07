@@ -154,6 +154,9 @@ export function mountWrx(root) {
 		const filtered = state.projects;
 		const old = $('#transcript');
 		const stick = !old || old.scrollHeight - old.scrollTop - old.clientHeight < 24;
+		const scrolledRunLogs = new Set();
+		for (const log of $('#app').querySelectorAll('.run-output .runtime-log'))
+			if (log.scrollHeight - log.scrollTop - log.clientHeight >= 24) scrolledRunLogs.add(log.id);
 		patch(
 			$('#app'),
 			`<aside class="sidebar"><div class="sidebar-top"><span class="eyebrow">YOUR WORKBENCH</span><button class="square" data-action="project" aria-label="Add project">${icon('plus')}</button></div><button class="search" data-action="search" aria-label="Search Corpus">${icon('search')}<span>Search Corpus…</span><kbd>${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd></button><nav><div class="nav-label">PROJECTS <span>${state.projects.length}</span></div>${
@@ -179,6 +182,7 @@ export function mountWrx(root) {
 							['files', 'folder', 'Files'],
 							['tasks', 'check', 'Tasks'],
 							['reviews', 'branch', 'External reviews'],
+							['run', 'terminal', 'Run'],
 							['runtime', 'box', 'Environment']
 						]
 							.map(
@@ -187,7 +191,7 @@ export function mountWrx(root) {
 							)
 							.join(
 								''
-							)}</div><div class="content">${tab === 'overview' ? overview(chats) : tab === 'agents' ? agentView(chats) : tab === 'changes' ? changes() : tab === 'files' ? filesView() : tab === 'tasks' ? tasksView() : tab === 'reviews' ? reviewsView() : runtimeView()}</div>`
+							)}</div><div class="content">${tab === 'overview' ? overview(chats) : tab === 'agents' ? agentView(chats) : tab === 'changes' ? changes() : tab === 'files' ? filesView() : tab === 'tasks' ? tasksView() : tab === 'reviews' ? reviewsView() : tab === 'run' ? runView() : runtimeView()}</div>`
 			}<footer><span><i class="live-dot"></i> Corpus / developer workbench</span><span>${esc(state.machine?.name || 'LOCAL FIRST')} <span class="footer-divider">/</span> v0.1.0</span></footer></section>`
 		);
 		const box = $('#message');
@@ -199,6 +203,8 @@ export function mountWrx(root) {
 			renderedChat = chatId;
 			$('.jump')?.classList.toggle('hidden', t.scrollHeight - t.scrollTop - t.clientHeight < 80);
 		} else renderedChat = null;
+		for (const log of $('#app').querySelectorAll('.run-output .runtime-log'))
+			if (!scrolledRunLogs.has(log.id)) log.scrollTop = log.scrollHeight;
 	}
 	function welcome() {
 		return `<div class="welcome"><span class="hero-icon">${icon('branch')}</span><div class="eyebrow">A PLACE TO GET WORK DONE</div><h1>Your next branch.<br>Your next breakthrough.</h1><p>Bring your repository. Give every task its own workspace,<br>the right agent, and an environment that fits.</p>${btn('Open a local repository', 'project', 'plus', 'primary large')}<div class="welcome-features"><div>${icon('branch')}<b>Room to experiment</b><span>Real Git worktrees. Separate branches.</span></div><div>${icon('chat')}<b>Think, build, review</b><span>Claude and Codex, with context.</span></div><div>${icon('box')}<b>Dependencies, contained</b><span>Shared runtimes or dedicated VMs.</span></div></div><small>No projects yet. Start with an existing Git repository.</small></div>`;
@@ -1239,7 +1245,7 @@ export function mountWrx(root) {
 	function reviewFinding(reviewId, f) {
 		const dismissed = f.outcome === 'dismissed';
 		const where = f.file ? `${f.file}${f.line ? `:${f.line}` : ''}` : '';
-		return `<article class="review-finding ${esc(f.severity)}${dismissed ? ' dismissed' : ''}"><header><span class="severity">${esc(f.severity)}</span>${f.disputed ? '<span class="severity disputed">disputed</span>' : ''}${f.outcome === 'posted' ? '<span class="severity disputed">posted</span>' : ''}<strong>${esc(f.title)}</strong>${f.dropped ? '' : `<button class="text-button" data-review-dismiss="${esc(reviewId)}" data-finding="${esc(f.id)}">${dismissed ? 'Restore' : 'Dismiss'}</button>`}</header>${where ? `<code>${esc(where)}</code>` : ''}${f.trigger ? `<p><b>Trigger</b> ${esc(f.trigger)}</p>` : ''}${f.impact ? `<p><b>Impact</b> ${esc(f.impact)}</p>` : ''}${f.fix ? `<p><b>Fix</b> ${esc(f.fix)}</p>` : ''}${f.evidence?.length ? `<ul>${f.evidence.map((e) => `<li><code>${esc(e)}</code></li>`).join('')}</ul>` : ''}${f.dropped ? `<p><b>Refuted by the other reviewer</b></p><ul>${f.dropped.evidence.map((e) => `<li><code>${esc(e)}</code></li>`).join('')}</ul>` : ''}<small>Found by ${esc(f.reviewer)}</small></article>`;
+		return `<article class="review-finding ${esc(f.severity)}${dismissed ? ' dismissed' : ''}"><header><span class="severity">${esc(f.severity)}</span>${f.disputed ? '<span class="severity disputed">disputed</span>' : ''}${f.outcome === 'posted' ? '<span class="severity disputed">posted</span>' : ''}<strong>${esc(f.title)}</strong>${f.dropped ? '' : `<button class="text-button" data-review-dismiss="${esc(reviewId)}" data-finding="${esc(f.id)}">${dismissed ? 'Restore' : 'Dismiss'}</button>`}</header>${where ? `<code>${esc(where)}</code>` : ''}${f.voiced ? `<p><b>In your voice</b> ${esc(f.voiced)}</p>` : ''}${f.trigger ? `<p><b>Trigger</b> ${esc(f.trigger)}</p>` : ''}${f.impact ? `<p><b>Impact</b> ${esc(f.impact)}</p>` : ''}${f.fix ? `<p><b>Fix</b> ${esc(f.fix)}</p>` : ''}${f.evidence?.length ? `<ul>${f.evidence.map((e) => `<li><code>${esc(e)}</code></li>`).join('')}</ul>` : ''}${f.dropped ? `<p><b>Refuted by the other reviewer</b></p><ul>${f.dropped.evidence.map((e) => `<li><code>${esc(e)}</code></li>`).join('')}</ul>` : ''}<small>Found by ${esc(f.reviewer)}</small></article>`;
 	}
 	function reviewPreviewPanel(reviewId) {
 		if (reviewPreview?.reviewId !== reviewId) return '';
@@ -1248,7 +1254,8 @@ export function mountWrx(root) {
 	const REVIEW_STAGES = [
 		['preparing', 'Get the code'],
 		['reviewing', 'Two reviewers read it'],
-		['crosschecking', 'Test blockers']
+		['crosschecking', 'Test blockers'],
+		['voicing', 'Reword in your voice']
 	];
 	const REVIEWER_STATES = {
 		waiting: 'Waiting',
@@ -1266,10 +1273,14 @@ export function mountWrx(root) {
 	function reviewProgress(p) {
 		if (!p) return '<p class="review-note">Starting the review…</p>';
 		const current = REVIEW_STAGES.findIndex(([stage]) => stage === p.stage);
-		const steps = REVIEW_STAGES.map(([, label], i) => {
-			const state = i < current ? 'done' : i === current ? 'current' : '';
-			return `<li class="${state}">${esc(label)}${i === 2 ? ' <small>if any</small>' : ''}</li>`;
-		}).join('');
+		// Most reviews have no voice pass, so that step only shows while it's happening.
+		const shown = REVIEW_STAGES.filter(([stage]) => stage !== 'voicing' || p.stage === 'voicing');
+		const steps = shown
+			.map(([, label], i) => {
+				const state = i < current ? 'done' : i === current ? 'current' : '';
+				return `<li class="${state}">${esc(label)}${i === 2 ? ' <small>if any</small>' : ''}</li>`;
+			})
+			.join('');
 		const reviewers = p.reviewers
 			.map((r) => {
 				const active = ['working', 'retrying', 'checking'].includes(r.state);
@@ -1353,6 +1364,214 @@ export function mountWrx(root) {
 		const e = env();
 		return `${setupPanel(current())}<div class="section-title"><div><h2>Dependencies with a home.</h2><p>VMs isolate services and databases. Agents run on the host checkout.</p></div>${btn(e ? 'Change environment' : 'Attach environment', 'environment', 'box')}</div>${e ? `<section class="panel runtime-panel"><div class="panel-heading"><h3>${icon('box')}${esc(e.name)}</h3>${badge(e.busy ? 'Working…' : e.status, e.status === 'running' ? 'green' : '')}</div><div class="runtime-details"><div><span>Isolation</span><b>${esc(e.scope)} Colima VM</b></div><div><span>Resources</span><b>${e.cpus} CPU / ${e.memory} GB RAM / ${e.disk} GB disk</b></div><div><span>Profile</span><code>${esc(e.profile)}</code></div><div><span>Docker endpoint</span><code>~/.colima/${esc(e.profile)}/docker.sock</code></div></div><div class="runtime-actions">${['start', 'stop', 'up', 'down', 'ps'].map((action) => `<button data-runtime="${action}" ${e.busy ? 'disabled' : ''}>${icon(action === 'start' ? 'arrow' : 'terminal')}${{ start: 'Start VM', stop: 'Stop VM', up: 'Compose up', down: 'Compose down', ps: 'Service status' }[action]}</button>`).join('')}</div><p class="runtime-note">Compose uses this workspace’s root Compose file and its own project namespace. Down preserves database volumes. Starting a VM may download its base image.</p><pre class="runtime-log">${esc(e.log || 'No runtime operations yet.')}</pre></section>` : `<div class="empty panel">${icon('box')}<h3>Shared when it helps. Isolated when it matters.</h3><p>Attach a shared VM or provision a dedicated dependency VM for this workspace.</p>${btn('Choose environment', 'environment', 'plus', 'primary')}</div>`}`;
 	}
+	// Run tab. Each command shows its output below it, so several can be watched at once. Output isn't
+	// part of state, so the logs on screen are polled while their runs are going.
+	const runner = {
+		workspace: null,
+		tasks: null,
+		tasksFor: null,
+		error: '',
+		opened: new Set(),
+		selected: new Map(),
+		logs: new Map(),
+		loading: new Set(),
+		polling: [],
+		timer: null
+	};
+	// Entering the tab reads the checkout again and restarts polling, which stops when the tab is left.
+	function reloadRunner() {
+		runner.tasksFor = null;
+		runner.logs.clear();
+		clearTimeout(runner.timer);
+		runner.timer = null;
+	}
+	async function loadRunTasks() {
+		const id = workspaceId;
+		runner.tasksFor = id;
+		try {
+			const tasks = await api(`run-tasks?workspaceId=${encodeURIComponent(id)}`);
+			if (runner.tasksFor !== id) return;
+			runner.tasks = tasks;
+			runner.error = '';
+		} catch (error) {
+			if (runner.tasksFor !== id) return;
+			runner.tasks = [];
+			runner.error = error.message;
+		}
+		if (tab === 'run') render();
+	}
+	async function loadRunLog(id) {
+		if (runner.loading.has(id)) return;
+		runner.loading.add(id);
+		try {
+			runner.logs.set(id, await api(`run-log?runId=${encodeURIComponent(id)}`));
+		} catch {
+			runner.logs.set(id, { log: 'Could not load this output.', status: 'error' });
+		}
+		runner.loading.delete(id);
+		if (tab === 'run') render();
+	}
+	// Each finished load renders, which comes back here, so polling continues while a shown run is going.
+	function syncRunLogs(shown) {
+		for (const r of shown) {
+			const cached = runner.logs.get(r.id);
+			// The status check picks up the last output of a run that ended between polls.
+			if (!cached || (cached.status === 'running' && r.status !== 'running')) void loadRunLog(r.id);
+		}
+		runner.polling = shown.filter((r) => r.status === 'running').map((r) => r.id);
+		if (!runner.polling.length || runner.timer) return;
+		runner.timer = setTimeout(() => {
+			runner.timer = null;
+			if (destroyed || tab !== 'run') return;
+			for (const id of runner.polling) void loadRunLog(id);
+		}, 1000);
+	}
+	const RUN_BADGES = {
+		running: ['Running', 'green'],
+		exited: ['Finished', ''],
+		failed: ['Failed', ''],
+		stopped: ['Stopped', ''],
+		interrupted: ['Interrupted', '']
+	};
+	const runBadge = (r) => {
+		const [label, color] = RUN_BADGES[r.status] || [r.status, ''];
+		return badge(label, color);
+	};
+	const runTime = (r) =>
+		new Date(r.startedAt).toLocaleTimeString([], {
+			hour: 'numeric',
+			minute: '2-digit',
+			second: '2-digit'
+		});
+	function runOutput(t, own, shown) {
+		const log = runner.logs.get(shown.id)?.log;
+		const chips =
+			own.length > 1
+				? own
+						.map(
+							(r) =>
+								`<button class="${r.id === shown.id ? 'active' : ''}" data-run-select="${esc(r.id)}" data-run-task="${esc(t.id)}"><span>${esc(runTime(r))}</span>${runBadge(r)}</button>`
+						)
+						.join('')
+				: '';
+		const remove =
+			shown.status === 'running'
+				? ''
+				: `<button data-run-delete="${esc(shown.id)}">Delete run</button>`;
+		return `<div class="run-output">${chips || remove ? `<div class="run-output-bar"><div class="run-history">${chips}</div>${remove}</div>` : ''}${shown.error ? `<p class="error run-error">${esc(shown.error)}</p>` : ''}<pre class="runtime-log" id="run-log-${esc(shown.id)}">${esc(log || (log === undefined ? 'Loading…' : 'No output yet.'))}</pre></div>`;
+	}
+	function variantDialog(task, variant) {
+		const managed = Object.keys(current().provision?.env || {});
+		modal(
+			variant ? `Edit ${esc(variant.name)}` : `Add a variant of ${esc(task.name)}`,
+			`Runs <code>${esc(task.line)}</code> with these additions. Flags don't go through a shell, so <code>&amp;&amp;</code> and <code>$FOO</code> stay literal. Env values are saved unencrypted on this computer, so keep secrets in <code>.env</code>.${managed.length ? ` Values here override this workspace's ${esc(managed.join(', '))}.` : ''}`,
+			`${field('Name', 'name', 'e.g. local', variant?.name)}<label>Flags<input name="flags" placeholder="-c local" value="${esc(variant?.flags)}"></label><label>Env values, one per line<textarea name="env" rows="4" placeholder="FOO=example">${esc(
+				Object.entries(variant?.env || {})
+					.map(([name, value]) => `${name}=${value}`)
+					.join('\n')
+			)}</textarea></label>`,
+			variant ? 'Save variant' : 'Add variant',
+			async (body) => {
+				await api('run-variant', {
+					workspaceId,
+					taskId: task.id,
+					variantId: variant?.id,
+					...body
+				});
+				await loadRunTasks();
+			}
+		);
+	}
+	function runView() {
+		const runs = (state.commandRuns || []).filter((r) => r.workspaceId === workspaceId).reverse();
+		if (runner.workspace !== workspaceId) {
+			runner.workspace = workspaceId;
+			runner.tasks = null;
+			runner.tasksFor = null;
+			runner.selected = new Map();
+			runner.opened = new Set(runs.filter((r) => r.status === 'running').map((r) => r.taskId));
+		}
+		if (runner.tasksFor !== workspaceId) void loadRunTasks();
+		const byTask = new Map();
+		for (const r of runs) byTask.set(r.taskId, [...(byTask.get(r.taskId) || []), r]);
+		const tasks = [...(runner.tasks || [])];
+		// A run can outlast its command, after a branch switch for one, and it must still be stoppable.
+		if (runner.tasks)
+			for (const [taskId, own] of byTask)
+				if (!runner.tasks.some((t) => t.id === taskId || t.variants.some((v) => v.key === taskId)))
+					tasks.push({
+						id: taskId,
+						name: own[0].name,
+						line: own[0].line,
+						source: 'No longer available',
+						gone: true
+					});
+		const sources = new Map();
+		for (const t of tasks) sources.set(t.source, [...(sources.get(t.source) || []), t]);
+		const e = env();
+		const setup = current().provision?.status;
+		const notes = [
+			e && e.status !== 'running'
+				? `The VM "${e.name}" isn't running, so Docker commands here will fail until it's started on the Environment tab.`
+				: '',
+			setup === 'failed'
+				? "This workspace's setup failed, so its ports and env values may be missing. Retry it on the Environment tab."
+				: ''
+		].filter(Boolean);
+		const shownRuns = [];
+		const taskRow = (t) => {
+			const own = byTask.get(t.id) || [];
+			const active = own.find((r) => r.status === 'running');
+			const open = own.length && runner.opened.has(t.id);
+			const shown = own.find((r) => r.id === runner.selected.get(t.id)) || own[0];
+			if (open) shownRuns.push(shown);
+			const toggle = own.length
+				? `<button data-run-toggle="${esc(t.id)}">${open ? 'Hide output' : 'Show output'}</button>`
+				: '';
+			const action = active
+				? `<button data-run-stop="${esc(active.id)}">Stop</button>`
+				: t.gone
+					? ''
+					: `<button data-run-start="${esc(t.parent?.id || t.id)}" ${t.variant ? `data-run-variant="${esc(t.variant.id)}"` : ''} ${setup === 'running' ? 'disabled' : ''}>${icon('arrow')}Run</button>`;
+			const manage = t.gone
+				? ''
+				: t.variant
+					? `<button data-run-variant-edit="${esc(t.variant.id)}" data-run-task="${esc(t.parent.id)}">Edit</button><button data-run-variant-delete="${esc(t.variant.id)}">Remove</button>`
+					: `<button data-run-variant-add="${esc(t.id)}">${icon('plus')}Variant</button>`;
+			return `<div class="run-item ${t.variant ? 'run-variant' : ''}"><div class="run-task"><div class="run-task-text"><b>${esc(t.name)}</b><code>${esc(t.line)}</code>${t.detail ? `<small>${esc(t.detail)}</small>` : ''}</div><div class="run-task-actions">${own.length ? runBadge(own[0]) : ''}${toggle}${manage}${action}</div></div>${open ? runOutput(t, own, shown) : ''}</div>`;
+		};
+		const taskList = !runner.tasks
+			? '<div class="empty compact panel"><p>Looking for commands…</p></div>'
+			: !tasks.length && !runner.error
+				? `<div class="empty panel">${icon('terminal')}<h3>No commands found.</h3><p>Workbench looks in this checkout's root for package.json scripts, Make and Just targets, pyproject.toml scripts, Go and Rust projects, and a Compose file.</p></div>`
+				: [...sources]
+						.map(
+							([source, list]) =>
+								`<section class="panel run-source"><div class="panel-heading"><h3>${icon('terminal')}${esc(source)}</h3></div>${list
+									.flatMap((t) => [
+										taskRow(t),
+										...(t.variants || []).map((v) =>
+											taskRow({
+												id: v.key,
+												name: v.name,
+												line: v.line,
+												detail: Object.keys(v.env).length
+													? `Env values set: ${Object.keys(v.env).join(', ')}`
+													: '',
+												variant: v,
+												parent: t
+											})
+										)
+									])
+									.join('')}</section>`
+						)
+						.join('');
+		syncRunLogs(shownRuns);
+		const clear = runs.some((r) => r.status !== 'running')
+			? '<button data-run-clear>Clear finished</button>'
+			: '';
+		return `<div class="section-title"><div><h2>Run this checkout.</h2><p>Commands this branch declares, run in its worktree with its ports, env values and Docker target. They run on this computer as you.</p></div><div class="run-title-actions">${clear}<button data-run-refresh>${icon('refresh')}Refresh</button></div></div>${notes.map((n) => `<p class="runtime-note run-warning">${esc(n)}</p>`).join('')}${runner.error ? `<p class="error">${esc(runner.error)}</p>` : ''}${taskList}`;
+	}
 	async function createWorkspace(input) {
 		const w = await api('workspaces', input);
 		workspaceId = w.id;
@@ -1400,35 +1619,40 @@ export function mountWrx(root) {
 	const select = (label, name, options) =>
 		`<label>${label}<select name="${name}">${options}</select></label>`;
 	async function reviewerSettingsDialog() {
-		const [{ reviewers }, catalog] = await Promise.all([
+		const [{ reviewers, voice }, catalog] = await Promise.all([
 			api('external-reviews', { action: 'settings' }),
 			api('models').catch(() => ({}))
 		]);
 		const models = catalog.claude || [];
-		const fields = reviewers
-			.map(({ role, model, persona }) => {
-				const custom = !!model && !models.some((option) => option.value === model);
-				const options = [
-					{ value: '', label: 'CLI default' },
-					...models,
-					{ value: '__custom__', label: 'Custom model…' }
-				]
-					.map(
-						(option) =>
-							`<option value="${esc(option.value)}" ${option.value === (custom ? '__custom__' : model) ? 'selected' : ''}>${esc(option.label)}</option>`
-					)
-					.join('');
-				return `<fieldset class="reviewer-settings"><legend>${esc(role)}</legend>${select('Model', `${role}Model`, options)}<label data-custom-model="${esc(role)}" ${custom ? '' : 'hidden'}>Custom model<input name="${esc(role)}CustomModel" value="${esc(custom ? model : '')}" placeholder="Model ID, such as a Bedrock inference profile"></label><label>Persona<textarea name="${esc(role)}Persona" rows="8">${esc(persona)}</textarea></label><button type="button" class="text-button" data-persona-default="${esc(role)}">Restore default persona</button></fieldset>`;
-			})
+		const modelFields = (role, model) => {
+			const custom = !!model && !models.some((option) => option.value === model);
+			const options = [
+				{ value: '', label: 'CLI default' },
+				...models,
+				{ value: '__custom__', label: 'Custom model…' }
+			]
+				.map(
+					(option) =>
+						`<option value="${esc(option.value)}" ${option.value === (custom ? '__custom__' : model) ? 'selected' : ''}>${esc(option.label)}</option>`
+				)
+				.join('');
+			return `${select('Model', `${role}Model`, options)}<label data-custom-model="${esc(role)}" ${custom ? '' : 'hidden'}>Custom model<input name="${esc(role)}CustomModel" value="${esc(custom ? model : '')}" placeholder="Model ID, such as a Bedrock inference profile"></label>`;
+		};
+		const reviewerFields = reviewers
+			.map(
+				({ role, model, persona }) =>
+					`<fieldset class="reviewer-settings"><legend>${esc(role)}</legend>${modelFields(role, model)}<label>Persona<textarea name="${esc(role)}Persona" rows="8">${esc(persona)}</textarea></label><button type="button" class="text-button" data-persona-default="${esc(role)}">Restore default persona</button></fieldset>`
+			)
 			.join('');
+		const voiceField = `<fieldset class="reviewer-settings"><legend>Your voice</legend>${modelFields('voice', voice.model)}<label>How you write<textarea name="voicePersona" rows="8" placeholder="Describe how you write reviews, or paste a few of your own comments. Leave blank to post the reviewers' wording.">${esc(voice.persona)}</textarea></label></fieldset>`;
 		modal(
 			'Reviewers',
-			'Changes apply from the next review. The review method, safety rules and output format stay fixed, so results can still be read.',
-			fields,
+			'Changes apply from the next review. The review method, safety rules and output format stay fixed, so results can still be read. Your voice rewords what both reviewers found before you post it.',
+			reviewerFields + voiceField,
 			'Save',
 			async (body) => {
 				const saved = {};
-				for (const { role } of reviewers) {
+				for (const { role } of [...reviewers, { role: 'voice' }]) {
 					const custom = body[`${role}Model`] === '__custom__';
 					const model = custom ? body[`${role}CustomModel`]?.trim() : body[`${role}Model`];
 					if (custom && !model) throw new Error(`Enter a custom model ID for the ${role}`);
@@ -1438,11 +1662,12 @@ export function mountWrx(root) {
 			}
 		);
 		const form = $('#modal-form');
-		for (const { role, defaultPersona } of reviewers) {
+		for (const { role, defaultPersona } of [...reviewers, { role: 'voice' }]) {
 			form.elements[`${role}Model`].onchange = (event) => {
 				form.querySelector(`[data-custom-model="${role}"]`).hidden =
 					event.target.value !== '__custom__';
 			};
+			if (!defaultPersona) continue;
 			form.querySelector(`[data-persona-default="${role}"]`).onclick = () => {
 				form.elements[`${role}Persona`].value = defaultPersona;
 			};
@@ -1708,6 +1933,7 @@ export function mountWrx(root) {
 			}
 			if (target.dataset.tab) {
 				tab = target.dataset.tab;
+				if (tab === 'run') reloadRunner();
 				render();
 				if (tab === 'changes') await actions.diff();
 				if (tab === 'reviews') await loadExternalReviews();
@@ -1752,7 +1978,54 @@ export function mountWrx(root) {
 					() => api('workspace-database', { workspaceId, action: 'restore', snapshot })
 				);
 			}
-			if (target.dataset.runtime) {
+			// One branch only: a refresh patches this same button in place, so Run has become Stop by the
+			// time it returns, and a separate check would then stop the run it just started.
+			if (target.dataset.runStart) {
+				const run = await api('run-start', {
+					workspaceId,
+					taskId: target.dataset.runStart,
+					variantId: target.dataset.runVariant
+				});
+				runner.opened.add(run.taskId);
+				runner.selected.delete(run.taskId);
+				await refresh();
+			} else if (target.dataset.runVariantAdd) {
+				variantDialog(runner.tasks.find((t) => t.id === target.dataset.runVariantAdd));
+			} else if (target.dataset.runVariantEdit) {
+				const task = runner.tasks.find((t) => t.id === target.dataset.runTask);
+				variantDialog(
+					task,
+					task.variants.find((v) => v.id === target.dataset.runVariantEdit)
+				);
+			} else if (target.dataset.runVariantDelete) {
+				const variantId = target.dataset.runVariantDelete;
+				confirmDanger(
+					'Remove this variant?',
+					'Its saved flags and env values are removed for every workspace in this project. Past runs stay until you delete them.',
+					'Remove variant',
+					async () => {
+						await api('run-variant-delete', { workspaceId, variantId });
+						await loadRunTasks();
+					}
+				);
+			} else if (target.dataset.runToggle) {
+				const taskId = target.dataset.runToggle;
+				if (!runner.opened.delete(taskId)) runner.opened.add(taskId);
+				render();
+			} else if (target.dataset.runStop) {
+				await api('run-stop', { runId: target.dataset.runStop });
+				await refresh();
+			} else if (target.dataset.runDelete) {
+				await api('run-delete', { runId: target.dataset.runDelete });
+				await refresh();
+			} else if (target.dataset.runClear !== undefined) {
+				await api('run-clear', { workspaceId });
+				await refresh();
+			} else if (target.dataset.runSelect) {
+				runner.selected.set(target.dataset.runTask, target.dataset.runSelect);
+				render();
+			} else if (target.dataset.runRefresh !== undefined) await loadRunTasks();
+			else if (target.dataset.runtime) {
 				await api('runtime', {
 					environmentId: env().id,
 					workspaceId,
@@ -2077,8 +2350,14 @@ export function mountWrx(root) {
 			tab = 'overview';
 			localStorage.setItem('wrx.workspace', ws);
 		}
-		if (['overview', 'agents', 'files', 'tasks', 'reviews', 'runtime'].includes(params.get('tab')))
+		if (
+			['overview', 'agents', 'files', 'tasks', 'reviews', 'run', 'runtime'].includes(
+				params.get('tab')
+			)
+		) {
 			tab = params.get('tab');
+			if (tab === 'run') reloadRunner();
+		}
 		if (params.get('chat')) {
 			if (params.get('chat') !== chatId) stopDictation();
 			chatId = params.get('chat');

@@ -123,6 +123,124 @@ describe('reviewPullRequest', () => {
 	});
 });
 
+describe('voice pass', () => {
+	const voice = {
+		slot: { provider: 'claude' as const, model: 'haiku', tools: false },
+		text: 'Terse.'
+	};
+	const voiced = (entries: Record<string, string>) =>
+		fenced('review-voice', {
+			findings: Object.entries(entries).map(([id, text]) => ({ id, text }))
+		});
+	const major = (id: string) =>
+		fenced('review-findings', {
+			verdict: 'findings',
+			findings: [{ id, severity: 'major', title: `Bad ${id}`, file: 'a.ts', line: 1 }]
+		});
+
+	/** Reviewers answer by persona; anything reaching the voice pass gets `answer`. */
+	function withVoice(
+		reviews: { integrator: string; breaker: string },
+		answer: (attempt: number) => AgentRun
+	) {
+		const voiceCalls: { slot: unknown; prompt: string }[] = [];
+		const run = async (slot: never, prompt: string) => {
+			if (prompt.includes('Findings to reword')) {
+				voiceCalls.push({ slot, prompt });
+				return answer(voiceCalls.length);
+			}
+			if (prompt.includes('Blockers to test'))
+				return ok(
+					fenced('review-crosscheck', {
+						results: [{ id: 'breaker:race', status: 'refuted', evidence: ['a.ts:9 lock'] }]
+					}),
+					0
+				);
+			return ok(
+				prompt.startsWith('You are the Integrator') ? reviews.integrator : reviews.breaker,
+				0
+			);
+		};
+		return { run, voiceCalls };
+	}
+
+	it('rewords findings from both reviewers on the slot it was given', async () => {
+		const { run, voiceCalls } = withVoice(
+			{ integrator: major('seam'), breaker: major('leak') },
+			() => ok(voiced({ 'integrator:seam': 'seam broke', 'breaker:leak': 'leaks' }), 0.25)
+		);
+		const out = await review(run, { voice });
+		expect(voiceCalls).toHaveLength(1);
+		expect(voiceCalls[0].slot).toEqual(voice.slot);
+		expect(voiceCalls[0].prompt).toContain('VOICE\nTerse.');
+		expect(out.findings.map((f) => f.voiced)).toEqual(['seam broke', 'leaks']);
+		expect(out.findings[0].title).toBe('Bad seam');
+		expect(out.status).toBe('findings');
+		expect(out.costUsd).toBe(0.25);
+		expect(out.notices).toEqual([]);
+	});
+
+	it('does not reword a refuted finding', async () => {
+		const { run, voiceCalls } = withVoice(
+			{ integrator: major('seam'), breaker: blocker('race') },
+			() => ok(voiced({ 'integrator:seam': 'seam broke', 'breaker:race': 'race' }), 0)
+		);
+		const out = await review(run, { voice });
+		expect(voiceCalls[0].prompt).not.toContain('breaker:race');
+		expect(out.findings.find((f) => f.id === 'breaker:race')?.voiced).toBeUndefined();
+	});
+
+	it('ignores ids the voice pass made up', async () => {
+		const { run } = withVoice({ integrator: major('seam'), breaker: clean }, () =>
+			ok(voiced({ 'integrator:seam': 'seam broke', 'breaker:ghost': 'boo' }), 0)
+		);
+		const out = await review(run, { voice });
+		expect(out.findings).toHaveLength(1);
+	});
+
+	it('retries once, then keeps the findings with a notice instead of failing', async () => {
+		const { run, voiceCalls } = withVoice({ integrator: major('seam'), breaker: clean }, () =>
+			ok('no block here', 0.5)
+		);
+		const out = await review(run, { voice });
+		expect(voiceCalls).toHaveLength(2);
+		expect(out.status).toBe('findings');
+		expect(out.error).toBeNull();
+		expect(out.costUsd).toBe(1);
+		expect(out.findings[0].voiced).toBeUndefined();
+		expect(out.notices[0]).toContain('1 of 1');
+	});
+
+	it('flags findings the voice pass left out or returned empty', async () => {
+		const { run } = withVoice({ integrator: major('seam'), breaker: major('leak') }, () =>
+			ok(voiced({ 'integrator:seam': 'seam broke', 'breaker:leak': '   ' }), 0)
+		);
+		const out = await review(run, { voice });
+		expect(out.findings[1].voiced).toBeUndefined();
+		expect(out.notices[0]).toContain('1 of 2');
+	});
+
+	it('is skipped with no voice, nothing to reword, a failed review or a moved head', async () => {
+		const answer = () => ok(voiced({}), 0);
+		const unset = withVoice({ integrator: major('seam'), breaker: clean }, answer);
+		await review(unset.run);
+		expect(unset.voiceCalls).toHaveLength(0);
+
+		const empty = withVoice({ integrator: clean, breaker: clean }, answer);
+		expect((await review(empty.run, { voice })).status).toBe('clean');
+		expect(empty.voiceCalls).toHaveLength(0);
+
+		const failed = withVoice({ integrator: 'LGTM!', breaker: major('leak') }, answer);
+		expect((await review(failed.run, { voice })).status).toBe('failed');
+		expect(failed.voiceCalls).toHaveLength(0);
+
+		const moved = withVoice({ integrator: major('seam'), breaker: clean }, answer);
+		const deps = { run: moved.run as never, currentHead: async () => 'h2' };
+		expect((await review(moved.run, { voice, deps })).status).toBe('stale');
+		expect(moved.voiceCalls).toHaveLength(0);
+	});
+});
+
 describe('resolveSlots', () => {
 	const claudeOnly = { claude: true, codex: false };
 	const both = { claude: true, codex: true };
@@ -190,6 +308,17 @@ describe('runner', () => {
 		expect(args[args.indexOf('--disallowedTools') + 1]).toContain('WebFetch');
 		expect(args).not.toContain('--resume');
 		expect(args).not.toContain('bypassPermissions');
+	});
+
+	it('leaves a run without tools unable to read anything', () => {
+		const args = reviewArgs({ provider: 'claude', model: '', tools: false });
+		expect(args).not.toContain('--allowedTools');
+		for (const tool of ['Read', 'Grep', 'Glob', 'Bash'])
+			expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toContain(tool);
+
+		const normal = reviewArgs({ provider: 'claude', model: '' });
+		expect(normal[normal.indexOf('--allowedTools') + 1]).toBe('Read,Grep,Glob');
+		expect(normal[normal.indexOf('--disallowedTools') + 1].split(',')).not.toContain('Read');
 	});
 
 	const fake = () => {

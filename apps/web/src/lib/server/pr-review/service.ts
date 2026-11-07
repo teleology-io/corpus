@@ -55,7 +55,8 @@ export function getReviewerSettings(userId: string) {
 			model: settings[role].model,
 			persona: settings[role].persona ?? PERSONAS[role],
 			defaultPersona: PERSONAS[role]
-		}))
+		})),
+		voice: { model: settings.voice.model, persona: settings.voice.persona ?? '' }
 	};
 }
 
@@ -233,6 +234,12 @@ async function execute(
 		const outcome = await reviewPullRequest({
 			slots,
 			personas: { integrator: settings.integrator.persona, breaker: settings.breaker.persona },
+			voice: settings.voice.persona
+				? {
+						slot: { provider: slots[0].provider, model: settings.voice.model, tools: false },
+						text: settings.voice.persona
+					}
+				: null,
 			bundleDir: dir,
 			treeState: bundle.treeState,
 			partial: bundle.partial,
@@ -252,6 +259,7 @@ async function execute(
 				findings: outcome.findings as unknown as Record<string, unknown>[],
 				questions: outcome.questions,
 				notReviewed: outcome.notReviewed,
+				notices: [...notices, ...outcome.notices],
 				costUsd: outcome.costUsd,
 				error: outcome.error
 			})

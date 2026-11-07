@@ -61,6 +61,7 @@ function host(userId) {
 			try {
 				engine.cancel(chatId);
 			} catch {}
+		engine.stopCommands();
 	});
 	return h;
 }
@@ -372,6 +373,9 @@ export async function handleWrx({ request, url, route, userId }) {
 				);
 			if (route === 'diff')
 				return json(200, await engine.diff(url.searchParams.get('workspaceId')));
+			if (route === 'run-tasks')
+				return json(200, engine.runTasks(url.searchParams.get('workspaceId')));
+			if (route === 'run-log') return json(200, engine.runLog(url.searchParams.get('runId')));
 			if (route === 'events') return events(hosts.get(userId), request);
 		}
 		if (request.method !== 'POST') return json(404, { error: 'Route not found' });
@@ -437,6 +441,24 @@ export async function handleWrx({ request, url, route, userId }) {
 				break;
 			case 'runtime':
 				result = engine.runtime(body.environmentId, body.action, body.workspaceId);
+				break;
+			case 'run-start':
+				result = engine.runStart(body.workspaceId, body.taskId, body.variantId);
+				break;
+			case 'run-stop':
+				result = engine.runStop(body.runId);
+				break;
+			case 'run-variant':
+				result = engine.runVariantSave(body);
+				break;
+			case 'run-variant-delete':
+				result = engine.runVariantDelete(body.workspaceId, body.variantId);
+				break;
+			case 'run-delete':
+				result = engine.runDelete(body.runId);
+				break;
+			case 'run-clear':
+				result = engine.runClear(body.workspaceId);
 				break;
 			case 'tasks': {
 				store.get('workspaces', body.workspaceId);

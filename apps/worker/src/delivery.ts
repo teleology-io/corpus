@@ -100,7 +100,7 @@ export async function deliverPending() {
 			await tx`
 				update notification_delivery
 				set status = ${status}, error = ${error}, attempts = attempts + 1,
-					sent_at = ${status === 'sent' ? new Date() : null}
+					sent_at = ${status === 'sent' ? tx`now()` : null}
 				where id = ${row.id}`;
 		}
 	});

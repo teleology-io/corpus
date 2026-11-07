@@ -2,7 +2,7 @@
 // and a server restart already marks that run interrupted.
 import type { ReviewerRole } from './findings';
 
-export type ReviewStage = 'preparing' | 'reviewing' | 'crosschecking';
+export type ReviewStage = 'preparing' | 'reviewing' | 'crosschecking' | 'voicing';
 export type ReviewerState = 'waiting' | 'working' | 'retrying' | 'checking' | 'done' | 'failed';
 
 interface ReviewerProgress {

@@ -1195,6 +1195,78 @@
 	font-size: 11px;
 	line-height: 1.7;
 }
+.wrx .run-source {
+	margin-bottom: 16px;
+}
+.wrx .run-task {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 12px 25px;
+}
+.wrx .run-task-text {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+}
+.wrx .run-task-text code,
+.wrx .run-task-text small {
+	font-size: 11px;
+	font-weight: 400;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+.wrx .run-task button {
+	font-size: 11px;
+}
+.wrx .run-warning {
+	padding: 0 0 16px;
+}
+.wrx .run-title-actions,
+.wrx .run-task-actions {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 8px;
+}
+.wrx .run-item {
+	border-top: 1px solid var(--border);
+}
+.wrx .run-variant .run-task {
+	padding-left: 49px;
+}
+.wrx .run-output-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 0 25px 12px;
+}
+.wrx .run-output-bar button {
+	flex: none;
+	font-size: 11px;
+}
+.wrx .run-history {
+	display: flex;
+	gap: 8px;
+	min-width: 0;
+	overflow-x: auto;
+}
+.wrx .run-history button {
+	gap: 8px;
+}
+.wrx .run-history button.active {
+	border-color: var(--foreground);
+}
+.wrx .run-error {
+	padding: 0 25px 12px;
+}
+.wrx .run-output .runtime-log {
+	min-height: 120px;
+	max-height: 320px;
+}
 .wrx dialog {
 	border: 1px solid var(--border);
 	border-radius: 10px;

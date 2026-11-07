@@ -8,21 +8,23 @@ import { PERSONAS } from './prompts';
 export const MAX_PERSONA_LENGTH = 8000;
 // Becomes a CLI argument, so it must never be readable as a flag. Allows Bedrock ids and ARNs.
 const MODEL_ID = /^[A-Za-z0-9][\w.:/@[\]-]*$/;
-const ROLES = Object.keys(PERSONAS) as ReviewerRole[];
+const BUILT_IN: Record<string, string | undefined> = PERSONAS;
+const ENTRIES = [...(Object.keys(PERSONAS) as ReviewerRole[]), 'voice'] as const;
 
 export interface ReviewerSetting {
 	/** Empty means the CLI's own default. */
 	model: string;
-	/** Null means the built-in persona. */
+	/** Null means the built-in persona. For the voice, which has none, it means don't reword. */
 	persona: string | null;
 }
-export type ReviewerSettings = Record<ReviewerRole, ReviewerSetting>;
+export type ReviewerSettings = Record<ReviewerRole | 'voice', ReviewerSetting>;
 
 export class InvalidReviewerSettings extends Error {}
 
 const defaults = (): ReviewerSettings => ({
 	integrator: { model: '', persona: null },
-	breaker: { model: '', persona: null }
+	breaker: { model: '', persona: null },
+	voice: { model: '', persona: null }
 });
 
 /** Throws InvalidReviewerSettings on anything that can't be saved as is. */
@@ -32,7 +34,7 @@ export function normalizeReviewerSettings(input: unknown): ReviewerSettings {
 		string,
 		{ model?: unknown; persona?: unknown } | undefined
 	>;
-	for (const role of ROLES) {
+	for (const role of ENTRIES) {
 		const model = typeof source[role]?.model === 'string' ? source[role].model.trim() : '';
 		if (model && !MODEL_ID.test(model))
 			throw new InvalidReviewerSettings(`The ${role} model ID "${model}" isn't valid.`);
@@ -47,7 +49,7 @@ export function normalizeReviewerSettings(input: unknown): ReviewerSettings {
 			);
 		settings[role] = {
 			model,
-			persona: persona && persona !== PERSONAS[role] ? persona : null
+			persona: persona && persona !== BUILT_IN[role] ? persona : null
 		};
 	}
 	return settings;

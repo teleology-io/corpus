@@ -24,8 +24,28 @@ import {
 	worktreesDirectory,
 	writeEnvFile
 } from './provision.js';
+import {
+	commandLine,
+	discoverCommands,
+	parseEnvLines,
+	parseFlags,
+	readLogTail,
+	withFlags
+} from './runner.js';
 const exec = promisify(execFile);
 const GIT_WORKTREE_TIMEOUT = 5 * 60000;
+// Run tab: output goes to a file per run, since state is rewritten and pushed to clients on every change.
+const RUN_LOG_LIMIT = 16 * 1024 * 1024;
+const RUN_LOG_TAIL = 256 * 1024;
+const RUNS_KEPT_PER_WORKSPACE = 20;
+const PROMPT_COMMANDS = 30;
+const composeProject = (w) => `wrx-${w.id.slice(0, 8)}`;
+const variantKey = (taskId, variantId) => `${taskId}#${variantId}`;
+const killGroup = (child, signal) => {
+	try {
+		process.kill(process.platform === 'win32' ? child.pid : -child.pid, signal);
+	} catch {}
+};
 export const id = () => randomUUID();
 export const now = () => new Date().toISOString();
 export function requireText(value, name, max = 200) {
@@ -346,6 +366,15 @@ export class Store {
 				w.database.error = 'Workbench restarted during this operation';
 			}
 		}
+		// The server's exit stops these, but a crash can leave one behind. Its PID may have been reused
+		// since, so it's never signalled from here.
+		this.state.commandRuns ??= [];
+		for (const r of this.state.commandRuns)
+			if (r.status === 'running') {
+				r.status = 'interrupted';
+				r.error = 'Workbench restarted during this run';
+				r.finishedAt = now();
+			}
 		this.save();
 	}
 	save() {
@@ -366,6 +395,7 @@ export class Engine {
 		this.publish = publish;
 		this.spawn = spawnProcess;
 		this.running = new Map();
+		this.commandChildren = new Map();
 		this.queue = [];
 	}
 	// Agent runs call this for every output line. Coalesce into one disk write + one client
@@ -688,6 +718,8 @@ export class Engine {
 	assertRemovable(w) {
 		if (this.store.state.chats.some((c) => c.workspaceId === w.id && this.chatRunning(c.id)))
 			throw new Error('Stop running agents in this workspace first');
+		if (this.store.state.commandRuns.some((r) => r.workspaceId === w.id && r.status === 'running'))
+			throw new Error('Stop running commands in this workspace first');
 		if (w.provision?.status === 'running') throw new Error(`"${w.name}" is still being set up`);
 		if (w.database?.busy) throw new Error(`"${w.name}" has a database operation running`);
 		const e = w.environmentId && this.store.get('environments', w.environmentId);
@@ -723,9 +755,15 @@ export class Engine {
 				log: this.provisionLog(w)
 			}).catch((error) => warnings.push(`Teardown failed: ${error.message}`));
 		if (environment?.scope === 'shared' && environment.status === 'running')
-			await command('docker', ['compose', '-p', `wrx-${w.id.slice(0, 8)}`, 'down'], {
+			await command('docker', ['compose', '-p', composeProject(w), 'down'], {
 				timeout: GIT_WORKTREE_TIMEOUT,
 				env: dockerEnv(environment.profile)
+			}).catch((error) => warnings.push(`Compose down failed: ${error.message}`));
+		// Without a VM, the Run tab's Compose commands used the host's Docker.
+		if (!environment && w.composeOnHost)
+			await command('docker', ['compose', '-p', composeProject(w), 'down'], {
+				timeout: GIT_WORKTREE_TIMEOUT,
+				env: agentEnv()
 			}).catch((error) => warnings.push(`Compose down failed: ${error.message}`));
 		if (hasCheckout)
 			await command('git', ['-C', project.path, 'worktree', 'remove', w.path], {
@@ -755,6 +793,9 @@ export class Engine {
 			if (ids.has(c.workspaceId)) fs.rmSync(this.uploads(c.id), { recursive: true, force: true });
 		state.chats = state.chats.filter((c) => !ids.has(c.workspaceId));
 		state.tasks = state.tasks.filter((t) => !ids.has(t.workspaceId));
+		for (const r of state.commandRuns)
+			if (ids.has(r.workspaceId)) fs.rmSync(this.runLogFile(r.id), { force: true });
+		state.commandRuns = state.commandRuns.filter((r) => !ids.has(r.workspaceId));
 		state.workspaces = state.workspaces.filter((w) => !ids.has(w.id));
 	}
 	async deleteWorkspace(workspaceId) {
@@ -1082,6 +1123,13 @@ export class Engine {
 		if (!project) return '';
 		return `Worktrees: this project's Workbench worktrees live under ${worktreesDirectory(project)}. Its primary checkout is ${project.path}. Your current directory is the checkout you were started in. \`git worktree list\` shows them all with their branches.\n`;
 	}
+	commandsContext(w) {
+		const found = this.commandsFor(w);
+		if (!found.length) return '';
+		const listed = found.slice(0, PROMPT_COMMANDS).map(commandLine).join(', ');
+		const more = found.length - PROMPT_COMMANDS;
+		return `Project commands found in this checkout: ${listed}${more > 0 ? `, and ${more} more` : ''}.\n`;
+	}
 	prompt(chat, member, job, w, environment, images = []) {
 		const first = !member.sessionId;
 		const who = (m) =>
@@ -1117,7 +1165,7 @@ export class Engine {
 				? 'When a visual would help (mockups, ad creative, social posts, diagrams), create it with your built-in image generation tool. Every image you generate is posted to this thread automatically so teammates and the human can see it; refer to it in words rather than by file path.'
 				: '',
 			first
-				? `${this.worktreesContext(w)}Runtime: ${environment ? `${environment.name} (${environment.profile}); Docker endpoint ${dockerEnv(environment.profile).DOCKER_HOST}. Agents execute on the host; the VM isolates dependencies only.` : 'No managed dependency VM attached.'}`
+				? `${this.worktreesContext(w)}${this.commandsContext(w)}Runtime: ${environment ? `${environment.name} (${environment.profile}); Docker endpoint ${dockerEnv(environment.profile).DOCKER_HOST}. Agents execute on the host; the VM isolates dependencies only.` : 'No managed dependency VM attached.'}`
 				: '',
 			`Thread members:\n${roster}`,
 			first
@@ -1351,10 +1399,7 @@ export class Engine {
 		try {
 			child = this.spawn(member.provider, agentArgs(member, images), {
 				cwd: w.path,
-				env: {
-					...agentEnv(environment ? dockerEnv(environment.profile) : process.env),
-					...w.provision?.env
-				},
+				env: this.workspaceEnv(w, environment),
 				detached: process.platform !== 'win32',
 				stdio: ['pipe', 'pipe', 'pipe']
 			});
@@ -1397,19 +1442,229 @@ export class Engine {
 		for (const run of runs) {
 			const child = run.child;
 			if (!child) continue;
-			const kill = (signal) => {
-				try {
-					process.kill(process.platform === 'win32' ? child.pid : -child.pid, signal);
-				} catch {}
-			};
-			kill('SIGTERM');
+			killGroup(child, 'SIGTERM');
 			const key = `${run.chatId}:${run.memberId}`;
 			const timer = setTimeout(() => {
-				if (this.running.get(key)?.child === child) kill('SIGKILL');
+				if (this.running.get(key)?.child === child) killGroup(child, 'SIGKILL');
 			}, 3000);
 			timer.unref();
 		}
 		this.changed();
+	}
+	// What an agent or a Run tab command gets: its workspace's Docker target, ports and env values.
+	workspaceEnv(w, environment) {
+		return {
+			...agentEnv(environment ? dockerEnv(environment.profile) : process.env),
+			...w.provision?.env
+		};
+	}
+	commandsFor(w) {
+		return discoverCommands(w.path, { composeProject: composeProject(w) });
+	}
+	runLogFile(runId) {
+		return path.join(this.store.directory, 'run-logs', `${runId}.log`);
+	}
+	runTasks(workspaceId) {
+		const w = this.store.get('workspaces', workspaceId);
+		const saved = this.store.get('projects', w.projectId).runVariants || [];
+		return this.commandsFor(w).map((t) => ({
+			...t,
+			line: commandLine(t),
+			variants: saved
+				.filter((v) => v.taskId === t.id)
+				.map((v) => ({
+					...v,
+					key: variantKey(t.id, v.id),
+					line: commandLine(withFlags(t, parseFlags(v.flags)))
+				}))
+		}));
+	}
+	// Variants belong to the project, so every worktree has them. A variant stays saved when a branch
+	// lacks its command, and comes back on a branch that has it.
+	runVariantSave(input) {
+		const w = this.store.get('workspaces', input.workspaceId);
+		const project = this.store.get('projects', w.projectId);
+		const task = this.commandsFor(w).find((t) => t.id === input.taskId);
+		if (!task) throw new Error('This command is no longer in the workspace. Refresh the list.');
+		const name = requireText(input.name, 'Variant name', 60);
+		const flags = String(input.flags ?? '').trim();
+		if (flags.length > 1000) throw new Error('Flags are too long (maximum 1000 characters)');
+		parseFlags(flags);
+		const env = parseEnvLines(String(input.env ?? ''));
+		project.runVariants ??= [];
+		if (
+			project.runVariants.some(
+				(v) => v.taskId === task.id && v.name === name && v.id !== input.variantId
+			)
+		)
+			throw new Error(`"${task.name}" already has a variant named "${name}"`);
+		const fields = { name, flags, env };
+		let variant;
+		if (input.variantId) {
+			variant = project.runVariants.find((v) => v.id === input.variantId && v.taskId === task.id);
+			if (!variant) throw new Error('This variant no longer exists');
+			Object.assign(variant, fields);
+		} else {
+			variant = { id: id(), taskId: task.id, ...fields };
+			project.runVariants.push(variant);
+		}
+		this.changed();
+		return variant;
+	}
+	runVariantDelete(workspaceId, variantId) {
+		const w = this.store.get('workspaces', workspaceId);
+		const project = this.store.get('projects', w.projectId);
+		project.runVariants = (project.runVariants || []).filter((v) => v.id !== variantId);
+		this.changed();
+		return {};
+	}
+	// Takes a task id, never a command: only what this checkout declares right now can be started.
+	runStart(workspaceId, taskId, variantId) {
+		const w = this.store.get('workspaces', workspaceId);
+		if (w.provision?.status === 'running') throw new Error('Workspace setup is still running');
+		if (w.database?.busy) throw new Error('A database operation is running');
+		const environment = w.environmentId ? this.store.get('environments', w.environmentId) : null;
+		if (environment?.busy) throw new Error('An environment operation is running');
+		const task = this.commandsFor(w).find((t) => t.id === taskId);
+		if (!task) throw new Error('This command is no longer in the workspace. Refresh the list.');
+		let variant = null;
+		if (variantId) {
+			variant = this.store
+				.get('projects', w.projectId)
+				.runVariants?.find((v) => v.id === variantId && v.taskId === task.id);
+			if (!variant) throw new Error('This variant no longer exists. Refresh the list.');
+		}
+		const key = variant ? variantKey(task.id, variant.id) : task.id;
+		const name = variant ? `${task.name} · ${variant.name}` : task.name;
+		const invocation = variant ? withFlags(task, parseFlags(variant.flags)) : task;
+		const envNames = Object.keys(variant?.env || {});
+		const { commandRuns } = this.store.state;
+		if (
+			commandRuns.some((r) => r.workspaceId === w.id && r.taskId === key && r.status === 'running')
+		)
+			throw new Error(`"${name}" is already running`);
+		const run = {
+			id: id(),
+			workspaceId: w.id,
+			taskId: key,
+			name,
+			source: task.source,
+			line: commandLine(invocation),
+			// Names only: a value could be a secret, and this is kept in history and sent to the browser.
+			envNames,
+			status: 'running',
+			exitCode: null,
+			error: null,
+			startedAt: now(),
+			finishedAt: null
+		};
+		const file = this.runLogFile(run.id);
+		fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+		const header = `$ ${run.line}\n${envNames.length ? `Env values set: ${envNames.join(', ')}\n` : ''}`;
+		fs.writeFileSync(file, header, { mode: 0o600 });
+		commandRuns.push(run);
+		if (task.command === 'docker' && !environment) w.composeOnHost = true;
+		const finish = (status, exitCode, error) => {
+			if (run.status !== 'running') return;
+			run.status = status;
+			run.exitCode = exitCode;
+			run.error = error;
+			run.finishedAt = now();
+			this.commandChildren.delete(run.id);
+			this.pruneCommandRuns(w.id);
+			this.changed();
+		};
+		let child;
+		try {
+			child = this.spawn(invocation.command, invocation.args, {
+				cwd: w.path,
+				env: { ...this.workspaceEnv(w, environment), ...variant?.env },
+				detached: process.platform !== 'win32',
+				stdio: ['ignore', 'pipe', 'pipe']
+			});
+		} catch (error) {
+			finish('failed', null, error.message);
+			return run;
+		}
+		const entry = { child, stopping: false };
+		this.commandChildren.set(run.id, entry);
+		let size = 0;
+		const append = (data) => {
+			size += data.length;
+			try {
+				// A dev server can run for days, so the file is started over rather than left to grow.
+				if (size > RUN_LOG_LIMIT) {
+					fs.writeFileSync(file, 'Earlier output was removed to save disk space.\n', {
+						mode: 0o600
+					});
+					size = data.length;
+				}
+				fs.appendFileSync(file, data);
+			} catch {}
+		};
+		child.stdout.on('data', append);
+		child.stderr.on('data', append);
+		child.on('error', (error) =>
+			finish(
+				'failed',
+				null,
+				error.code === 'ENOENT' ? `${task.command} isn't installed or isn't on PATH` : error.message
+			)
+		);
+		// `close` waits for output to end, so a run isn't finished while something in it can still write.
+		child.on('close', (code, signal) => {
+			if (entry.stopping) finish('stopped', code, null);
+			else if (code === 0) finish('exited', 0, null);
+			else finish('failed', code, signal ? `Ended by ${signal}` : `Exited with code ${code}`);
+		});
+		this.changed();
+		return run;
+	}
+	runStop(runId) {
+		const run = this.store.get('commandRuns', runId);
+		const entry = this.commandChildren.get(run.id);
+		if (!entry) throw new Error('This command is not running');
+		entry.stopping = true;
+		killGroup(entry.child, 'SIGTERM');
+		setTimeout(() => {
+			if (this.commandChildren.get(run.id) === entry) killGroup(entry.child, 'SIGKILL');
+		}, 3000).unref();
+		return run;
+	}
+	// Called from the server's exit. Commands run in their own process groups, so they'd outlive it.
+	stopCommands() {
+		for (const { child } of this.commandChildren.values()) killGroup(child, 'SIGTERM');
+	}
+	runLog(runId) {
+		const run = this.store.get('commandRuns', runId);
+		return { status: run.status, log: readLogTail(this.runLogFile(run.id), RUN_LOG_TAIL) };
+	}
+	removeCommandRuns(runs) {
+		const removed = new Set(runs);
+		for (const r of removed) fs.rmSync(this.runLogFile(r.id), { force: true });
+		this.store.state.commandRuns = this.store.state.commandRuns.filter((r) => !removed.has(r));
+		this.changed();
+	}
+	runDelete(runId) {
+		const run = this.store.get('commandRuns', runId);
+		if (run.status === 'running') throw new Error('Stop this command before deleting it');
+		this.removeCommandRuns([run]);
+		return {};
+	}
+	runClear(workspaceId) {
+		this.removeCommandRuns(
+			this.store.state.commandRuns.filter(
+				(r) => r.workspaceId === workspaceId && r.status !== 'running'
+			)
+		);
+		return {};
+	}
+	pruneCommandRuns(workspaceId) {
+		const state = this.store.state;
+		const finished = state.commandRuns.filter(
+			(r) => r.workspaceId === workspaceId && r.status !== 'running'
+		);
+		this.removeCommandRuns(finished.slice(0, -RUNS_KEPT_PER_WORKSPACE));
 	}
 	deleteChat(chatId) {
 		const chat = this.store.get('chats', chatId);

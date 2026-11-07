@@ -19,6 +19,8 @@ export interface Finding {
 	disputed?: boolean;
 	dropped?: { evidence: string[] };
 	outcome?: 'open' | 'dismissed' | 'posted' | 'addressed';
+	/** The finding reworded in the user's voice. This is what gets posted when present. */
+	voiced?: string;
 }
 
 export interface ReviewerResult {
@@ -101,6 +103,21 @@ export function parseCrosscheck(text: string): CrosscheckResult[] | null {
 		uncertain: r?.uncertain === true,
 		evidence: asTexts(r?.evidence)
 	}));
+}
+
+const MAX_VOICED_LENGTH = 6000;
+
+/** Finding id to reworded text, or null when unreadable. An empty or oversized rewording is left out. */
+export function parseVoice(text: string): Map<string, string> | null {
+	const raw = lastBlock(text, 'review-voice') as { findings?: unknown } | null;
+	if (!raw || !Array.isArray(raw.findings)) return null;
+	const voiced = new Map<string, string>();
+	for (const entry of raw.findings as Record<string, unknown>[]) {
+		const id = asText(entry?.id);
+		const reworded = asText(entry?.text);
+		if (id && reworded && reworded.length <= MAX_VOICED_LENGTH) voiced.set(id, reworded);
+	}
+	return voiced;
 }
 
 /**

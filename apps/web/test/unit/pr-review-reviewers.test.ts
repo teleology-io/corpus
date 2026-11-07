@@ -55,15 +55,40 @@ describe('reviewer settings file', () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reviewers-'));
 		const file = path.join(dir, 'nested', 'settings.json');
 		const empty = { model: '', persona: null };
-		expect(readReviewerSettings(file)).toEqual({ integrator: empty, breaker: empty });
+		const defaults = { integrator: empty, breaker: empty, voice: empty };
+		expect(readReviewerSettings(file)).toEqual(defaults);
 
-		const saved = normalizeReviewerSettings({ integrator: { model: 'opus', persona: 'Mine' } });
+		const saved = normalizeReviewerSettings({
+			integrator: { model: 'opus', persona: 'Mine' },
+			voice: { model: 'haiku', persona: 'Blunt, lowercase.' }
+		});
 		writeReviewerSettings(file, saved);
 		expect(readReviewerSettings(file)).toEqual(saved);
 
 		fs.writeFileSync(file, '{ not json');
-		expect(readReviewerSettings(file)).toEqual({ integrator: empty, breaker: empty });
+		expect(readReviewerSettings(file)).toEqual(defaults);
 		fs.rmSync(dir, { recursive: true, force: true });
+	});
+
+	it('reads a file saved before voices existed as no voice', () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reviewers-'));
+		const file = path.join(dir, 'settings.json');
+		fs.writeFileSync(file, JSON.stringify({ integrator: { model: 'opus', persona: null } }));
+		expect(readReviewerSettings(file).voice).toEqual({ model: '', persona: null });
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+});
+
+describe('voice settings', () => {
+	it('treats a blank voice as off and validates it like a reviewer', () => {
+		expect(normalizeReviewerSettings({ voice: { persona: '  ' } }).voice.persona).toBeNull();
+		expect(normalizeReviewerSettings({ voice: { persona: ' Terse. ' } }).voice.persona).toBe(
+			'Terse.'
+		);
+		expect(() => normalizeReviewerSettings({ voice: { model: '--flag' } })).toThrow('model ID');
+		expect(() =>
+			normalizeReviewerSettings({ voice: { persona: 'x'.repeat(MAX_PERSONA_LENGTH + 1) } })
+		).toThrow('voice persona');
 	});
 });
 

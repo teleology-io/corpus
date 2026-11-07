@@ -6,6 +6,8 @@ export type ReviewProvider = 'claude' | 'codex';
 export interface ReviewSlot {
 	provider: ReviewProvider;
 	model: string;
+	/** False for a run that only rewrites text it was given, so it can't read anything. */
+	tools?: boolean;
 }
 
 export interface AgentRun {
@@ -70,10 +72,9 @@ export function reviewArgs(slot: ReviewSlot) {
 		'--setting-sources',
 		'user',
 		'--strict-mcp-config',
-		'--allowedTools',
-		'Read,Grep,Glob',
+		...(slot.tools === false ? [] : ['--allowedTools', 'Read,Grep,Glob']),
 		'--disallowedTools',
-		'Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task',
+		`Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task${slot.tools === false ? ',Read,Grep,Glob' : ''}`,
 		...(model ? ['--model', model] : [])
 	];
 }

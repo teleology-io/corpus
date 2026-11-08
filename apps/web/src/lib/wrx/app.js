@@ -202,16 +202,9 @@ export function mountWrx(root) {
 			}</nav><div class="sidebar-bottom"><button data-action="environments">${icon('box')}Environments<span>${state.environments.length}</span></button><button data-action="computers">${icon('terminal')}Computers</button><button data-action="settings">${icon('settings')}Connections<span class="live-dot"></span></button><div class="user"><span class="avatar">${icon('terminal')}</span><div>Local workbench<small>On your machine. In your control.</small></div></div></div></aside><section class="wrx-main"><header><div class="breadcrumbs">Workbench${p ? ` ${icon('chevron')} <span>${esc(p.name)}</span> ${icon('chevron')} <strong>${esc(w.name)}</strong>` : ''}</div><div class="header-right">${((n) => badge(`${n} agent${n === 1 ? '' : 's'} running`, n ? 'green' : ''))(active.reduce((s, c) => s + c.members.filter((m) => m.status === 'running').length, 0))}<button class="machine-button" data-action="computers">${icon('terminal')} ${esc(state.machine?.name || 'This computer')}${state.remote ? ' · Remote' : ''}</button></div></header>${
 				!w
 					? welcome()
-					: `<section class="workspace-header"><div><div class="eyebrow">PROJECT WORKSPACE</div><h1><span class="workspace-name">${esc(w.name)}</span><button class="workspace-switch" data-action="switcher" aria-haspopup="dialog" aria-label="${esc(w.name)}, switch workspace"><span>${esc(w.name)}</span>${icon('chevron')}</button><span class="workspace-tag">${icon('branch')}${esc(w.branch)}</span></h1><p>${esc(p.path)}</p></div><div class="actions">${w.path === p.path ? '' : btn('Delete workspace', 'workspace-delete', 'trash')}${btn('New workspace', 'workspace', 'branch')}${btn('New agent', 'chat', 'plus', 'primary')}</div></section>${setupBanner(w)}<div class="tabs">${[
-							['overview', 'grid', 'Overview'],
-							['agents', 'chat', 'Agent chats'],
-							['changes', 'code', 'Changes'],
-							['files', 'folder', 'Files'],
-							['tasks', 'check', 'Tasks'],
-							['reviews', 'branch', 'External reviews'],
-							['run', 'terminal', 'Run'],
-							['runtime', 'box', 'Environment']
-						]
+					: `<section class="workspace-header"><div><div class="eyebrow">PROJECT WORKSPACE</div><h1><span class="workspace-name">${esc(w.name)}</span><button class="workspace-switch" data-action="switcher" aria-haspopup="dialog" aria-label="${esc(w.name)}, switch workspace"><span>${esc(w.name)}</span>${icon('chevron')}</button><span class="workspace-tag">${icon('branch')}${esc(w.branch)}</span></h1><p>${esc(p.path)}</p></div><div class="actions">${w.path === p.path ? '' : btn('Delete workspace', 'workspace-delete', 'trash')}${p.folder ? '' : btn('New workspace', 'workspace', 'branch')}${btn('New agent', 'chat', 'plus', 'primary')}</div></section>${setupBanner(w)}<div class="tabs">${shownTabs(
+							p
+						)
 							.map(
 								([id, ico, label]) =>
 									`<button class="${tab === id ? 'active' : ''}" data-tab="${id}">${icon(ico)}${label}${id === 'agents' && chats.length ? `<span class="count">${chats.length}</span>` : ''}</button>`
@@ -249,15 +242,34 @@ export function mountWrx(root) {
 			}
 		}
 	}
+	const TABS = [
+		['overview', 'grid', 'Overview'],
+		['agents', 'chat', 'Agent chats'],
+		['changes', 'code', 'Changes'],
+		['files', 'folder', 'Files'],
+		['tasks', 'check', 'Tasks'],
+		['reviews', 'branch', 'External reviews'],
+		['run', 'terminal', 'Run'],
+		['runtime', 'box', 'Environment']
+	];
+	// A project that's a plain folder, not a Git repository, keeps to agents and files.
+	const FOLDER_TABS = new Set(['overview', 'agents', 'files']);
+	function shownTabs(p) {
+		const shown = p?.folder ? TABS.filter(([id]) => FOLDER_TABS.has(id)) : TABS;
+		// A link, a saved tab or an overview button can name a tab this project doesn't show.
+		if (!shown.some(([id]) => id === tab)) tab = 'overview';
+		return shown;
+	}
 	function welcome() {
-		return `<div class="welcome"><span class="hero-icon">${icon('branch')}</span><div class="eyebrow">A PLACE TO GET WORK DONE</div><h1>Your next branch.<br>Your next breakthrough.</h1><p>Bring your repository. Give every task its own workspace,<br>the right agent, and an environment that fits.</p>${btn('Open a local repository', 'project', 'plus', 'primary large')}<div class="welcome-features"><div>${icon('branch')}<b>Room to experiment</b><span>Real Git worktrees. Separate branches.</span></div><div>${icon('chat')}<b>Think, build, review</b><span>Claude and Codex, with context.</span></div><div>${icon('box')}<b>Dependencies, contained</b><span>Shared runtimes or dedicated VMs.</span></div></div><small>No projects yet. Start with an existing Git repository.</small></div>`;
+		return `<div class="welcome"><span class="hero-icon">${icon('branch')}</span><div class="eyebrow">A PLACE TO GET WORK DONE</div><h1>Your next branch.<br>Your next breakthrough.</h1><p>Bring your repository. Give every task its own workspace,<br>the right agent, and an environment that fits.</p>${btn('Open a local folder', 'project', 'plus', 'primary large')}<div class="welcome-features"><div>${icon('branch')}<b>Room to experiment</b><span>Real Git worktrees. Separate branches.</span></div><div>${icon('chat')}<b>Think, build, review</b><span>Claude and Codex, with context.</span></div><div>${icon('box')}<b>Dependencies, contained</b><span>Shared runtimes or dedicated VMs.</span></div></div><small>No projects yet. Start with any folder or Git repository.</small></div>`;
 	}
 	function overview(chats) {
 		const w = current(),
 			e = env(),
 			tasks = state.tasks.filter((t) => t.workspaceId === w.id);
 		const active = chats.filter((c) => c.status === 'running').length;
-		return `<div class="overview-top"><div><h2>A little focus goes a long way.</h2><p>Your code, conversations, and services. One workspace.</p></div><span class="mono muted">${esc(new Date(w.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }))}</span></div><div class="stats"><div>${icon('chat')}<span>Agent conversations</span><strong>${chats.length}<small>${active ? `${active} running` : 'Ready when you are'}</small></strong></div><div>${icon('branch')}<span>Working branch</span><strong class="branch-name">${esc(w.branch)}<small>Independent Git checkout</small></strong></div><div>${icon('box')}<span>Dependency environment</span><strong>${e ? esc(e.scope === 'shared' ? 'Shared VM' : 'Isolated VM') : 'Not attached'}<small>${e ? esc(e.name) : 'Choose the right amount of isolation'}</small></strong></div></div><div class="two-columns"><section class="panel"><div class="panel-heading"><h3>${icon('chat')}Agent conversations</h3><button class="text-button" data-action="chat">New chat ${icon('plus')}</button></div>${
+		const folder = project()?.folder;
+		return `<div class="overview-top"><div><h2>A little focus goes a long way.</h2><p>Your code, conversations, and services. One workspace.</p></div><span class="mono muted">${esc(new Date(w.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }))}</span></div><div class="stats${folder ? ' stats-two' : ''}"><div>${icon('chat')}<span>Agent conversations</span><strong>${chats.length}<small>${active ? `${active} running` : 'Ready when you are'}</small></strong></div><div>${icon('branch')}<span>Working branch</span><strong class="branch-name">${esc(w.branch)}<small>${folder ? 'This folder' : 'Independent Git checkout'}</small></strong></div>${folder ? '' : `<div>${icon('box')}<span>Dependency environment</span><strong>${e ? esc(e.scope === 'shared' ? 'Shared VM' : 'Isolated VM') : 'Not attached'}<small>${e ? esc(e.name) : 'Choose the right amount of isolation'}</small></strong></div>`}</div><div class="${folder ? 'one-column' : 'two-columns'}"><section class="panel"><div class="panel-heading"><h3>${icon('chat')}Agent conversations</h3><button class="text-button" data-action="chat">New chat ${icon('plus')}</button></div>${
 			chats.length
 				? `<div class="chat-rows">${chats
 						.slice()
@@ -269,7 +281,13 @@ export function mountWrx(root) {
 						)
 						.join('')}</div>`
 				: `<div class="empty compact">${icon('chat')}<h3>A second pair of eyes.</h3><p>Spin up a team of agents — lead, designer, engineer,<br>marketing — and let them work it out together.</p>${btn('Start a conversation', 'chat')}</div>`
-		}</section><section class="panel"><div class="panel-heading"><h3>${icon('box')}Workspace environment</h3>${badge(e?.status || 'Unconfigured', e?.status === 'running' ? 'green' : '')}</div><div class="environment-summary"><div class="environment-art">${icon('box')}<span>${e ? e.scope.toUpperCase() : 'YOUR RUNTIME'}</span></div><h3>${e ? esc(e.name) : 'Keep dependencies in their place.'}</h3><p>${e ? `${e.cpus} CPUs · ${e.memory} GB memory · ${e.disk} GB disk` : 'Reuse a shared VM for speed, or give this<br>workspace a dedicated VM for isolation.'}</p>${btn(e ? 'Manage environment' : 'Attach an environment', e ? 'runtime-view' : 'environment', 'arrow')}</div></section></div><section class="panel next-panel"><div><span class="eyebrow">MAKE PROGRESS</span><h3>${tasks.length ? `${tasks.filter((t) => t.status === 'done').length} of ${tasks.length} tasks complete` : 'Big ideas, manageable steps.'}</h3><p>Keep a lightweight task list alongside the work.</p></div>${btn('Open task list', 'tasks', 'arrow')}</section><div class="workspace-location">${icon('terminal')}<span>${esc(w.path)}</span><button class="text-button" data-action="copy-path">Copy path</button></div>`;
+		}</section>${folder ? '</div>' : environmentPanel(e)}${folder ? '' : taskPanel(tasks)}<div class="workspace-location">${icon('terminal')}<span>${esc(w.path)}</span><button class="text-button" data-action="copy-path">Copy path</button></div>`;
+	}
+	function environmentPanel(e) {
+		return `<section class="panel"><div class="panel-heading"><h3>${icon('box')}Workspace environment</h3>${badge(e?.status || 'Unconfigured', e?.status === 'running' ? 'green' : '')}</div><div class="environment-summary"><div class="environment-art">${icon('box')}<span>${e ? e.scope.toUpperCase() : 'YOUR RUNTIME'}</span></div><h3>${e ? esc(e.name) : 'Keep dependencies in their place.'}</h3><p>${e ? `${e.cpus} CPUs · ${e.memory} GB memory · ${e.disk} GB disk` : 'Reuse a shared VM for speed, or give this<br>workspace a dedicated VM for isolation.'}</p>${btn(e ? 'Manage environment' : 'Attach an environment', e ? 'runtime-view' : 'environment', 'arrow')}</div></section></div>`;
+	}
+	function taskPanel(tasks) {
+		return `<section class="panel next-panel"><div><span class="eyebrow">MAKE PROGRESS</span><h3>${tasks.length ? `${tasks.filter((t) => t.status === 'done').length} of ${tasks.length} tasks complete` : 'Big ideas, manageable steps.'}</h3><p>Keep a lightweight task list alongside the work.</p></div>${btn('Open task list', 'tasks', 'arrow')}</section>`;
 	}
 	const PRESETS = [
 		{
@@ -2341,7 +2359,7 @@ export function mountWrx(root) {
 				`directories${directory ? `?path=${encodeURIComponent(directory)}` : ''}`
 			);
 			if (request !== generation) return;
-			d.innerHTML = `<div class="modal-title"><h2>Open a project</h2><button class="square" data-close aria-label="Close">×</button></div><p>Choose a repository on <b>${esc(state.machine?.name || 'this computer')}</b>.</p><div class="folder-toolbar"><button id="folder-home">Home</button><button id="folder-up" ${listing.parent ? '' : 'disabled'}>↑ Parent folder</button></div><div class="folder-location" aria-label="Current folder">${esc(listing.path)}</div><div class="folder-list" role="list" aria-label="Folders">${listing.directories.map((entry) => `<button class="folder-entry" data-folder="${esc(entry.path)}" role="listitem">${icon('box')}<span>${esc(entry.name)}</span>${icon('chevron')}</button>`).join('') || '<p class="folder-empty">No subfolders</p>'}</div><div id="folder-error" class="error" role="alert"></div><div class="modal-footer folder-footer"><span>${listing.repository ? 'Git repository' : 'Choose a folder containing a Git repository'}</span><button data-close>Cancel</button><button id="folder-open" class="primary" ${listing.repository ? '' : 'disabled'}>Open Project ${icon('arrow')}</button></div>`;
+			d.innerHTML = `<div class="modal-title"><h2>Open a project</h2><button class="square" data-close aria-label="Close">×</button></div><p>Choose a folder or repository on <b>${esc(state.machine?.name || 'this computer')}</b>.</p><div class="folder-toolbar"><button id="folder-home">Home</button><button id="folder-up" ${listing.parent ? '' : 'disabled'}>↑ Parent folder</button></div><div class="folder-location" aria-label="Current folder">${esc(listing.path)}</div><div class="folder-list" role="list" aria-label="Folders">${listing.directories.map((entry) => `<button class="folder-entry" data-folder="${esc(entry.path)}" role="listitem">${icon('box')}<span>${esc(entry.name)}</span>${icon('chevron')}</button>`).join('') || '<p class="folder-empty">No subfolders</p>'}</div><div id="folder-error" class="error" role="alert"></div><div class="modal-footer folder-footer"><span>${listing.repository ? 'Git repository' : 'Folder'}</span><button data-close>Cancel</button><button id="folder-open" class="primary">Open Project ${icon('arrow')}</button></div>`;
 			if (!d.open) d.showModal();
 			const navigate = (dir) =>
 				browse(dir).catch((e) => {

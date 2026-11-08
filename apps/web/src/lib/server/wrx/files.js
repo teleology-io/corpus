@@ -191,6 +191,22 @@ export function searchFiles(root, query) {
 		.toLowerCase()
 		.split(/\s+/)
 		.filter(Boolean);
+	return gitFiles(root).then((listed) => {
+		const files = (listed ?? walkFiles(root)).filter((f) =>
+			terms.every((t) => f.toLowerCase().includes(t))
+		);
+		// Prefer matches in the file name, then shorter paths.
+		const score = (f) =>
+			(terms.every((t) => path.basename(f).toLowerCase().includes(t)) ? 0 : 1000) + f.length;
+		return files
+			.sort((a, b) => score(a) - score(b))
+			.slice(0, 60)
+			.map((f) => ({ path: f, name: path.basename(f), kind: fileKind(f) }));
+	});
+}
+
+// Git's file list, or null when the folder isn't a repository or Git isn't installed.
+function gitFiles(root) {
 	return new Promise((resolve) => {
 		const child = spawn('git', ['ls-files', '-co', '--exclude-standard', '-z'], {
 			cwd: root,
@@ -201,21 +217,33 @@ export function searchFiles(root, query) {
 		child.stdout.on('data', (chunk) => {
 			if (out.length < 20 * 1024 * 1024) out += chunk;
 		});
-		child.on('error', () => resolve([]));
-		child.on('close', () => {
-			const files = out
-				.split('\0')
-				.filter(Boolean)
-				.filter((f) => terms.every((t) => f.toLowerCase().includes(t)));
-			// Prefer matches in the file name, then shorter paths.
-			const score = (f) =>
-				(terms.every((t) => path.basename(f).toLowerCase().includes(t)) ? 0 : 1000) + f.length;
-			resolve(
-				files
-					.sort((a, b) => score(a) - score(b))
-					.slice(0, 60)
-					.map((f) => ({ path: f, name: path.basename(f), kind: fileKind(f) }))
-			);
-		});
+		child.on('error', () => resolve(null));
+		child.on('close', (code) => resolve(code === 0 ? out.split('\0').filter(Boolean) : null));
 	});
+}
+
+const WALK_LIMIT = 50000;
+const WALK_SKIPPED = new Set(['node_modules', '__pycache__']);
+
+// Files under a folder without Git: hidden and dependency folders are left out, and links aren't
+// followed, so the walk stays inside the folder.
+function walkFiles(root) {
+	const files = [];
+	const queue = [''];
+	for (let next = 0; next < queue.length && files.length < WALK_LIMIT; next++) {
+		let entries = [];
+		try {
+			entries = fs.readdirSync(path.join(root, queue[next]), { withFileTypes: true });
+		} catch {
+			// An unreadable folder is skipped, like one Git can't list.
+		}
+		for (const entry of entries) {
+			if (entry.name.startsWith('.')) continue;
+			const rel = queue[next] ? `${queue[next]}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) {
+				if (!WALK_SKIPPED.has(entry.name)) queue.push(rel);
+			} else if (entry.isFile()) files.push(rel);
+		}
+	}
+	return files;
 }

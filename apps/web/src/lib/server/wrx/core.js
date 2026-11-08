@@ -65,6 +65,19 @@ export async function command(bin, args, options = {}) {
 	});
 	return stdout.trim();
 }
+// A folder that isn't in a Git repository, or a computer without Git, can still be a project: it
+// shows this branch name and has only its main workspace.
+const FOLDER_BRANCH = 'master';
+// The repository a folder is in, or null when it isn't in one. Any other failure, like Git refusing a
+// repository owned by someone else, is an error, so a repository is never opened as a plain folder.
+export async function repositoryRoot(directory) {
+	try {
+		return await command('git', ['-C', directory, 'rev-parse', '--show-toplevel']);
+	} catch (error) {
+		if (error.code === 'ENOENT' || /not a git repository/i.test(String(error.stderr))) return null;
+		throw error;
+	}
+}
 // Agent CLIs are often installed where a terminal or GUI launch doesn't put them on PATH (Codex ships
 // inside the VS Code-family extensions). Agents always run with these locations appended.
 const EDITOR_EXTENSIONS = [
@@ -257,6 +270,8 @@ export function agentArgs(agent, images = []) {
 	if (agent.provider === 'codex')
 		return [
 			'exec',
+			// Codex otherwise refuses a project folder that isn't a Git repository.
+			'--skip-git-repo-check',
 			...(agent.sessionId
 				? ['resume', agent.sessionId]
 				: [
@@ -425,14 +440,19 @@ export class Engine {
 			requireText(input.path, 'Repository path', 4096).replace(/^~(?=\/)/, os.homedir())
 		);
 		if (!fs.statSync(directory).isDirectory()) throw new Error('Select a directory');
-		const root = await command('git', ['-C', directory, 'rev-parse', '--show-toplevel']);
+		const repository = await repositoryRoot(directory);
+		const root = repository ?? directory;
 		if (this.store.state.projects.some((p) => p.path === root))
-			throw new Error('This repository is already registered');
-		const branch = await command('git', ['-C', root, 'branch', '--show-current']);
+			throw new Error(`This ${repository ? 'repository' : 'folder'} is already registered`);
+		const branch = repository
+			? await command('git', ['-C', root, 'branch', '--show-current'])
+			: FOLDER_BRANCH;
 		const project = {
 			id: id(),
 			name: input.name?.trim() || path.basename(root),
 			path: root,
+			// The UI leaves out what needs Git, worktrees or project tooling.
+			...(repository ? {} : { folder: true }),
 			createdAt: now()
 		};
 		const workspace = {
@@ -461,6 +481,10 @@ export class Engine {
 			const e = this.store.get('environments', input.environmentId);
 			if (e.scope !== 'shared') throw new Error('Only shared environments can be reused');
 		}
+		if (!(await repositoryRoot(project.path)))
+			throw new Error(
+				"New workspaces are Git worktrees, and this folder isn't a Git repository. It has its main workspace only."
+			);
 		await command('git', ['check-ref-format', '--branch', branch]);
 		if (branch.startsWith('-')) throw new Error('Invalid branch');
 		const existing = !!input.existingBranch;
@@ -861,6 +885,7 @@ export class Engine {
 	}
 	async diff(workspaceId) {
 		const w = this.store.get('workspaces', workspaceId);
+		if (!(await repositoryRoot(w.path).catch(() => null))) return { status: '', diff: '', log: '' };
 		const [status, diff, log] = await Promise.all([
 			command('git', ['status', '--short'], { cwd: w.path }),
 			command('git', ['diff', 'HEAD', '--', '.'], { cwd: w.path }).catch(() => ''),
@@ -1124,7 +1149,8 @@ export class Engine {
 	// Where worktrees live, not which one is the agent's: its cwd says that, and it may move between them.
 	worktreesContext(w) {
 		const project = this.store.state.projects.find((p) => p.id === w.projectId);
-		if (!project) return '';
+		// A Git project's path is its repository root, so it has .git there. A plain folder has no worktrees.
+		if (!project || !fs.existsSync(path.join(project.path, '.git'))) return '';
 		return `Worktrees: this project's Workbench worktrees live under ${worktreesDirectory(project)}. Its primary checkout is ${project.path}. Your current directory is the checkout you were started in. \`git worktree list\` shows them all with their branches.\n`;
 	}
 	commandsContext(w) {

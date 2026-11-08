@@ -635,6 +635,9 @@
 	grid-template-columns: 1.15fr 1fr;
 	gap: 20px;
 }
+.wrx .stats.stats-two {
+	grid-template-columns: 1fr 1fr;
+}
 .wrx .panel {
 	border: 1px solid var(--border);
 	border-radius: 7px;
@@ -1685,7 +1688,8 @@
 	.wrx .content {
 		padding: 20px 18px;
 	}
-	.wrx .stats {
+	.wrx .stats,
+	.wrx .stats.stats-two {
 		grid-template-columns: 1fr;
 	}
 	.wrx .stats > div {

@@ -15,7 +15,7 @@ export async function chooseDirectory() {
 				'/usr/bin/osascript',
 				[
 					'-e',
-					'POSIX path of (choose folder with prompt "Choose a Git repository for Workbench" default location (path to home folder))'
+					'POSIX path of (choose folder with prompt "Choose a folder for Workbench" default location (path to home folder))'
 				],
 				{ timeout: 0 }
 			);
@@ -26,7 +26,7 @@ export async function chooseDirectory() {
 					'-NoProfile',
 					'-STA',
 					'-Command',
-					'Add-Type -AssemblyName System.Windows.Forms; $picker = New-Object System.Windows.Forms.FolderBrowserDialog; $picker.Description = "Choose a Git repository for Workbench"; if ($picker.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $picker.SelectedPath }'
+					'Add-Type -AssemblyName System.Windows.Forms; $picker = New-Object System.Windows.Forms.FolderBrowserDialog; $picker.Description = "Choose a folder for Workbench"; if ($picker.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $picker.SelectedPath }'
 				],
 				{ timeout: 0 }
 			);
@@ -34,7 +34,7 @@ export async function chooseDirectory() {
 			try {
 				selected = await command(
 					'zenity',
-					['--file-selection', '--directory', '--title=Choose a Git repository for Workbench'],
+					['--file-selection', '--directory', '--title=Choose a folder for Workbench'],
 					{ timeout: 0 }
 				);
 			} catch (error) {

@@ -12,7 +12,8 @@
 		CircleDot,
 		MessagesSquare,
 		CalendarDays,
-		Settings2
+		Settings2,
+		Trash2
 	} from '@lucide/svelte';
 	import BrandIcon from '#lib/components/ui/BrandIcon.svelte';
 	import Switch from '#lib/components/ui/Switch.svelte';
@@ -56,7 +57,7 @@
 			const name = data.catalog.find((p) => p.id === data.connected)?.name ?? 'Integration';
 			const body: Record<string, string> = {
 				'google-calendar': 'Syncing your primary calendar — pick more below.',
-				slack: 'Watching for mentions. Open Slack threads to read and reply.'
+				slack: 'Open Slack to browse channels and DMs, search, and reply.'
 			};
 			toast(`${name} connected`, {
 				tone: 'success',
@@ -96,14 +97,35 @@
 		if (!confirm(`Disconnect ${name}? ${what[name] ?? 'Imported tasks stay; items are removed.'}`))
 			return;
 		await attempt(() => api(`/api/integrations/${id}`, { method: 'DELETE' }));
-		await invalidate('app:integrations');
+		await Promise.all([invalidate('app:integrations'), invalidate('app:slack-connected')]);
 	}
 
-	async function setting(id: string, key: 'syncTasks' | 'notify', value: boolean) {
+	async function setting(
+		id: string,
+		key: 'syncTasks' | 'notify' | 'slackRetentionDays' | 'slackRateProfile',
+		value: boolean | number | string
+	) {
 		await attempt(() =>
 			api(`/api/integrations/${id}`, { method: 'PATCH', body: { [key]: value } })
 		);
 	}
+
+	async function setSlackPaused(paused: boolean) {
+		await attempt(() => api('/api/slack/sync', { body: { paused } }));
+		await invalidate('app:integrations');
+	}
+
+	async function clearSlackCache() {
+		if (
+			!confirm('Delete all cached Slack messages, conversations and names? Followed threads stay.')
+		)
+			return;
+		const ok = await attempt(() => api('/api/slack/cache', { method: 'DELETE' }).then(() => true));
+		if (ok)
+			toast('Slack cache cleared', { body: 'Conversations reload from Slack when you open them.' });
+	}
+
+	const RETENTION = [7, 30, 90, 365];
 
 	// Reads `now` so relative times re-render on the interval tick.
 	const ago = (iso: string | null) => {
@@ -138,6 +160,9 @@
 									>
 								{:else if c?.status === 'error'}<span class="chip bg-red-50 text-red-700"
 										><CircleAlert class="size-3" />Needs attention</span
+									>
+								{:else if c?.status === 'paused'}<span class="chip bg-canvas text-muted"
+										>Paused</span
 									>
 								{:else if !p.available}<span class="chip bg-canvas text-muted">Coming soon</span
 									>{/if}
@@ -185,10 +210,59 @@
 									/></label
 								>
 							{/if}
+							{#if p.id === 'slack'}
+								{#if c.missingScopes.length}
+									<p class="rounded-md bg-amber-50 px-2 py-1.5 text-amber-800">
+										Missing scopes: {c.missingScopes.join(', ')}. Add them under User Token Scopes,
+										reinstall the app, then update the token.
+									</p>
+								{/if}
+								{#if c.status !== 'error'}
+									<label class="flex items-center justify-between"
+										>Background sync
+										<Switch
+											checked={c.status === 'active'}
+											onchange={(v) => setSlackPaused(!v)}
+										/></label
+									>
+								{/if}
+								<label class="flex items-center justify-between gap-2"
+									>Keep cached messages
+									<select
+										class="input h-7 w-auto py-0 text-xs"
+										value={c.settings.slackRetentionDays ?? 30}
+										onchange={(e) =>
+											setting(c.id, 'slackRetentionDays', Number(e.currentTarget.value))}
+									>
+										{#each RETENTION as d (d)}
+											<option value={d}>{d === 365 ? '1 year' : `${d} days`}</option>
+										{/each}
+									</select></label
+								>
+								<label
+									class="flex items-center justify-between gap-2"
+									title="Slack limits history reads to 1 per minute for distributed apps that aren’t in the Marketplace. Detect learns it from rate-limit responses."
+									>Slack app type
+									<select
+										class="input h-7 w-auto py-0 text-xs"
+										value={c.settings.slackRateProfile ?? 'auto'}
+										onchange={(e) => setting(c.id, 'slackRateProfile', e.currentTarget.value)}
+									>
+										<option value="auto">Detect</option>
+										<option value="internal">Built for this workspace</option>
+										<option value="distributed">Distributed (1 req/min)</option>
+									</select></label
+								>
+								<button
+									class="flex items-center gap-1.5 text-muted hover:text-red-600"
+									onclick={clearSlackCache}
+									><Trash2 class="size-3" /> Clear cached Slack data</button
+								>
+							{/if}
 						</div>
-						{#if p.id === 'slack' && c.status === 'active'}
+						{#if p.id === 'slack' && c.status !== 'error'}
 							<a class="mt-3 btn-primary h-8 w-full text-xs" href="/integrations/slack"
-								><MessagesSquare class="size-3.5" /> Open threads{data.slackUnread
+								><MessagesSquare class="size-3.5" /> Open Slack{data.slackUnread
 									? ` · ${data.slackUnread} unread`
 									: ''}</a
 							>

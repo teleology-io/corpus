@@ -1,5 +1,5 @@
 import type { PageServerLoad } from './$types';
-import { INTEGRATION_CATALOG, getProvider } from '@corpus/core/integrations';
+import { INTEGRATION_CATALOG, getProvider, missingSlackScopes } from '@corpus/core/integrations';
 import { isInstanceAdmin, oauthApps, redirectUri } from '@corpus/db/apps';
 import { requireCtx } from '#lib/server/ctx.js';
 import { envPrefix, listConnections, openItems } from '#lib/server/integrations.js';
@@ -29,12 +29,20 @@ export const load: PageServerLoad = async ({ locals, url, depends }) => {
 					redirectUri: redirectUri(p.id),
 					setupUrl: provider?.appSetupUrl ?? null
 				},
-				personalToken: provider?.personalToken ?? null
+				// RegExp `pattern` stays server side (it's checked on submit).
+				personalToken: provider?.personalToken
+					? {
+							label: provider.personalToken.label,
+							createUrl: provider.personalToken.createUrl,
+							hint: provider.personalToken.hint
+						}
+					: null
 			};
 		}),
-		connections: connections.map((c) => ({
+		connections: connections.map(({ scopes, ...c }) => ({
 			...c,
-			lastPolledAt: c.lastPolledAt?.toISOString() ?? null
+			lastPolledAt: c.lastPolledAt?.toISOString() ?? null,
+			missingScopes: c.provider === 'slack' ? missingSlackScopes(scopes) : []
 		})),
 		items,
 		slackUnread,

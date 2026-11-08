@@ -9,6 +9,7 @@
 		"./notify": "./src/notify.ts",
 		"./access": "./src/access.ts",
 		"./connections": "./src/connections.ts",
+		"./slack": "./src/slack.ts",
 		"./apps": "./src/apps.ts",
 		"./storage": "./src/storage.ts",
 		"./testing": "./src/testing.ts"

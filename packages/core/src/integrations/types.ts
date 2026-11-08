@@ -31,6 +31,10 @@ export interface TokenSet {
 export interface AccountInfo {
 	login: string;
 	avatarUrl?: string | null;
+	/** Granted scopes, when the provider reports them on validation (comma or space separated). */
+	scopes?: string | null;
+	/** Provider-specific poll cursor to seed the connection with (e.g. the account's user id). */
+	cursor?: Record<string, string>;
 }
 
 export interface PollResult {
@@ -57,7 +61,15 @@ export interface Provider {
 	/** Where admins register the OAuth app (shown in the setup form). */
 	appSetupUrl: string;
 	/** Set when a user can connect with a pasted personal token instead of OAuth. */
-	personalToken?: { label: string; createUrl: string; hint: string };
+	personalToken?: {
+		label: string;
+		createUrl: string;
+		hint: string;
+		/** Accepted token shape (checked before the provider is called). */
+		pattern?: RegExp;
+		/** Shown when `pattern` doesn't match. */
+		patternHint?: string;
+	};
 	authorizeUrl(cfg: OAuthConfig, state: string): string;
 	exchangeCode(cfg: OAuthConfig, code: string): Promise<TokenSet>;
 	refresh?(cfg: OAuthConfig, refreshToken: string): Promise<TokenSet>;

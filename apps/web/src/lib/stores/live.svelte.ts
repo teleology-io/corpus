@@ -137,6 +137,8 @@ class Live {
 				// Only loaders that read integration data re-run. A poll that changed nothing
 				// still refreshes connection status (last polled / errors) on the pages showing it.
 				this.softRefresh(event.changes === 0 ? 'app:integration-status' : 'app:integrations');
+				// New Slack activity can light up the nav dot (cheap: one cached query).
+				if (event.provider === 'slack' && event.changes !== 0) this.softRefresh('app:slack-unread');
 				break;
 			case 'invalidate':
 				this.softRefresh(event.scope === 'integrations' ? 'app:integrations' : undefined);

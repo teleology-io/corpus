@@ -18,6 +18,14 @@ export interface ConnectionSettings {
 	notify?: boolean;
 	/** Google Calendar: external calendar ids to mirror (default: primary) */
 	calendars?: string[];
+	/** Slack: days of cached message history to keep (default 30) */
+	slackRetentionDays?: number;
+	/**
+	 * Slack: which conversations.history/replies limits apply. `internal` = workspace-built app
+	 * (Tier 3), `distributed` = unlisted distributed app (1 req/min, 15 per page), `auto` learns
+	 * from 429s.
+	 */
+	slackRateProfile?: 'auto' | 'internal' | 'distributed';
 }
 
 export const integrationConnection = pgTable(
@@ -52,6 +60,8 @@ export const integrationConnection = pgTable(
 		/** active | error | revoked */
 		status: text('status').notNull().default('active'),
 		lastError: text('last_error'),
+		/** Consecutive failed polls (exponential backoff); reset on success */
+		failureCount: integer('failure_count').notNull().default(0),
 		lastPolledAt: tstz('last_polled_at'),
 		nextPollAt: tstz('next_poll_at'),
 		createdAt: createdAt(),
@@ -174,6 +184,117 @@ export const slackThread = pgTable(
 		uniqueIndex('slack_thread_unique').on(t.connectionId, t.channelId, t.threadTs),
 		index('slack_thread_activity_idx').on(t.connectionId, t.lastActivityAt)
 	]
+);
+
+const connectionRef = () =>
+	uuid('connection_id')
+		.notNull()
+		.references(() => integrationConnection.id, { onDelete: 'cascade' });
+
+/** Cached Slack conversations (channels, private channels, DMs, group DMs) for one connection. */
+export const slackConversation = pgTable(
+	'slack_conversation',
+	{
+		id: id(),
+		connectionId: connectionRef(),
+		channelId: text('channel_id').notNull(),
+		/** public | private | im | mpim */
+		kind: text('kind').notNull(),
+		name: text('name'),
+		/** DM partner (kind = im) */
+		dmUserId: text('dm_user_id'),
+		topic: text('topic'),
+		isMember: boolean('is_member').notNull().default(true),
+		isArchived: boolean('is_archived').notNull().default(false),
+		/** ts of the newest cached message (incremental sync cursor) */
+		latestTs: text('latest_ts'),
+		/** ts of the oldest cached message */
+		oldestTs: text('oldest_ts'),
+		/** Older history exists in Slack beyond oldestTs */
+		hasOlder: boolean('has_older').notNull().default(true),
+		lastReadTs: text('last_read_ts'),
+		/** DMs: newest message ts per conversations.info (may be ahead of the message cache) */
+		remoteLatestTs: text('remote_latest_ts'),
+		/** DMs: Slack's own read marker (reading in Slack clears unread here too) */
+		slackLastRead: text('slack_last_read'),
+		/** DMs: last conversations.info check (round-robin order) */
+		checkedAt: tstz('checked_at'),
+		/** Last time the user opened it in Corpus — drives background refresh */
+		lastOpenedAt: tstz('last_opened_at'),
+		lastSyncedAt: tstz('last_synced_at'),
+		/** Slack error that stopped background polling (channel_not_found, not_in_channel…) */
+		inaccessibleCode: text('inaccessible_code'),
+		inaccessibleAt: tstz('inaccessible_at'),
+		createdAt: createdAt(),
+		updatedAt: updatedAt()
+	},
+	(t) => [uniqueIndex('slack_conversation_unique').on(t.connectionId, t.channelId)]
+);
+
+/** Cached Slack messages. (connection, channel, ts) is the dedupe key. */
+export const slackMessage = pgTable(
+	'slack_message',
+	{
+		id: id(),
+		connectionId: connectionRef(),
+		channelId: text('channel_id').notNull(),
+		ts: text('ts').notNull(),
+		/** Parent ts for thread replies and thread roots; null for plain channel messages */
+		threadTs: text('thread_ts'),
+		/** Seconds since epoch (ordering / retention) */
+		tsNum: doublePrecision('ts_num').notNull(),
+		userId: text('user_id'),
+		botName: text('bot_name'),
+		text: text('text').notNull().default(''),
+		subtype: text('subtype'),
+		replyCount: integer('reply_count').notNull().default(0),
+		latestReply: text('latest_reply'),
+		/** File metadata only — contents are never downloaded */
+		files: jsonb('files')
+			.$type<{ name: string; mimetype?: string; size?: number; url?: string }[]>()
+			.notNull()
+			.default([]),
+		editedTs: text('edited_ts'),
+		deletedAt: tstz('deleted_at'),
+		createdAt: createdAt(),
+		updatedAt: updatedAt()
+	},
+	(t) => [
+		uniqueIndex('slack_message_unique').on(t.connectionId, t.channelId, t.ts),
+		index('slack_message_channel_idx').on(t.connectionId, t.channelId, t.tsNum),
+		index('slack_message_thread_idx').on(t.connectionId, t.channelId, t.threadTs, t.tsNum)
+	]
+);
+
+/** Slack user display names / avatars per connection. */
+export const slackUser = pgTable(
+	'slack_user',
+	{
+		connectionId: connectionRef(),
+		userId: text('user_id').notNull(),
+		name: text('name').notNull(),
+		image: text('image'),
+		updatedAt: updatedAt()
+	},
+	(t) => [uniqueIndex('slack_user_unique').on(t.connectionId, t.userId)]
+);
+
+/**
+ * Token bucket per (connection, Slack method), shared by the web app and the worker so both
+ * stay under Slack's per-app, per-workspace, per-method limits.
+ */
+export const slackRateLimit = pgTable(
+	'slack_rate_limit',
+	{
+		connectionId: connectionRef(),
+		method: text('method').notNull(),
+		tokens: doublePrecision('tokens').notNull(),
+		perMinute: doublePrecision('per_minute').notNull(),
+		refilledAt: tstz('refilled_at').notNull().defaultNow(),
+		/** Slack said Retry-After: nothing goes out before this */
+		blockedUntil: tstz('blocked_until')
+	},
+	(t) => [uniqueIndex('slack_rate_limit_unique').on(t.connectionId, t.method)]
 );
 
 export const integrationConnectionRelations = relations(integrationConnection, ({ many }) => ({

@@ -1,53 +1,175 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { goto, invalidate } from '$app/navigation';
-	import { formatDistanceToNowStrict, format } from 'date-fns';
+	import { page } from '$app/state';
+	import { formatDistanceToNowStrict } from 'date-fns';
 	import {
 		ArrowLeft,
 		AtSign,
 		BellOff,
 		ExternalLink,
+		Hash,
 		Link2,
 		LoaderCircle,
+		Lock,
 		MessagesSquare,
-		Paperclip,
-		SendHorizontal
+		Plus,
+		RefreshCw,
+		Search,
+		Users
 	} from '@lucide/svelte';
 	import BrandIcon from '#lib/components/ui/BrandIcon.svelte';
 	import Avatar from '#lib/components/ui/Avatar.svelte';
 	import EmptyState from '#lib/components/ui/EmptyState.svelte';
-	import SlackText from '#lib/components/slack/SlackText.svelte';
+	import SlackComposer from '#lib/components/slack/SlackComposer.svelte';
+	import SlackMessageItem from '#lib/components/slack/SlackMessageItem.svelte';
+	import SlackConversation from '#lib/components/slack/SlackConversation.svelte';
+	import SlackThreadPanel from '#lib/components/slack/SlackThreadPanel.svelte';
+	import SlackSearch from '#lib/components/slack/SlackSearch.svelte';
+	import SlackBrowseModal from '#lib/components/slack/SlackBrowseModal.svelte';
+	import { startPoller } from '#lib/components/slack/poller.js';
 	import { api } from '#lib/api.js';
 	import { attempt, toast } from '#lib/stores/toast.svelte.js';
-	import type { SlackMessageDTO, SlackThreadDTO } from '#lib/types.js';
+	import type {
+		SlackConversationDTO,
+		SlackMessageDTO,
+		SlackSearchResultDTO,
+		SlackThreadDTO
+	} from '#lib/types.js';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 
+	// ----- URL state: ?thread=<followed id> | ?c=<channel>[&t=<thread ts>][&ts=<focus>] | ?q= -----
+	const params = $derived(page.url.searchParams);
+	const channelId = $derived(params.get('c'));
+	const threadTs = $derived(params.get('t'));
+	const focusTs = $derived(params.get('ts'));
+	const query = $derived(params.get('q'));
+
+	function nav(next: Record<string, string | null>, keep = false) {
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- builds a URL for goto only
+		const q = new URLSearchParams(keep ? page.url.search : undefined);
+		for (const [k, v] of Object.entries(next)) {
+			if (v) q.set(k, v);
+			else q.delete(k);
+		}
+		const s = q.toString();
+		return goto(s ? `?${s}` : '?', { replace: true, reset: false });
+	}
+
+	// ----- sidebar -----
+	let tab = $state<'chats' | 'threads'>(untrack(() => (data.selected ? 'threads' : 'chats')));
 	let filter = $state<'all' | 'unread' | 'mentions'>('all');
-	let link = $state('');
-	let following = $state(false);
-	let messages = $state<SlackMessageDTO[]>([]);
-	let loading = $state(false);
-	let loadError = $state<string | null>(null);
-	let draft = $state('');
-	let sending = $state(false);
-	let scroller = $state<HTMLDivElement>();
+	let convFilter = $state('');
+	let searchText = $state(untrack(() => page.url.searchParams.get('q') ?? ''));
+	let browseOpen = $state(false);
+	let refreshing = $state(false);
 	let now = $state(new Date());
+	/** Conversations opened from browse/search that aren't in the member list */
+	let picked = $state<Record<string, SlackConversationDTO>>({});
 
 	onMount(() => {
 		const t = setInterval(() => (now = new Date()), 30_000);
 		return () => clearInterval(t);
 	});
 
+	const known = $derived.by(() => {
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- rebuilt by $derived, never mutated after
+		const map = new Map<string, SlackConversationDTO>();
+		for (const c of Object.values(picked)) map.set(c.id, c);
+		if (data.extra) map.set(data.extra.id, data.extra);
+		for (const c of data.conversations) map.set(c.id, c);
+		return map;
+	});
+	const currentConv = $derived(
+		channelId
+			? (known.get(channelId) ?? {
+					id: channelId,
+					kind: channelId.startsWith('D') ? ('im' as const) : ('public' as const),
+					name: channelId,
+					topic: null,
+					image: null,
+					unread: false,
+					latestAt: null,
+					inaccessible: null
+				})
+			: null
+	);
+	const matches = (c: SlackConversationDTO) =>
+		!convFilter.trim() || c.name.toLowerCase().includes(convFilter.trim().toLowerCase());
+	const channels = $derived(
+		data.conversations.filter((c) => (c.kind === 'public' || c.kind === 'private') && matches(c))
+	);
+	const dms = $derived(
+		data.conversations.filter((c) => (c.kind === 'im' || c.kind === 'mpim') && matches(c))
+	);
+
 	const threads = $derived(
 		data.threads.filter((t) =>
 			filter === 'unread' ? t.unread : filter === 'mentions' ? t.mentioned : true
 		)
 	);
+	const unreadCount = $derived(data.threads.filter((t) => t.unread).length);
 	const current = $derived(data.threads.find((t) => t.id === data.selected) ?? null);
+	const mode = $derived(
+		query ? 'search' : current ? 'followed' : currentConv ? 'conversation' : 'none'
+	);
 
-	// Reload the open thread when switching threads or when live polling sees new activity.
+	const ago = (iso: string | null) => {
+		void now;
+		return iso ? formatDistanceToNowStrict(new Date(iso), { addSuffix: true }) : 'never';
+	};
+
+	function openConversation(
+		c: SlackConversationDTO | null,
+		extra: Record<string, string | null> = {}
+	) {
+		if (c && !data.conversations.some((x) => x.id === c.id)) picked = { ...picked, [c.id]: c };
+		return nav({ c: c?.id ?? null, t: null, ts: null, thread: null, q: null, ...extra });
+	}
+
+	function openResult(r: SlackSearchResultDTO) {
+		if (!r.channelId) {
+			if (r.permalink) window.open(r.permalink, '_blank', 'noreferrer');
+			return;
+		}
+		const conv = known.get(r.channelId) ?? {
+			id: r.channelId,
+			kind: r.channelId.startsWith('D') ? ('im' as const) : ('public' as const),
+			name: r.channelName.replace(/^#/, ''),
+			topic: null,
+			image: null,
+			unread: false,
+			latestAt: null,
+			inaccessible: null
+		};
+		if (r.kind === 'file') return openConversation(conv);
+		return openConversation(conv, r.threadTs ? { t: r.threadTs, ts: r.ts } : { ts: r.ts });
+	}
+
+	function search(e: SubmitEvent) {
+		e.preventDefault();
+		const q = searchText.trim();
+		if (q) void nav({ q, thread: null }, true);
+	}
+
+	async function refreshAll() {
+		refreshing = true;
+		await attempt(() => api('/api/slack/refresh', { method: 'POST' }));
+		await invalidate('app:slack');
+		refreshing = false;
+	}
+
+	// ----- followed thread (existing inbox) -----
+	let link = $state('');
+	let following = $state(false);
+	let messages = $state<SlackMessageDTO[]>([]);
+	let loading = $state(false);
+	let loadError = $state<string | null>(null);
+	let scroller = $state<HTMLDivElement>();
+
+	// Reload when switching threads or when live polling sees new activity; poll every 10 s while open.
 	let loadedKey = '';
 	$effect(() => {
 		const key = current ? `${current.id}:${current.lastActivityAt}` : '';
@@ -55,6 +177,12 @@
 		const switching = !loadedKey.startsWith(current.id);
 		loadedKey = key;
 		void load(current.id, switching);
+	});
+	$effect(() => {
+		const id = current?.id;
+		if (!id) return;
+		const p = startPoller(() => load(id, false).then(() => null), 10_000);
+		return () => p.stop();
 	});
 
 	async function load(id: string, switching: boolean) {
@@ -68,20 +196,25 @@
 				`/api/slack/threads/${id}`
 			);
 			if (data.selected !== id) return;
+			const stick =
+				!scroller || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+			const grew = res.messages.length !== messages.length;
 			messages = res.messages;
 			// Opening marked it read; let the list (and its unread dot) catch up.
-			if (current?.unread) void invalidate('app:integrations');
+			if (current?.unread)
+				void Promise.all([invalidate('app:integrations'), invalidate('app:slack-unread')]);
 			await tick();
-			scroller?.scrollTo({ top: scroller.scrollHeight });
+			if (switching || (grew && stick)) scroller?.scrollTo({ top: scroller.scrollHeight });
 		} catch (e) {
-			loadError = (e as Error).message;
+			if (switching) loadError = (e as Error).message;
+			else throw e;
 		} finally {
 			loading = false;
 		}
 	}
 
-	function open(id: string | null) {
-		goto(id ? `?thread=${id}` : '?', { replace: true, reset: false });
+	function openThread(id: string | null) {
+		return nav({ thread: id, c: null, t: null, ts: null, q: null });
 	}
 
 	async function follow(e: SubmitEvent) {
@@ -92,22 +225,21 @@
 		following = false;
 		if (!res) return;
 		link = '';
+		tab = 'threads';
 		await goto(`?thread=${res.id}`, { replace: true, refreshAll: true, reset: false });
 	}
 
-	async function send() {
-		const text = draft.trim();
-		if (!text || !current || sending) return;
-		sending = true;
+	async function reply(text: string) {
+		if (!current) return false;
+		const id = current.id;
 		const ok = await attempt(
-			() => api(`/api/slack/threads/${current!.id}/reply`, { body: { text } }).then(() => true),
+			() => api(`/api/slack/threads/${id}/reply`, { body: { text } }).then(() => true),
 			'Could not send reply'
 		);
-		sending = false;
-		if (!ok) return;
-		draft = '';
-		await load(current.id, false);
+		if (!ok) return false;
+		await load(id, false);
 		await invalidate('app:integrations');
+		return true;
 	}
 
 	async function unfollow() {
@@ -119,21 +251,51 @@
 		await goto('?', { replace: true, refreshAll: true, reset: false });
 	}
 
-	const ago = (iso: string | null) => {
-		void now;
-		return iso ? formatDistanceToNowStrict(new Date(iso), { addSuffix: true }) : '';
-	};
-	const unreadCount = $derived(data.threads.filter((t) => t.unread).length);
+	const showMain = $derived(mode !== 'none');
+	const threadTitle = $derived(
+		currentConv
+			? currentConv.kind === 'public' || currentConv.kind === 'private'
+				? `#${currentConv.name}`
+				: currentConv.name
+			: ''
+	);
 </script>
 
 <svelte:head><title>Slack · Corpus</title></svelte:head>
+
+{#snippet convRow(c: SlackConversationDTO)}
+	<li>
+		<button
+			class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-canvas/60 {c.id ===
+				channelId && mode === 'conversation'
+				? 'bg-primary-50/70 text-primary-700'
+				: c.unread
+					? 'font-semibold text-ink'
+					: 'text-gray-600'}"
+			onclick={() => openConversation(c)}
+			title={c.inaccessible ? 'Corpus can’t read this conversation' : undefined}
+		>
+			{#if c.kind === 'im'}
+				<Avatar name={c.name} image={c.image} size={18} />
+			{:else if c.kind === 'mpim'}
+				<Users class="size-3.5 shrink-0 text-muted" />
+			{:else if c.kind === 'private'}
+				<Lock class="size-3.5 shrink-0 text-muted" />
+			{:else}
+				<Hash class="size-3.5 shrink-0 text-muted" />
+			{/if}
+			<span class="min-w-0 flex-1 truncate {c.inaccessible ? 'opacity-50' : ''}">{c.name}</span>
+			{#if c.unread}<span class="size-2 shrink-0 rounded-full bg-primary-500"></span>{/if}
+		</button>
+	</li>
+{/snippet}
 
 {#if !data.connection}
 	<div class="p-4 lg:p-8">
 		<div class="card">
 			<EmptyState
 				title="Slack isn’t connected"
-				body="Connect Slack to read and reply to threads, and get notified when someone mentions you."
+				body="Connect Slack to read channels and DMs, search, and reply — and get notified when someone mentions you."
 			>
 				{#snippet icon()}<BrandIcon name="slack" class="size-5" />{/snippet}
 				{#snippet action()}<a class="btn-primary h-9" href="/integrations">Go to Integrations</a
@@ -147,102 +309,217 @@
 			<a href="/integrations" class="btn-ghost h-8 px-2 text-xs"
 				><ArrowLeft class="size-3.5" /> Integrations</a
 			>
-			<span class="flex items-center gap-2 text-sm text-muted">
-				<BrandIcon name="slack" class="size-4 text-ink" />
-				{data.connection.account}
+			<span class="flex min-w-0 items-center gap-2 text-sm text-muted">
+				<BrandIcon name="slack" class="size-4 shrink-0 text-ink" />
+				<span class="truncate">{data.connection.account}</span>
+				{#if data.identity?.userId}<span
+						class="hidden font-mono text-[11px] text-muted lg:inline"
+						title="Slack user ID">{data.identity.userId}</span
+					>{/if}
+				<span class="hidden text-xs sm:inline"
+					>· synced {ago(data.identity?.lastSyncedAt ?? null)}</span
+				>
 			</span>
 			{#if data.connection.status === 'error'}
-				<a
-					class="chip bg-red-50 text-red-700"
-					href="/integrations/slack/connect"
-					data-sveltekit-reload>Reconnect Slack</a
-				>
+				<a class="chip bg-red-50 text-red-700" href="/integrations">Reconnect Slack</a>
+			{:else if data.connection.status === 'paused'}
+				<a class="chip bg-canvas text-muted" href="/integrations">Background sync paused</a>
 			{/if}
-			<form class="ml-auto flex w-full gap-2 sm:w-auto" onsubmit={follow}>
-				<label class="flex input h-9 flex-1 items-center gap-2 sm:w-80">
-					<Link2 class="size-4 shrink-0 text-muted" />
+			<form class="ml-auto flex w-full gap-2 sm:w-auto" onsubmit={search}>
+				<label class="flex input h-9 flex-1 items-center gap-2 sm:w-72">
+					<Search class="size-4 shrink-0 text-muted" />
 					<input
 						class="w-full min-w-0 bg-transparent text-sm outline-none"
-						placeholder="Paste a Slack message link to follow"
-						bind:value={link}
+						placeholder="Search Slack"
+						bind:value={searchText}
 					/>
 				</label>
-				<button class="btn-outline h-9" disabled={following || !link.trim()}>
-					{#if following}<LoaderCircle class="size-4 animate-spin" />{/if} Follow
-				</button>
+				<button
+					type="button"
+					class="btn-icon size-9"
+					aria-label="Refresh"
+					title="Refresh"
+					disabled={refreshing || data.connection.status === 'error'}
+					onclick={refreshAll}
+					><RefreshCw class="size-4 {refreshing ? 'animate-spin' : ''}" /></button
+				>
 			</form>
 		</div>
 
-		<div class="grid min-h-0 flex-1 card md:grid-cols-[320px_1fr]">
-			<!-- thread list -->
+		{#if data.warning}
+			<p class="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{data.warning}</p>
+		{/if}
+		{#if data.identity?.missingScopes.length}
+			<p class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+				Slack reports this token is missing {data.identity.missingScopes.join(', ')} — some features won’t
+				work. Add them under <strong>User Token Scopes</strong> (not Bot Token Scopes) in your Slack app,
+				reinstall it, and update the token if Slack issued a new one.
+			</p>
+		{/if}
+
+		<div
+			class="grid min-h-0 flex-1 card md:grid-cols-[280px_1fr] {mode === 'conversation' && threadTs
+				? 'lg:grid-cols-[280px_1fr_360px]'
+				: ''}"
+		>
+			<!-- sidebar -->
 			<aside
-				class="flex min-h-0 flex-col border-line md:border-r {current ? 'hidden md:flex' : 'flex'}"
+				class="flex min-h-0 flex-col border-line md:border-r {showMain ? 'hidden md:flex' : 'flex'}"
 			>
 				<div class="flex gap-1 border-b border-line p-2">
-					{#each [['all', 'All'], ['unread', `Unread${unreadCount ? ` · ${unreadCount}` : ''}`], ['mentions', 'Mentions']] as [v, l] (v)}
-						<button
-							class="rounded-md px-3 py-1 text-xs font-medium {filter === v
-								? 'bg-primary-50 text-primary-600'
-								: 'text-muted hover:text-ink'}"
-							onclick={() => (filter = v as typeof filter)}>{l}</button
-						>
-					{/each}
+					<button
+						class="rounded-md px-3 py-1 text-xs font-medium {tab === 'chats'
+							? 'bg-primary-50 text-primary-600'
+							: 'text-muted hover:text-ink'}"
+						onclick={() => (tab = 'chats')}>Channels & DMs</button
+					>
+					<button
+						class="rounded-md px-3 py-1 text-xs font-medium {tab === 'threads'
+							? 'bg-primary-50 text-primary-600'
+							: 'text-muted hover:text-ink'}"
+						onclick={() => (tab = 'threads')}
+						>Threads{unreadCount ? ` · ${unreadCount}` : ''}</button
+					>
 				</div>
-				<ul class="min-h-0 flex-1 scrollbar-thin divide-y divide-line overflow-y-auto">
-					{#each threads as t (t.id)}
-						<li>
+
+				{#if tab === 'chats'}
+					<div class="flex gap-2 border-b border-line p-2">
+						<input
+							class="input h-8 min-w-0 flex-1 text-xs"
+							placeholder="Jump to…"
+							bind:value={convFilter}
+						/>
+						<button
+							class="btn-icon size-8"
+							aria-label="Browse channels"
+							title="Browse channels"
+							disabled={data.connection.status === 'error'}
+							onclick={() => (browseOpen = true)}><Plus class="size-4" /></button
+						>
+					</div>
+					<div class="min-h-0 flex-1 scrollbar-thin space-y-4 overflow-y-auto p-2">
+						{#if data.connection.status === 'error'}
+							<p class="p-2 text-xs text-muted">Reconnect Slack to load your conversations.</p>
+						{:else}
+							<section>
+								<p class="mb-1 section-label px-2">Channels</p>
+								<ul>
+									{#each channels as c (c.id)}{@render convRow(c)}{:else}
+										<li class="px-2 text-xs text-muted">No channels</li>
+									{/each}
+								</ul>
+							</section>
+							<section>
+								<p class="mb-1 section-label px-2">Direct messages</p>
+								<ul>
+									{#each dms as c (c.id)}{@render convRow(c)}{:else}
+										<li class="px-2 text-xs text-muted">No direct messages</li>
+									{/each}
+								</ul>
+							</section>
+						{/if}
+					</div>
+				{:else}
+					<div class="flex gap-1 border-b border-line p-2">
+						{#each [['all', 'All'], ['unread', 'Unread'], ['mentions', 'Mentions']] as [v, l] (v)}
 							<button
-								class="flex w-full gap-3 px-4 py-3 text-left hover:bg-canvas/60 {t.id ===
-								data.selected
-									? 'bg-primary-50/60'
-									: ''}"
-								onclick={() => open(t.id)}
+								class="rounded-md px-2.5 py-0.5 text-[11px] font-medium {filter === v
+									? 'bg-canvas text-ink'
+									: 'text-muted hover:text-ink'}"
+								onclick={() => (filter = v as typeof filter)}>{l}</button
 							>
-								<span
-									class="mt-1.5 size-2 shrink-0 rounded-full {t.unread
-										? 'bg-primary-500'
-										: 'bg-transparent'}"
-								></span>
-								<span class="min-w-0 flex-1">
-									<span class="flex items-center gap-1.5 text-xs text-muted">
-										<span class="truncate font-medium text-ink">{t.channelName ?? 'Thread'}</span>
-										{#if t.mentioned}<AtSign class="size-3 shrink-0 text-primary-500" />{/if}
-										<span class="ml-auto shrink-0">{ago(t.lastActivityAt)}</span>
-									</span>
+						{/each}
+					</div>
+					<form class="flex gap-2 border-b border-line p-2" onsubmit={follow}>
+						<label class="flex input h-8 min-w-0 flex-1 items-center gap-2">
+							<Link2 class="size-3.5 shrink-0 text-muted" />
+							<input
+								class="w-full min-w-0 bg-transparent text-xs outline-none"
+								placeholder="Paste a message link to follow"
+								bind:value={link}
+							/>
+						</label>
+						<button class="btn-outline h-8 text-xs" disabled={following || !link.trim()}>
+							{#if following}<LoaderCircle class="size-3.5 animate-spin" />{/if} Follow
+						</button>
+					</form>
+					<ul class="min-h-0 flex-1 scrollbar-thin divide-y divide-line overflow-y-auto">
+						{#each threads as t (t.id)}
+							<li>
+								<button
+									class="flex w-full gap-3 px-4 py-3 text-left hover:bg-canvas/60 {t.id ===
+									data.selected
+										? 'bg-primary-50/60'
+										: ''}"
+									onclick={() => openThread(t.id)}
+								>
 									<span
-										class="mt-0.5 line-clamp-2 text-[13px] {t.unread
-											? 'font-medium text-ink'
-											: 'text-gray-600'}"
-										>{#if t.authorName}<span class="font-semibold">{t.authorName}:</span>
-										{/if}{t.preview ?? 'Open to load this thread'}</span
-									>
-									{#if t.replyCount}<span class="mt-1 block text-[11px] text-muted"
-											>{t.replyCount} {t.replyCount === 1 ? 'reply' : 'replies'}</span
-										>{/if}
-								</span>
-							</button>
-						</li>
-					{:else}
-						<li>
-							<EmptyState
-								title={filter === 'all' ? 'No threads yet' : 'Nothing here'}
-								body={filter === 'all'
-									? 'Threads where you’re @mentioned show up here automatically. You can also paste a message link above.'
-									: 'You’re all caught up.'}
-							>
-								{#snippet icon()}<MessagesSquare class="size-5" />{/snippet}
-							</EmptyState>
-						</li>
-					{/each}
-				</ul>
+										class="mt-1.5 size-2 shrink-0 rounded-full {t.unread
+											? 'bg-primary-500'
+											: 'bg-transparent'}"
+									></span>
+									<span class="min-w-0 flex-1">
+										<span class="flex items-center gap-1.5 text-xs text-muted">
+											<span class="truncate font-medium text-ink">{t.channelName ?? 'Thread'}</span>
+											{#if t.mentioned}<AtSign class="size-3 shrink-0 text-primary-500" />{/if}
+											<span class="ml-auto shrink-0">{ago(t.lastActivityAt)}</span>
+										</span>
+										<span
+											class="mt-0.5 line-clamp-2 text-[13px] {t.unread
+												? 'font-medium text-ink'
+												: 'text-gray-600'}"
+											>{#if t.authorName}<span class="font-semibold">{t.authorName}:</span>
+											{/if}{t.preview ?? 'Open to load this thread'}</span
+										>
+										{#if t.replyCount}<span class="mt-1 block text-[11px] text-muted"
+												>{t.replyCount} {t.replyCount === 1 ? 'reply' : 'replies'}</span
+											>{/if}
+									</span>
+								</button>
+							</li>
+						{:else}
+							<li>
+								<EmptyState
+									title={filter === 'all' ? 'No threads yet' : 'Nothing here'}
+									body={filter === 'all'
+										? 'Threads where you’re @mentioned or that you reply to show up here.'
+										: 'You’re all caught up.'}
+								>
+									{#snippet icon()}<MessagesSquare class="size-5" />{/snippet}
+								</EmptyState>
+							</li>
+						{/each}
+					</ul>
+				{/if}
 			</aside>
 
-			<!-- thread view -->
-			<section class="flex min-h-0 flex-col {current ? 'flex' : 'hidden md:flex'}">
-				{#if current}
+			<!-- main pane -->
+			<section
+				class="min-h-0 flex-col {mode === 'conversation' && threadTs
+					? 'hidden lg:flex'
+					: showMain
+						? 'flex'
+						: 'hidden md:flex'}"
+			>
+				{#if mode === 'search' && query}
+					<SlackSearch
+						{query}
+						onquery={(q) => {
+							searchText = q;
+							void nav({ q }, true);
+						}}
+						onopen={openResult}
+						onclose={() => {
+							searchText = '';
+							void nav({ q: null }, true);
+						}}
+					/>
+				{:else if mode === 'followed' && current}
 					<header class="flex items-center gap-2 border-b border-line px-4 py-3">
-						<button class="btn-icon size-8 md:hidden" aria-label="Back" onclick={() => open(null)}
-							><ArrowLeft class="size-4" /></button
+						<button
+							class="btn-icon size-8 md:hidden"
+							aria-label="Back"
+							onclick={() => openThread(null)}><ArrowLeft class="size-4" /></button
 						>
 						<div class="min-w-0 flex-1">
 							<p class="truncate text-sm font-semibold">{current.channelName ?? 'Thread'}</p>
@@ -276,80 +553,58 @@
 							<p class="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{loadError}</p>
 						{/if}
 						{#each messages as m, i (m.ts)}
-							<div
-								class="flex gap-3 {i === 0 && messages.length > 1
-									? 'border-b border-line pb-4'
-									: ''}"
-							>
-								<Avatar name={m.author.name} image={m.author.image} size={32} />
-								<div class="min-w-0 flex-1">
-									<p class="flex items-baseline gap-2">
-										<span class="text-sm font-semibold">{m.author.name}</span>
-										<span class="text-[11px] text-muted" title={format(new Date(m.at), 'PPpp')}
-											>{ago(m.at)}{m.edited ? ' · edited' : ''}</span
-										>
-									</p>
-									<SlackText segments={m.segments} />
-									{#each m.files as f (f.url)}
-										<a
-											href={f.url}
-											target="_blank"
-											rel="noreferrer"
-											class="mt-1 inline-flex items-center gap-1 text-xs text-primary-600 hover:underline"
-											><Paperclip class="size-3" />{f.name}</a
-										>
-									{/each}
-								</div>
+							<div class={i === 0 && messages.length > 1 ? 'border-b border-line pb-4' : ''}>
+								<SlackMessageItem {m} {now} />
 							</div>
 						{/each}
 					</div>
-
-					<form
-						class="border-t border-line p-3"
-						onsubmit={(e) => {
-							e.preventDefault();
-							void send();
-						}}
-					>
-						<div
-							class="flex items-end gap-2 rounded-xl border border-line bg-surface p-2 focus-within:border-primary-500"
-						>
-							<textarea
-								class="max-h-40 min-h-[40px] flex-1 resize-none bg-transparent px-1 py-1.5 text-sm outline-none"
-								rows="1"
-								placeholder="Reply in thread…"
-								bind:value={draft}
-								onkeydown={(e) => {
-									if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-										e.preventDefault();
-										void send();
-									}
-								}}></textarea>
-							<button
-								class="btn-primary h-9 px-3"
-								disabled={sending || !draft.trim()}
-								aria-label="Send"
-							>
-								{#if sending}<LoaderCircle class="size-4 animate-spin" />{:else}<SendHorizontal
-										class="size-4"
-									/>{/if}
-							</button>
-						</div>
-						<p class="mt-1.5 px-1 text-[11px] text-muted">
-							Posts to Slack as you · Enter to send, Shift+Enter for a new line
-						</p>
-					</form>
+					<SlackComposer placeholder="Reply in thread…" onsend={reply} />
+				{:else if mode === 'conversation' && currentConv}
+					<SlackConversation
+						conversation={currentConv}
+						{focusTs}
+						onthread={(ts) => nav({ t: ts, ts: null }, true)}
+						onback={() => openConversation(null)}
+					/>
 				{:else}
 					<div class="flex flex-1 items-center justify-center">
 						<EmptyState
-							title="Pick a thread"
-							body="Read the conversation and reply without leaving Corpus."
+							title="Pick a conversation"
+							body="Read channels, DMs and threads, search, and reply without leaving Corpus."
 						>
 							{#snippet icon()}<MessagesSquare class="size-5" />{/snippet}
 						</EmptyState>
 					</div>
 				{/if}
 			</section>
+
+			<!-- thread panel (channel threads) -->
+			{#if mode === 'conversation' && currentConv && threadTs}
+				<section class="flex min-h-0 flex-col border-line lg:border-l">
+					<SlackThreadPanel
+						channelId={currentConv.id}
+						{threadTs}
+						title={threadTitle}
+						focusTs={focusTs && focusTs !== threadTs ? focusTs : null}
+						onclose={() => nav({ t: null }, true)}
+					/>
+				</section>
+			{/if}
 		</div>
 	</div>
+
+	<SlackBrowseModal
+		bind:open={browseOpen}
+		onpick={(c) =>
+			openConversation({
+				id: c.id,
+				kind: c.kind,
+				name: c.name,
+				topic: c.topic,
+				image: null,
+				unread: false,
+				latestAt: null,
+				inaccessible: null
+			})}
+	/>
 {/if}

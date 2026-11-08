@@ -44,7 +44,7 @@
 <Modal
 	bind:open
 	title="Connect {target?.name ?? ''} with a token"
-	description="No OAuth app needed. The token is encrypted and only used to read your items."
+	description="No OAuth app needed. The token is encrypted and never leaves the Corpus server."
 	size="sm"
 >
 	{#snippet icon()}<KeyRound class="size-5" />{/snippet}

@@ -10,7 +10,9 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
 		z.object({
 			syncTasks: z.boolean().optional(),
 			notify: z.boolean().optional(),
-			calendars: z.array(z.string().max(300)).max(50).optional()
+			calendars: z.array(z.string().max(300)).max(50).optional(),
+			slackRetentionDays: z.number().int().min(1).max(365).optional(),
+			slackRateProfile: z.enum(['auto', 'internal', 'distributed']).optional()
 		})
 	);
 	await updateConnectionSettings(ctx.userId, params.id, settings);

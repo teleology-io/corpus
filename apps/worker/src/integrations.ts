@@ -225,7 +225,7 @@ export async function pollConnection(c: Conn) {
 					? await syncIcal(c, token)
 					: await syncGoogle(c, token)
 				: c.provider === 'slack'
-					? await syncSlack(c, token)
+					? await syncSlack(c)
 					: await pollFeed(c, provider, token);
 		await db
 			.update(conn)
@@ -233,6 +233,7 @@ export async function pollConnection(c: Conn) {
 				cursor: result.cursor,
 				status: 'active',
 				lastError: null,
+				failureCount: 0,
 				lastPolledAt: new Date(),
 				pollIntervalSec: result.intervalSec,
 				nextPollAt: new Date(Date.now() + result.intervalSec * 1000)
@@ -249,20 +250,20 @@ export async function pollConnection(c: Conn) {
 		const auth = e instanceof ProviderAuthError;
 		const message = (e as Error).message;
 		console.error(`[poll] ${c.provider}/${c.id}: ${message}`);
+		const rateLimited = e instanceof SlackApiError && !!e.retryAfterSec;
+		// Back off: auth errors wait for reconnect; rate limits honor Retry-After; other
+		// failures retry exponentially (1, 2, 4… min, capped at 30).
+		const delaySec = rateLimited
+			? (e as SlackApiError).retryAfterSec!
+			: Math.min(60 * 2 ** c.failureCount, 1800);
 		await db
 			.update(conn)
 			.set({
 				status: auth ? 'error' : c.status,
 				lastError: message.slice(0, 500),
+				failureCount: rateLimited ? c.failureCount : c.failureCount + 1,
 				lastPolledAt: new Date(),
-				// Back off: auth errors wait for reconnect; rate limits honor Retry-After;
-				// other transient errors retry in 5 min.
-				nextPollAt: auth
-					? null
-					: new Date(
-							Date.now() +
-								(e instanceof SlackApiError && e.retryAfterSec ? e.retryAfterSec : 300) * 1000
-						)
+				nextPollAt: auth ? null : new Date(Date.now() + delaySec * 1000)
 			})
 			.where(eq(conn.id, c.id));
 		if (auth) {

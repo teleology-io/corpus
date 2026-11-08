@@ -175,9 +175,66 @@ export type SlackSegment =
 export interface SlackMessageDTO {
 	ts: string;
 	at: string;
-	author: { name: string; image: string | null };
+	/** Parent thread ts (roots carry their own ts) */
+	threadTs: string | null;
+	replyCount: number;
+	author: { id: string | null; name: string; image: string | null };
 	mine: boolean;
 	edited: boolean;
+	deleted: boolean;
+	/** Join/leave/topic and other system messages */
+	system: boolean;
 	segments: SlackSegment[];
-	files: { name: string; url: string }[];
+	/** Metadata only — links open in Slack; nothing is downloaded */
+	files: { name: string; url: string | null; size: number | null; mimetype: string | null }[];
+}
+
+export interface SlackConversationDTO {
+	id: string;
+	kind: 'public' | 'private' | 'im' | 'mpim';
+	/** Display name: #channel, DM partner, or group DM members */
+	name: string;
+	topic: string | null;
+	image: string | null;
+	unread: boolean;
+	latestAt: string | null;
+	inaccessible: string | null;
+}
+
+export interface SlackMessagesPage {
+	messages: SlackMessageDTO[];
+	/** Messages already shown that were edited or deleted since the last poll */
+	changed: SlackMessageDTO[];
+	hasOlder: boolean;
+	/** Slack (or our budget) asked us to wait — poll no sooner than this */
+	retryAfterSec: number | null;
+	/** history is on the 1 req/min limit: poll slowly */
+	restricted: boolean;
+	error: string | null;
+	/** Server time the poll started — pass back as `changedSince` */
+	syncedAt: string;
+}
+
+export interface SlackSearchResultDTO {
+	kind: 'message' | 'file';
+	channelId: string | null;
+	channelName: string;
+	ts: string;
+	threadTs: string | null;
+	at: string;
+	author: string;
+	segments: SlackSegment[];
+	permalink: string | null;
+	fileName?: string;
+}
+
+export interface SlackIdentityDTO {
+	userId: string | null;
+	teamName: string | null;
+	account: string | null;
+	status: string;
+	error: string | null;
+	lastSyncedAt: string | null;
+	missingScopes: string[];
+	restricted: boolean;
 }

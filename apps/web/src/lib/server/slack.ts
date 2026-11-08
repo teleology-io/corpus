@@ -1,16 +1,24 @@
 import { error } from '@sveltejs/kit';
 import { and, desc, eq } from 'drizzle-orm';
 import { db, schema } from '@corpus/db';
-import { accessToken } from '@corpus/db/connections';
 import {
 	ProviderAuthError,
+	SLACK_ERROR_MESSAGES,
 	SlackApiError,
 	mrkdwnToText,
 	parseMrkdwn,
 	parseSlackLink,
-	slackApi,
+	type SlackClient,
 	type SlackMessage
 } from '@corpus/core/integrations';
+import {
+	hasSlackUnread,
+	resolveUsers,
+	slackCtx,
+	syncThread,
+	upsertMessages,
+	userIds
+} from '@corpus/db/slack';
 import type { SlackMessageDTO, SlackThreadDTO } from '#lib/types.js';
 
 const { integrationConnection: conn, slackThread: thread } = schema;
@@ -30,35 +38,49 @@ export async function slackConnection(userId: string) {
 	return row ?? null;
 }
 
-async function requireSlack(userId: string) {
+export async function requireSlack(userId: string) {
 	const c = await slackConnection(userId);
 	if (!c) error(404, 'Connect Slack first');
 	if (c.status === 'error') error(409, 'Slack needs to be reconnected');
 	return c;
 }
 
+/** HTTP status for a Slack error code. */
+function slackStatus(code: string) {
+	if (code === 'ratelimited' || code === 'rate_limited') return 429;
+	if (code === 'missing_scope' || code === 'restricted_action') return 403;
+	if (code === 'channel_not_found' || code === 'thread_not_found') return 404;
+	if (code === 'network_error' || code.startsWith('http_')) return 502;
+	return 400;
+}
+
+/** User-facing text for a Slack error (codes only — never tokens or request headers). */
+export function slackErrorMessage(e: SlackApiError) {
+	if (e.code === 'missing_scope' && e.needed) {
+		const list = e.needed
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean);
+		return `Your Slack token is missing ${list.length > 1 ? 'the scopes' : 'the scope'} ${list.join(', ')} — add ${list.length > 1 ? 'them' : 'it'} under User Token Scopes, reinstall the app, and update the token`;
+	}
+	if (e.code === 'network_error' || e.code.startsWith('http_'))
+		return 'Couldn’t reach Slack — try again';
+	return SLACK_ERROR_MESSAGES[e.code] ?? `Slack: ${e.code}`;
+}
+
 /** Map Slack API failures onto HTTP errors the UI can show. */
-async function slackCall<T>(fn: () => Promise<T>): Promise<T> {
+export async function slackCall<T>(fn: () => Promise<T>): Promise<T> {
 	try {
 		return await fn();
 	} catch (e) {
 		if (e instanceof ProviderAuthError) error(409, 'Slack needs to be reconnected');
-		if (e instanceof SlackApiError) {
-			const messages: Record<string, string> = {
-				ratelimited: 'Slack is rate limiting requests — try again in a minute',
-				thread_not_found: 'That thread no longer exists',
-				channel_not_found: 'You don’t have access to that conversation',
-				not_in_channel: 'Join the channel in Slack to reply there',
-				is_archived: 'That channel is archived'
-			};
-			error(e.code === 'ratelimited' ? 429 : 400, messages[e.code] ?? `Slack: ${e.code}`);
-		}
+		if (e instanceof SlackApiError) error(slackStatus(e.code), slackErrorMessage(e));
 		throw e;
 	}
 }
 
-async function slackUserId(c: Conn, token: string) {
-	return c.cursor.userId ?? (await slackApi.authTest(token)).user_id;
+export async function slackUserId(c: Conn, client: SlackClient) {
+	return c.cursor.userId ?? (await client.authTest()).userId;
 }
 
 const toDTO = (t: Thread): SlackThreadDTO => ({
@@ -96,22 +118,91 @@ async function ownThread(c: Conn, id: string) {
 	return row;
 }
 
-async function toMessages(token: string, me: string, messages: SlackMessage[]) {
-	const users = await slackApi.users(token, messages);
-	const names = Object.fromEntries(Object.values(users).map((u) => [u.id, u.name]));
-	return messages.map((m): SlackMessageDTO => ({
+async function toMessages(
+	ctx: { conn: { id: string }; client: SlackClient },
+	me: string,
+	messages: SlackMessage[]
+) {
+	const users = await resolveUsers(ctx, userIds(messages));
+	return messages.map((m) => messageDTO(fromApi(m), users, me));
+}
+
+/** Shape shared by cached rows and live API messages. */
+export interface MessageLike {
+	ts: string;
+	threadTs: string | null;
+	userId: string | null;
+	botName: string | null;
+	text: string;
+	subtype: string | null;
+	replyCount: number;
+	editedTs: string | null;
+	deletedAt: Date | null;
+	files: { name: string; mimetype?: string; size?: number; url?: string }[];
+}
+
+export const fromApi = (m: SlackMessage): MessageLike => ({
+	ts: m.ts,
+	threadTs: m.thread_ts ?? null,
+	userId: m.user ?? null,
+	botName: m.user ? null : (m.username ?? (m.bot_id ? 'Bot' : null)),
+	text: m.text ?? '',
+	subtype: m.subtype ?? null,
+	replyCount: m.reply_count ?? 0,
+	editedTs: m.edited?.ts ?? null,
+	deletedAt: null,
+	files: (m.files ?? []).map((f) => ({
+		name: f.title || f.name || 'File',
+		mimetype: f.mimetype,
+		size: f.size,
+		url: f.permalink
+	}))
+});
+
+const SYSTEM_SUBTYPES = new Set([
+	'channel_join',
+	'channel_leave',
+	'channel_topic',
+	'channel_purpose',
+	'channel_name',
+	'channel_archive',
+	'channel_unarchive',
+	'group_join',
+	'group_leave',
+	'pinned_item',
+	'tombstone'
+]);
+
+export function messageDTO(
+	m: MessageLike,
+	users: Record<string, { name: string; image: string | null }>,
+	me: string | null
+): SlackMessageDTO {
+	const names = Object.fromEntries(Object.entries(users).map(([id, u]) => [id, u.name]));
+	return {
 		ts: m.ts,
 		at: new Date(Number(m.ts) * 1000).toISOString(),
-		author: m.user
-			? { name: users[m.user]?.name ?? m.user, image: users[m.user]?.image ?? null }
-			: { name: m.username ?? 'Bot', image: null },
-		mine: m.user === me,
-		edited: !!m.edited,
-		segments: parseMrkdwn(m.text, names),
-		files: (m.files ?? [])
-			.filter((f) => f.permalink)
-			.map((f) => ({ name: f.name ?? 'File', url: f.permalink! }))
-	}));
+		threadTs: m.threadTs,
+		replyCount: m.replyCount,
+		author: m.userId
+			? {
+					id: m.userId,
+					name: users[m.userId]?.name ?? m.userId,
+					image: users[m.userId]?.image ?? null
+				}
+			: { id: null, name: m.botName ?? 'Slack', image: null },
+		mine: !!me && m.userId === me,
+		edited: !!m.editedTs,
+		deleted: !!m.deletedAt || m.subtype === 'tombstone',
+		system: !!m.subtype && SYSTEM_SUBTYPES.has(m.subtype),
+		segments: m.deletedAt ? [] : parseMrkdwn(m.text, names),
+		files: m.files.map((f) => ({
+			name: f.name,
+			url: f.url && /^https:\/\//.test(f.url) ? f.url : null,
+			size: f.size ?? null,
+			mimetype: f.mimetype ?? null
+		}))
+	};
 }
 
 /** Full thread from Slack; opening it marks it read. */
@@ -119,12 +210,12 @@ export async function readThread(userId: string, id: string) {
 	const c = await requireSlack(userId);
 	const t = await ownThread(c, id);
 	return slackCall(async () => {
-		const token = await accessToken(c);
-		const me = await slackUserId(c, token);
-		const raw = await slackApi.replies(token, t.channelId, t.threadTs);
+		const ctx = await slackCtx(c, 'interactive');
+		const me = await slackUserId(c, ctx.client);
+		const raw = await syncThread(ctx, t.channelId, t.threadTs);
 		const latest = raw.reduce((max, m) => (newer(m.ts, max) ? m.ts : max), t.latestTs ?? '0');
 		const root = raw.find((m) => m.ts === t.threadTs);
-		const messages = await toMessages(token, me, raw);
+		const messages = await toMessages(ctx, me, raw);
 		const [updated] = await db
 			.update(thread)
 			.set({
@@ -136,9 +227,9 @@ export async function readThread(userId: string, id: string) {
 					preview: t.preview ?? clip(mrkdwnToText(root.text)),
 					authorName: t.authorName ?? messages[0]?.author.name ?? null
 				}),
-				...(!t.channelName && { channelName: await slackApi.channelName(token, t.channelId) }),
+				...(!t.channelName && { channelName: await ctx.client.channelName(t.channelId) }),
 				...(!t.permalink && {
-					permalink: await slackApi.permalink(token, t.channelId, t.threadTs)
+					permalink: await ctx.client.permalink(t.channelId, t.threadTs)
 				})
 			})
 			.where(eq(thread.id, t.id))
@@ -151,8 +242,9 @@ export async function reply(userId: string, id: string, text: string) {
 	const c = await requireSlack(userId);
 	const t = await ownThread(c, id);
 	return slackCall(async () => {
-		const token = await accessToken(c);
-		const sent = await slackApi.post(token, t.channelId, t.threadTs, text);
+		const ctx = await slackCtx(c, 'interactive');
+		const sent = await ctx.client.postMessage(t.channelId, text, t.threadTs);
+		await upsertMessages(c.id, t.channelId, [{ ...sent.message, thread_ts: t.threadTs }]);
 		// Our own reply shouldn't count as unread or trigger a reply notification.
 		await db
 			.update(thread)
@@ -174,18 +266,18 @@ export async function followLink(userId: string, link: string) {
 	const parsed = parseSlackLink(link);
 	if (!parsed) error(400, 'That doesn’t look like a Slack message link');
 	return slackCall(async () => {
-		const token = await accessToken(c);
+		const ctx = await slackCtx(c, 'interactive');
 		// Validates access and gives us the root + latest reply in one call.
-		const raw = await slackApi.replies(token, parsed.channel, parsed.threadTs);
+		const raw = await syncThread(ctx, parsed.channel, parsed.threadTs);
 		const root = raw.find((m) => m.ts === parsed.threadTs) ?? raw[0];
 		const latest = raw.reduce((max, m) => (newer(m.ts, max) ? m.ts : max), parsed.threadTs);
-		const author = root?.user ? (await slackApi.user(token, root.user)).name : root?.username;
+		const author = root?.user ? (await ctx.client.user(root.user)).name : root?.username;
 		const [row] = await db
 			.insert(thread)
 			.values({
 				connectionId: c.id,
 				channelId: parsed.channel,
-				channelName: await slackApi.channelName(token, parsed.channel),
+				channelName: await ctx.client.channelName(parsed.channel),
 				threadTs: parsed.threadTs,
 				permalink: link.trim(),
 				preview: root ? clip(mrkdwnToText(root.text)) : null,
@@ -213,4 +305,10 @@ export async function setFollowed(userId: string, id: string, followed: boolean)
 
 export async function unreadThreadCount(userId: string) {
 	return (await listThreads(userId)).filter((t) => t.unread).length;
+}
+
+/** For the nav dot: anything unread in followed threads, channels or DMs (no Slack calls). */
+export async function slackUnread(userId: string) {
+	const c = await slackConnection(userId);
+	return c ? hasSlackUnread(c.id) : false;
 }

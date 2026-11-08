@@ -3,6 +3,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { db, schema, sql } from '@corpus/db';
 import { accessToken, encryptionKey, oauthConfig } from '@corpus/db/connections';
 import { isInstanceAdmin } from '@corpus/db/apps';
+import { resetRateLimits, resetSlackAccount } from '@corpus/db/slack';
 import { decrypt, encrypt } from '@corpus/core/crypto';
 import {
 	GoogleApiError,
@@ -51,6 +52,9 @@ export async function requireAdmin(user: { id: string; email: string }) {
 export async function connectWithToken(userId: string, providerId: string, token: string) {
 	const provider = getProvider(providerId);
 	if (!provider?.personalToken) error(400, 'This integration only supports OAuth');
+	const { pattern, patternHint } = provider.personalToken;
+	if (pattern && !pattern.test(token))
+		error(400, patternHint ?? `That doesn’t look like a ${provider.personalToken.label}`);
 	let account;
 	try {
 		account = await provider.account(token);
@@ -58,7 +62,13 @@ export async function connectWithToken(userId: string, providerId: string, token
 		if (e instanceof ProviderAuthError) error(400, `${provider.name} rejected that token`);
 		throw e;
 	}
-	return saveConnection(userId, providerId, { accessToken: token }, account, 'token');
+	return saveConnection(
+		userId,
+		providerId,
+		{ accessToken: token, scopes: account.scopes ?? null },
+		account,
+		'token'
+	);
 }
 
 /**
@@ -175,6 +185,7 @@ export async function listConnections(userId: string) {
 			accountLogin: conn.accountLogin,
 			accountAvatar: conn.accountAvatar,
 			authType: conn.authType,
+			scopes: conn.scopes,
 			status: conn.status,
 			lastError: conn.lastError,
 			lastPolledAt: conn.lastPolledAt,
@@ -195,11 +206,26 @@ export async function saveConnection(
 		expiresAt?: Date | null;
 		scopes?: string | null;
 	},
-	account: { login: string; avatarUrl?: string | null },
+	account: { login: string; avatarUrl?: string | null; cursor?: Record<string, string> },
 	authType: 'oauth' | 'token' | 'service_account' | 'ical' = 'oauth'
 ) {
 	const key = encryptionKey();
+	if (providerId === 'slack' && account.cursor?.userId) {
+		// Reconnecting as another Slack user or workspace: the old cache and threads aren't theirs.
+		const [prev] = await db
+			.select({ id: conn.id, cursor: conn.cursor })
+			.from(conn)
+			.where(and(eq(conn.userId, userId), eq(conn.provider, 'slack')))
+			.limit(1);
+		if (
+			prev?.cursor.userId &&
+			(prev.cursor.userId !== account.cursor.userId ||
+				(prev.cursor.teamId && prev.cursor.teamId !== account.cursor.teamId))
+		)
+			await resetSlackAccount(prev.id);
+	}
 	const values = {
+		...(account.cursor && { cursor: account.cursor }),
 		accessToken: encrypt(tokens.accessToken, key),
 		refreshToken: tokens.refreshToken ? encrypt(tokens.refreshToken, key) : null,
 		tokenExpiresAt: tokens.expiresAt ?? null,
@@ -238,13 +264,15 @@ export async function ownConnection(userId: string, id: string) {
 export async function updateConnectionSettings(
 	userId: string,
 	id: string,
-	settings: { syncTasks?: boolean; notify?: boolean; calendars?: string[] }
+	settings: Partial<typeof conn.$inferSelect.settings>
 ) {
 	const row = await ownConnection(userId, id);
 	await db
 		.update(conn)
 		.set({ settings: { ...row.settings, ...settings } })
 		.where(eq(conn.id, id));
+	if (settings.slackRateProfile && settings.slackRateProfile !== row.settings.slackRateProfile)
+		await resetRateLimits(id);
 	if (settings.calendars) await requestPoll(id);
 }
 

@@ -112,6 +112,12 @@ export const NOTIFICATION_TYPES = {
 		description: 'Someone @mentions you in Slack',
 		defaults: on()
 	},
+	slack_dm: {
+		label: 'Slack direct messages',
+		group: 'Integrations',
+		description: 'New direct and group messages in Slack',
+		defaults: { inApp: true, push: true, email: false }
+	},
 	slack_thread_reply: {
 		label: 'Slack thread replies',
 		group: 'Integrations',

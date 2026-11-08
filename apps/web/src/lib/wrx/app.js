@@ -357,8 +357,54 @@ export function mountWrx(root) {
 		ms >= 60000
 			? `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`
 			: `${(ms / 1000).toFixed(1)}s`;
+	// A path an agent mentions, as a workspace-relative file plus optional line, or null when it
+	// doesn't look like a file in this workspace. `loose` (inline code) also accepts bare names
+	// like `package.json`, but only with a familiar extension so `state.chats` stays plain code.
+	const FILE_EXT =
+		/\.(?:[cm]?[jt]sx?|svelte|vue|astro|json5?|jsonc|md|mdx|markdown|css|scss|sass|less|html?|ya?ml|toml|ini|env|lock|sh|bash|zsh|fish|ps1|py|pyi|ipynb|rb|go|mod|sum|rs|java|kts?|gradle|swift|m|mm|c|h|cc|cpp|hpp|cs|fs|php|lua|ex|exs|erl|dart|scala|clj|sql|prisma|graphql|gql|proto|xml|plist|txt|csv|tsv|log|svg|png|jpe?g|gif|webp|ico|pdf|tf|hcl|nix|dockerfile|example|sample|conf|config|cfg|properties|gitignore|npmrc|nvmrc|editorconfig)$/i;
+	const FILE_NAMES =
+		/^(?:Makefile|Dockerfile|Containerfile|Procfile|Gemfile|Rakefile|Brewfile|Justfile|LICENSE|README|CHANGELOG|CODEOWNERS)$/;
+	function fileRef(raw, loose) {
+		let s = String(raw ?? '').trim();
+		if (!s || /\s/.test(s) || s.startsWith('~')) return null;
+		if (/^[a-z][\w+.-]*:\/\//i.test(s)) {
+			if (!s.startsWith('file://')) return null;
+			s = s.slice(7);
+		}
+		let line = null;
+		const m = s.match(/(?:#L(\d+)(?:-L?\d+)?|:(\d+)(?::\d+)?(?:-\d+)?)$/);
+		if (m) {
+			line = Number(m[1] || m[2]) || null;
+			s = s.slice(0, m.index);
+		}
+		if (s.startsWith('/')) {
+			const root = (current()?.path || '').replace(/\/+$/, '');
+			if (!root || !s.startsWith(`${root}/`)) return null;
+			s = s.slice(root.length + 1);
+		}
+		s = s.replace(/^(?:\.\/)+/, '');
+		if (!/^[\w.@+/-]+$/.test(s)) return null;
+		const parts = s.split('/');
+		if (parts.some((p) => !p || p === '.' || p === '..')) return null;
+		const name = parts[parts.length - 1];
+		if (!FILE_EXT.test(name) && !FILE_NAMES.test(name)) return null;
+		if (parts.length < 2 && !loose) return null;
+		return { path: s, line };
+	}
+	// `@` is entity-encoded so md()'s @mention pass can't rewrite inside the attributes.
+	const fileLink = (ref, label) => {
+		const attr = esc(ref.path).replace(/@/g, '&#64;');
+		return `<button type="button" class="file-link" data-file-link="${attr}"${ref.line ? ` data-line="${ref.line}"` : ''} title="Open ${attr}${ref.line ? `:${ref.line}` : ''} in Files">${label}</button>`;
+	};
+	const unesc = (s) =>
+		s.replace(
+			/&(amp|lt|gt|quot|#39);/g,
+			(_, e) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[e]
+		);
 	// Safe Markdown subset: everything is escaped first; only known constructs become markup.
-	function md(src) {
+	// With `fileLinks`, file paths (inline code, relative Markdown links, bare paths) become
+	// buttons that open the file in the Files tab.
+	function md(src, fileLinks = false) {
 		const blocks = [];
 		const text = String(src ?? '').replace(
 			/```([\w+-]*)[^\n]*\n?([\s\S]*?)(?:```|$)/g,
@@ -372,14 +418,28 @@ export function mountWrx(root) {
 		const inline = (t) => {
 			const codes = [];
 			t = t.replace(/`([^`\n]+)`/g, (_, c) => {
-				codes.push(`<code>${esc(c)}</code>`);
+				const ref = fileLinks && fileRef(c, true);
+				codes.push(ref ? fileLink(ref, `<code>${esc(c)}</code>`) : `<code>${esc(c)}</code>`);
 				return `\u0001${codes.length - 1}\u0001`;
 			});
-			return esc(t)
-				.replace(
-					/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-					'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
-				)
+			let html = esc(t).replace(
+				/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+				'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+			);
+			if (fileLinks)
+				html = html
+					.replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, (all, label, target) => {
+						const ref = fileRef(unesc(target), true);
+						return ref ? fileLink(ref, label) : all;
+					})
+					.replace(
+						/(^|[\s(*])((?:\.\/|\/)?[\w.@+-]+(?:\/[\w.@+-]*[\w+-])+(?::\d+(?::\d+)?|#L\d+)?)(?=$|[\s),;!?*]|[.:](?:\s|$))/g,
+						(all, pre, p) => {
+							const ref = fileRef(unesc(p));
+							return ref ? `${pre}${fileLink(ref, p)}` : all;
+						}
+					);
+			return html
 				.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
 				.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
 				.replace(
@@ -528,7 +588,7 @@ export function mountWrx(root) {
 			return `<div class="system-note"><span>${esc(m.text)}</span><small>${time(m.at)}</small></div>`;
 		const actions = `<div class="message-actions"><button class="ghost" data-copy-message="${esc(m.id)}" title="Copy message" aria-label="Copy message">⧉</button>${m.role === 'agent' && member(chat, m.memberId) ? `<button class="ghost" data-reply="${esc(member(chat, m.memberId).handle)}" title="Reply to this agent" aria-label="Reply to this agent">↩</button>` : ''}</div>`;
 		if (m.role === 'user')
-			return `<article class="message user"><span class="avatar-chip you">Y</span><div class="message-body"><div class="message-meta"><b>YOU</b><span>${time(m.at)}</span></div>${m.text ? md(m.text) : ''}${imagesView(chat, m)}</div>${actions}</article>`;
+			return `<article class="message user"><span class="avatar-chip you">Y</span><div class="message-body"><div class="message-meta"><b>YOU</b><span>${time(m.at)}</span></div>${m.text ? md(m.text, true) : ''}${imagesView(chat, m)}</div>${actions}</article>`;
 		const a = member(chat, m.memberId) || {
 			name: 'Former agent',
 			handle: 'agent',
@@ -540,13 +600,13 @@ export function mountWrx(root) {
 			? m.blocks
 					.map((b, i) =>
 						b.kind === 'text'
-							? md(b.text)
+							? md(b.text, true)
 							: b.kind === 'thinking'
 								? `<details class="thinking" data-open="${m.id}:${i}" ${openKeys.has(`${m.id}:${i}`) ? 'open' : ''}><summary>Thought process</summary><div>${esc(b.text)}</div></details>`
 								: toolView(m, b, i)
 					)
 					.join('')
-			: md(m.text);
+			: md(m.text, true);
 		const footer = [
 			m.status === 'cancelled' && 'Stopped',
 			m.status === 'interrupted' && 'Interrupted',
@@ -1078,7 +1138,8 @@ export function mountWrx(root) {
 		preview: null,
 		query: '',
 		results: null,
-		source: false
+		source: false,
+		line: null
 	};
 	const bytes = (n) =>
 		n == null
@@ -1109,11 +1170,28 @@ export function mountWrx(root) {
 			if (tab === 'files') render();
 		}
 	}
-	async function openFile(file) {
+	// Files state belongs to one workspace; switching workspaces starts it fresh.
+	function syncFiles() {
+		if (files.workspace !== workspaceId)
+			Object.assign(files, {
+				workspace: workspaceId,
+				dirs: new Map(),
+				pending: new Set(),
+				open: new Set(),
+				selected: null,
+				preview: null,
+				query: '',
+				results: null,
+				line: null
+			});
+	}
+	// Resolves true when the file loaded. A `line` shows text as source, highlighted and centred.
+	async function openFile(file, line = null) {
 		const wid = workspaceId;
 		files.selected = file;
 		files.preview = { path: file, loading: true };
-		files.source = false;
+		files.source = !!line;
+		files.line = line;
 		render();
 		for (let i = file.indexOf('/'); i > 0; i = file.indexOf('/', i + 1)) {
 			const dir = file.slice(0, i);
@@ -1122,14 +1200,45 @@ export function mountWrx(root) {
 				if (!files.dirs.has(dir)) loadDir(dir);
 			}
 		}
+		let ok = false;
 		try {
 			const preview = await api(
 				`file?workspaceId=${encodeURIComponent(wid)}&path=${encodeURIComponent(file)}`
 			);
 			if (files.workspace === wid && files.selected === file) files.preview = preview;
+			ok = true;
 		} catch (e) {
 			if (files.selected === file) files.preview = { path: file, error: e.message };
 		}
+		render();
+		if (ok && line && files.selected === file)
+			root.querySelector('.code-view .hl')?.scrollIntoView({ block: 'center' });
+		return ok;
+	}
+	// A file an agent mentioned. Agents often name files by basename or relative to a subfolder,
+	// so anything that doesn't open as given falls back to the file search: a single match opens,
+	// several are listed in the Files sidebar.
+	async function openFileLink(file, line) {
+		if (!workspaceId) return;
+		syncFiles();
+		tab = 'files';
+		files.query = '';
+		files.results = null;
+		if (file.includes('/') && (await openFile(file, line))) return;
+		if (!file.includes('/')) render();
+		const wid = workspaceId;
+		const results = await api(
+			`file-search?workspaceId=${encodeURIComponent(wid)}&q=${encodeURIComponent(file)}`
+		);
+		if (workspaceId !== wid || tab !== 'files') return;
+		const matches = results.filter((r) => r.path === file || r.path.endsWith(`/${file}`));
+		if (matches.length === 1) return void (await openFile(matches[0].path, line));
+		if (!matches.length) {
+			if (!file.includes('/')) toast(`Couldn't find ${file} in this workspace`, 'error');
+			return;
+		}
+		files.query = file;
+		files.results = matches;
 		render();
 	}
 	function treeView(dir) {
@@ -1180,22 +1289,15 @@ export function mountWrx(root) {
 									? `<div class="markdown-view">${md(p.text)}</div>`
 									: `<pre class="code-view"><code>${p.text
 											.split('\n')
-											.map((line) => `<span>${esc(line) || ' '}</span>`)
+											.map(
+												(line, i) =>
+													`<span${files.line === i + 1 ? ' class="hl"' : ''}>${esc(line) || ' '}</span>`
+											)
 											.join('')}</code></pre>`;
 		return `${head}<div class="viewer-body">${p.truncated ? '<p class="viewer-note">Showing the first 1 MB of this file.</p>' : ''}${body}</div>`;
 	}
 	function filesView() {
-		if (files.workspace !== workspaceId)
-			Object.assign(files, {
-				workspace: workspaceId,
-				dirs: new Map(),
-				pending: new Set(),
-				open: new Set(),
-				selected: null,
-				preview: null,
-				query: '',
-				results: null
-			});
+		syncFiles();
 		const list = files.results
 			? files.results.length
 				? files.results
@@ -2015,6 +2117,8 @@ export function mountWrx(root) {
 				render();
 			}
 			if (target.dataset.file) openFile(target.dataset.file);
+			if (target.dataset.fileLink)
+				await openFileLink(target.dataset.fileLink, Number(target.dataset.line) || null);
 			if (target.dataset.removeAttachment) {
 				attachments.get(chatId)?.splice(Number(target.dataset.removeAttachment), 1);
 				showAttachments();

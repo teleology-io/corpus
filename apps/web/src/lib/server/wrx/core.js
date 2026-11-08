@@ -264,7 +264,8 @@ export function codexGeneratedImages(sessionId, since, env = process.env) {
 		.sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs)
 		.slice(-8);
 }
-// Images reach Codex as --image files and Claude as image blocks on stream-json input.
+// Images reach Codex as --image files and Claude as image blocks on stream-json input. Claude runs
+// as one long-lived process per thread member that takes each turn as a stream-json line on stdin.
 export function agentArgs(agent, images = []) {
 	const model = agent.model?.trim();
 	if (agent.provider === 'codex')
@@ -292,7 +293,8 @@ export function agentArgs(agent, images = []) {
 		'--verbose',
 		'--output-format',
 		'stream-json',
-		...(images.length ? ['--input-format', 'stream-json'] : []),
+		'--input-format',
+		'stream-json',
 		'--permission-mode',
 		// acceptEdits only auto-approves file edits; headless runs deny Bash, web and MCP
 		// tools. Full access bypasses every permission prompt.
@@ -302,7 +304,7 @@ export function agentArgs(agent, images = []) {
 	];
 }
 export function agentInput(agent, prompt, images = []) {
-	if (agent.provider === 'codex' || !images.length) return prompt;
+	if (agent.provider === 'codex') return prompt;
 	const content = [
 		{ type: 'text', text: prompt },
 		...images.map((i) => ({
@@ -349,7 +351,10 @@ function migrateChat(c) {
 		msg.id ||= id();
 		if (msg.status === 'running') msg.status = 'interrupted';
 	}
-	for (const m of c.members) m.status = 'idle';
+	for (const m of c.members) {
+		m.status = 'idle';
+		m.live = false;
+	}
 	if (c.status === 'running' || c.status === 'queued') {
 		c.status = 'interrupted';
 		c.messages.push({
@@ -414,6 +419,9 @@ export class Engine {
 		this.publish = publish;
 		this.spawn = spawnProcess;
 		this.running = new Map();
+		// Live Claude processes by `${chatId}:${memberId}`. They outlive a turn so background tasks
+		// (Monitor, background Bash) keep running and can wake the agent between turns.
+		this.sessions = new Map();
 		this.commandChildren = new Map();
 		this.queue = [];
 	}
@@ -818,7 +826,10 @@ export class Engine {
 			(j) => !state.chats.some((c) => c.id === j.chatId && ids.has(c.workspaceId))
 		);
 		for (const c of state.chats)
-			if (ids.has(c.workspaceId)) fs.rmSync(this.uploads(c.id), { recursive: true, force: true });
+			if (ids.has(c.workspaceId)) {
+				for (const m of c.members) this.killSession(`${c.id}:${m.id}`);
+				fs.rmSync(this.uploads(c.id), { recursive: true, force: true });
+			}
 		state.chats = state.chats.filter((c) => !ids.has(c.workspaceId));
 		state.tasks = state.tasks.filter((t) => !ids.has(t.workspaceId));
 		for (const r of state.commandRuns)
@@ -1008,6 +1019,8 @@ export class Engine {
 			m.activeModel = null;
 		}
 		if (patch.lead) chat.leadId = m.id;
+		// A live process keeps the flags it started with; the next turn starts one with the new ones.
+		if (!m.sessionId) this.killSession(`${chat.id}:${m.id}`);
 		this.changed();
 		return m;
 	}
@@ -1017,6 +1030,7 @@ export class Engine {
 		if (!m) throw new Error('Agent not found in this thread');
 		if (m.status !== 'idle') throw new Error('Stop this agent before removing it');
 		if (chat.members.length === 1) throw new Error('A thread needs at least one agent');
+		this.killSession(`${chat.id}:${m.id}`);
 		chat.members = chat.members.filter((x) => x !== m);
 		if (chat.leadId === m.id) chat.leadId = chat.members[0].id;
 		chat.messages.push({
@@ -1225,6 +1239,14 @@ export class Engine {
 		member.held = chat.messages
 			.filter((m) => m.status === 'running' && m.memberId !== member.id)
 			.map((m) => m.id);
+		const t = this.beginTurn(chat, member, job, w);
+		if (member.provider === 'codex') this.runCodex(t, chat, member, w, environment, prompt, images);
+		else this.sendClaude(t, chat, member, w, environment, prompt, images);
+		return t.msg;
+	}
+	// Opens an agent message and marks the member running. Every turn — one the human or a teammate
+	// asked for, or one a background task woke — goes through here and ends in the turn's finish().
+	beginTurn(chat, member, job, w) {
 		const msg = {
 			id: id(),
 			role: 'agent',
@@ -1240,10 +1262,16 @@ export class Engine {
 		member.status = 'running';
 		chat.status = 'running';
 		chat.error = null;
+		const t = this.turnContext(chat, member, msg, job, w);
+		this.running.set(t.key, t.run);
+		this.changed();
+		return t;
+	}
+	// Turns provider stream events into the message's blocks, and settles the turn when it ends.
+	turnContext(chat, member, msg, job, w) {
+		const key = `${chat.id}:${member.id}`;
 		const started = Date.now();
 		const tools = new Map();
-		let pending = '';
-		let stderr = '';
 		let resultError = false;
 		let finished = false;
 		const add = (block) => {
@@ -1311,14 +1339,7 @@ export class Engine {
 					b.result = clip(typeof out === 'string' ? out : JSON.stringify(out, null, 2));
 			}
 		};
-		const event = (line) => {
-			let data;
-			try {
-				data = JSON.parse(line);
-			} catch {
-				if (line.trim()) chat.events.push(line.slice(0, 4000));
-				return;
-			}
+		const handle = (data) => {
 			if (data.type === 'thread.started') member.sessionId = data.thread_id;
 			if (data.session_id) member.sessionId = data.session_id;
 			if (data.type === 'system' && data.subtype === 'init' && data.model)
@@ -1362,19 +1383,12 @@ export class Engine {
 				}
 			}
 			if (data.type?.startsWith('item.')) codexItem(data.item, data.type === 'item.completed');
-			const name =
-				data.item?.command ||
-				data.item?.type ||
-				data.message?.content?.find((c) => c.type === 'tool_use')?.name;
-			chat.events.push(`@${member.handle} · ${data.type}${name ? ` · ${name}` : ''}`);
-			chat.events = chat.events.slice(-250);
-			this.changed();
+			this.logEvent(chat, member, data);
 		};
-		const finish = (code, error) => {
+		const finish = (code, error, stderr = '') => {
 			if (finished) return;
 			finished = true;
-			if (pending) event(pending);
-			this.running.delete(key);
+			if (this.running.get(key) === run) this.running.delete(key);
 			if (msg.status !== 'cancelled')
 				msg.status = code === 0 && !error && !resultError ? 'done' : 'failed';
 			for (const b of msg.blocks)
@@ -1417,7 +1431,6 @@ export class Engine {
 			this.changed();
 			this.pump();
 		};
-		const key = `${chat.id}:${member.id}`;
 		const run = {
 			chatId: chat.id,
 			memberId: member.id,
@@ -1425,6 +1438,33 @@ export class Engine {
 			writer: Engine.writes(member),
 			child: null
 		};
+		return { key, msg, run, handle, finish };
+	}
+	// Parses one stdout line; anything that isn't JSON goes to the thread's activity log.
+	parseLine(chat, line) {
+		try {
+			return JSON.parse(line);
+		} catch {
+			if (line.trim()) {
+				chat.events.push(line.slice(0, 4000));
+				this.changed();
+			}
+			return null;
+		}
+	}
+	logEvent(chat, member, data) {
+		const name =
+			data.item?.command ||
+			data.item?.type ||
+			data.message?.content?.find((c) => c.type === 'tool_use')?.name;
+		chat.events.push(`@${member.handle} · ${data.type}${name ? ` · ${name}` : ''}`);
+		chat.events = chat.events.slice(-250);
+		this.changed();
+	}
+	// Codex has no streaming input, so each turn is its own `codex exec` process.
+	runCodex(t, chat, member, w, environment, prompt, images) {
+		let pending = '';
+		let stderr = '';
 		let child;
 		try {
 			child = this.spawn(member.provider, agentArgs(member, images), {
@@ -1434,32 +1474,137 @@ export class Engine {
 				stdio: ['pipe', 'pipe', 'pipe']
 			});
 		} catch (error) {
-			this.running.set(key, run);
-			finish(null, error);
-			return msg;
+			t.finish(null, error);
+			return;
 		}
+		const line = (l) => {
+			const data = this.parseLine(chat, l);
+			if (data) t.handle(data);
+		};
 		child.stdout.setEncoding('utf8');
 		child.stderr.setEncoding('utf8');
-		run.child = child;
-		this.running.set(key, run);
+		t.run.child = child;
 		child.stdout.on('data', (chunk) => {
 			pending += chunk.toString();
 			const lines = pending.split('\n');
 			pending = lines.pop();
-			for (const line of lines) event(line);
+			for (const l of lines) line(l);
 			if (pending.length > 2 * 1024 * 1024) pending = pending.slice(-65536);
 		});
 		child.stderr.on('data', (chunk) => {
 			stderr = (stderr + chunk).slice(-16000);
-			msg.diagnostics = stderr;
+			t.msg.diagnostics = stderr;
 			this.changed();
 		});
-		child.on('error', (error) => finish(null, error));
-		child.on('close', (code) => finish(code));
+		const done = (code, error) => {
+			if (pending) line(pending);
+			pending = '';
+			t.finish(code, error, stderr);
+		};
+		child.on('error', (error) => done(null, error));
+		child.on('close', (code) => done(code));
 		child.stdin.on('error', () => {});
 		child.stdin.end(agentInput(member, prompt, images));
-		this.changed();
-		return msg;
+	}
+	// Claude keeps one process per thread member. Each turn is a stream-json line on its stdin, and the
+	// `result` event ends the turn while the process (and any background task it armed) stays up.
+	sendClaude(t, chat, member, w, environment, prompt, images) {
+		let s;
+		try {
+			s = this.ensureSession(chat, member, w, environment);
+		} catch (error) {
+			t.finish(null, error);
+			return;
+		}
+		s.turn = t;
+		s.stderr = '';
+		t.run.child = s.child;
+		s.child.stdin.write(agentInput(member, prompt, images));
+	}
+	ensureSession(chat, member, w, environment) {
+		const key = `${chat.id}:${member.id}`;
+		const live = this.sessions.get(key);
+		if (live) return live;
+		const child = this.spawn(member.provider, agentArgs(member), {
+			cwd: w.path,
+			env: this.workspaceEnv(w, environment),
+			detached: process.platform !== 'win32',
+			stdio: ['pipe', 'pipe', 'pipe']
+		});
+		const s = { key, chat, member, w, child, pending: '', stderr: '', turn: null, dead: false };
+		this.sessions.set(key, s);
+		member.live = true;
+		child.stdout.setEncoding('utf8');
+		child.stderr.setEncoding('utf8');
+		child.stdout.on('data', (chunk) => {
+			s.pending += chunk.toString();
+			const lines = s.pending.split('\n');
+			s.pending = lines.pop();
+			for (const line of lines) this.sessionLine(s, line);
+			if (s.pending.length > 2 * 1024 * 1024) s.pending = s.pending.slice(-65536);
+		});
+		child.stderr.on('data', (chunk) => {
+			s.stderr = (s.stderr + chunk).slice(-16000);
+			if (s.turn) {
+				s.turn.msg.diagnostics = s.stderr;
+				this.changed();
+			}
+		});
+		child.on('error', (error) => this.sessionClosed(s, null, error));
+		child.on('close', (code) => this.sessionClosed(s, code));
+		child.stdin.on('error', () => {});
+		return s;
+	}
+	sessionLine(s, line) {
+		const data = this.parseLine(s.chat, line);
+		if (!data) return;
+		if (!s.turn) {
+			// Output between turns comes from a background task waking the agent. It gets its own
+			// message, opened on the first thing the agent says; status pings alone only get logged.
+			if (s.dead || data.type !== 'assistant' || data.parent_tool_use_id) {
+				if (data.session_id) s.member.sessionId = data.session_id;
+				if (data.type === 'result' && data.total_cost_usd)
+					s.member.costUsd = (s.member.costUsd || 0) + data.total_cost_usd;
+				this.logEvent(s.chat, s.member, data);
+				return;
+			}
+			s.turn = this.beginTurn(s.chat, s.member, { hops: 0, by: 'background' }, s.w);
+			s.turn.run.child = s.child;
+			s.stderr = '';
+		}
+		const t = s.turn;
+		t.handle(data);
+		if (data.type === 'result') {
+			s.turn = null;
+			t.finish(0, null, s.stderr);
+		}
+	}
+	sessionClosed(s, code, error) {
+		if (s.closed) return;
+		s.closed = true;
+		if (this.sessions.get(s.key) === s) {
+			this.sessions.delete(s.key);
+			s.member.live = false;
+		}
+		if (s.pending) this.sessionLine(s, s.pending);
+		s.pending = '';
+		const t = s.turn;
+		s.turn = null;
+		if (t) t.finish(code, error, s.stderr);
+		else this.changed();
+	}
+	// Ends a member's Claude process. It leaves the registry at once, so the next turn starts a fresh
+	// one; a turn still in flight settles when the process closes.
+	killSession(key) {
+		const s = this.sessions.get(key);
+		if (!s) return;
+		this.sessions.delete(key);
+		s.dead = true;
+		s.member.live = false;
+		killGroup(s.child, 'SIGTERM');
+		setTimeout(() => {
+			if (!s.closed) killGroup(s.child, 'SIGKILL');
+		}, 3000).unref();
 	}
 	cancel(chatId) {
 		const c = this.store.get('chats', chatId);
@@ -1469,6 +1614,8 @@ export class Engine {
 		for (const msg of c.messages)
 			if (msg.role === 'agent' && msg.status === 'running') msg.status = 'cancelled';
 		if (runs.length || c.status === 'queued') c.status = 'cancelled';
+		// Stop also ends idle Claude sessions, and with them any watcher they armed.
+		for (const m of c.members) this.killSession(`${chatId}:${m.id}`);
 		for (const run of runs) {
 			const child = run.child;
 			if (!child) continue;
@@ -1709,6 +1856,10 @@ export class Engine {
 	stopCommands() {
 		for (const { child } of this.commandChildren.values()) killGroup(child, 'SIGTERM');
 	}
+	// Called from the server's exit. Idle Claude sessions aren't in `running`, so cancel() misses them.
+	stopSessions() {
+		for (const key of [...this.sessions.keys()]) this.killSession(key);
+	}
 	runLog(runId) {
 		const run = this.store.get('commandRuns', runId);
 		return { status: run.status, log: readLogTail(this.runLogFile(run.id), RUN_LOG_TAIL) };
@@ -1745,6 +1896,7 @@ export class Engine {
 		if (this.chatRunning(chat.id))
 			throw new Error('Stop the running agents before deleting this conversation');
 		this.queue = this.queue.filter((j) => j.chatId !== chat.id);
+		for (const m of chat.members) this.killSession(`${chat.id}:${m.id}`);
 		this.store.state.chats = this.store.state.chats.filter((c) => c !== chat);
 		fs.rmSync(this.uploads(chat.id), { recursive: true, force: true });
 		this.changed();

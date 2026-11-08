@@ -62,6 +62,7 @@ function host(userId) {
 				engine.cancel(chatId);
 			} catch {}
 		engine.stopCommands();
+		engine.stopSessions();
 	});
 	return h;
 }

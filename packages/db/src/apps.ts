@@ -9,7 +9,7 @@ export const encryptionKey = () =>
 	env('ENCRYPTION_KEY', env('BETTER_AUTH_SECRET', 'dev-secret-change-me-dev-secret-change-me'));
 
 export const redirectUri = (providerId: string) =>
-	`${env('PUBLIC_APP_URL', 'http://localhost:5173')}/integrations/${providerId}/callback`;
+	`${env('PUBLIC_APP_URL', 'http://localhost:2222')}/integrations/${providerId}/callback`;
 
 /** Where a provider's OAuth app credentials come from, if anywhere. */
 export type OAuthAppSource = 'env' | 'db' | null;

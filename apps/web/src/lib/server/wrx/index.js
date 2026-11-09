@@ -8,7 +8,16 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { chooseDirectory, listDirectories } from './directories.js';
 import { listDirectory, readFilePreview, searchFiles, serveRaw } from './files.js';
-import { Store, Engine, command, agentEnv, id, now, requireText } from './core.js';
+import {
+	Store,
+	Engine,
+	command,
+	agentEnv,
+	id,
+	now,
+	requireText,
+	clientChats
+} from './core.js';
 
 const root = path.resolve(process.env.WRX_DATA || '.wrx');
 const machine = { id: os.hostname(), name: os.hostname() };
@@ -337,7 +346,17 @@ export async function handleWrx({ request, url, route, userId }) {
 				});
 			}
 			if (route === 'state')
-				return json(200, { ...store.state, tools: await tools(), machine, remote });
+				return json(200, {
+					...store.state,
+					chats: clientChats(
+						store.state.chats,
+						url.searchParams.get('chat'),
+						Number(url.searchParams.get('limit')) || undefined
+					),
+					tools: await tools(),
+					machine,
+					remote
+				});
 			if (route === 'network')
 				return json(200, {
 					machine,

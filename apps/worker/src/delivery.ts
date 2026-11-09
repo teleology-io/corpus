@@ -4,7 +4,7 @@ import webpush from 'web-push';
 import { db, env, optionalEnv, schema, sql } from '@corpus/db';
 import { inQuietHours } from '@corpus/core';
 
-const appUrl = env('PUBLIC_APP_URL', 'http://localhost:5173');
+const appUrl = env('PUBLIC_APP_URL', 'http://localhost:2222');
 const mailer = nodemailer.createTransport(env('SMTP_URL', 'smtp://localhost:1025'));
 const from = env('EMAIL_FROM', 'Corpus <no-reply@corpus.local>');
 

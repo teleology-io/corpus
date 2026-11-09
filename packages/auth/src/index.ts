@@ -10,7 +10,7 @@ import os from 'node:os';
 
 const githubId = optionalEnv('GITHUB_CLIENT_ID');
 const githubSecret = optionalEnv('GITHUB_CLIENT_SECRET');
-const baseURL = env('PUBLIC_APP_URL', 'http://localhost:5173');
+const baseURL = env('PUBLIC_APP_URL', 'http://localhost:2222');
 
 // When the app runs on localhost (dev), also accept sign-in from other machines on the LAN that
 // open it by this host's IP or <hostname>.local — better-auth rejects unknown Origins otherwise.

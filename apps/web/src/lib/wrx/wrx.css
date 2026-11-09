@@ -2599,6 +2599,11 @@
 	overflow: auto;
 	line-height: 1.55;
 }
+.wrx .transcript .earlier {
+	display: flex;
+	justify-content: center;
+	margin: 4px 0 12px;
+}
 .wrx .system-note {
 	display: flex;
 	align-items: center;

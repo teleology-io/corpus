@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Engine, Store } from '../../src/lib/server/wrx/core.js';
+import { Engine, ROTATE_TURNS, Store, clientChats } from '../../src/lib/server/wrx/core.js';
 
 type FakeChild = EventEmitter & {
 	stdout: EventEmitter & { setEncoding: () => void };
@@ -129,6 +129,17 @@ describe('workbench agent context', () => {
 		expect(children[3].prompt).not.toContain('final from a');
 	});
 
+	it('shows a fresh session its own earlier replies', () => {
+		engine.turn('c', '@a propose options');
+		reply(children[0], 'three options from a');
+		finish(children[0], 'a-session');
+		engine.store.state.chats[0].members[0].sessionId = null;
+
+		engine.turn('c', '@a do all 3');
+		expect(children[1].prompt).toContain('[A (@a)] three options from a');
+		expect(children[1].prompt).toContain('@a do all 3');
+	});
+
 	it('keeps withholding a reply across turns until it finishes', () => {
 		engine.turn('c', '@a start');
 		engine.turn('c', '@b look');
@@ -143,6 +154,67 @@ describe('workbench agent context', () => {
 		finish(a, 'a-session');
 		engine.turn('c', '@b third');
 		expect(children[3].prompt).toContain('partial from a');
+	});
+
+	const longThread = (n = 40) => {
+		const chat = engine.store.get('chats', 'c');
+		for (let i = 0; i < n; i++)
+			chat.messages.push({ id: `old${i}`, role: 'user', text: `old message ${i}`, at: '' });
+		return chat;
+	};
+	const settle = () => new Promise((r) => setTimeout(r, 0));
+
+	it('rotates a long-running session onto a fresh summary plus recent messages', async () => {
+		const chat = longThread();
+		Object.assign(chat.members[0], { sessionId: 'a-old', turns: ROTATE_TURNS });
+		engine.turn('c', '@a keep going');
+		const [summarizer] = children;
+		expect(summarizer.args).toEqual(expect.arrayContaining(['--print', 'haiku']));
+		expect(summarizer.prompt).toContain('old message 0');
+		expect(chat.summarizing).toBe(true);
+		summarizer.stdout.emit('data', '- Goal: speed up long threads');
+		summarizer.emit('close', 0);
+		await settle();
+		const agentRun = children[1];
+		expect(agentRun.args).not.toContain('--resume');
+		expect(agentRun.prompt).toContain('- Goal: speed up long threads');
+		expect(agentRun.prompt).toContain('@a keep going');
+		expect(agentRun.prompt).not.toContain('old message 0');
+		expect(chat.members[0].turns).toBe(1);
+		expect(chat.summaryUpTo).toBe(41);
+	});
+
+	it('keeps resuming a session below the rotation threshold', () => {
+		const chat = longThread();
+		Object.assign(chat.members[0], { sessionId: 'a-old', turns: 3, seen: 40 });
+		engine.turn('c', '@a next');
+		expect(children).toHaveLength(1);
+		expect(children[0].args).toEqual(expect.arrayContaining(['--resume', 'a-old']));
+		expect(chat.members[0].turns).toBe(4);
+	});
+
+	it('still starts the turn when the summary fails', async () => {
+		const chat = longThread();
+		engine.turn('c', '@b hello');
+		const [summarizer] = children;
+		summarizer.emit('close', 1);
+		await settle();
+		expect(chat.summary).toBeUndefined();
+		expect(chat.summaryError).toContain('code 1');
+		expect(children[1].prompt).toContain('@b hello');
+		expect(children[1].prompt).toContain('old message 39');
+	});
+
+	it('sends the open chat windowed and other chats as a preview', () => {
+		const chat = longThread(100);
+		const other = { ...chat, id: 'd', messages: chat.messages.slice(), summary: 'secret' };
+		const [open, preview] = clientChats([chat, other], 'c', 60);
+		expect(open.messages).toHaveLength(60);
+		expect(open.messageCount).toBe(100);
+		expect(open.messages.at(-1).text).toBe('old message 99');
+		expect(preview.partial).toBe(true);
+		expect(preview.messages).toEqual([expect.objectContaining({ text: 'old message 99' })]);
+		expect(preview.summary).toBeUndefined();
 	});
 });
 

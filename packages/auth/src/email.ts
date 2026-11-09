@@ -19,7 +19,7 @@ interface InviteData {
  * new people get an email with a sign-up link that lands on the accept page.
  */
 export async function sendInvitation(data: InviteData) {
-	const appUrl = env('PUBLIC_APP_URL', 'http://localhost:5173');
+	const appUrl = env('PUBLIC_APP_URL', 'http://localhost:2222');
 	const link = `${appUrl}/teams/invite/${data.id}`;
 	const title = `${data.inviter.user.name} invited you to ${data.organization.name}`;
 	const [existing] = await db

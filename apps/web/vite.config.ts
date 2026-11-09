@@ -7,7 +7,14 @@ import os from 'node:os';
 // Listen on every interface so other machines on the network can open the app by IP or by this
 // machine's Bonjour name (Vite rejects unknown Host headers, so allow <hostname>.local too).
 const lanName = `${os.hostname().replace(/\.local$/i, '')}.local`.toLowerCase();
-const lan = { host: '0.0.0.0', allowedHosts: [lanName, 'localhost'] };
+// Fixed port, away from Vite's default 5173 so Corpus doesn't collide with other local projects.
+// strictPort: fail loudly instead of drifting to another port, which would break auth (PUBLIC_APP_URL).
+const lan = {
+	host: '0.0.0.0',
+	port: 2222,
+	strictPort: true,
+	allowedHosts: [lanName, 'localhost']
+};
 
 export default defineConfig({
 	server: {

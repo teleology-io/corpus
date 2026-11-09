@@ -226,6 +226,55 @@ export const IMAGE_TYPES = {
 	'image/webp': 'webp'
 };
 export const MAX_IMAGES = 6;
+// Long threads: a member's provider session grows with every turn (tool calls, file reads), which
+// slows each resume. After ROTATE_TURNS turns the session is dropped and the next turn starts fresh
+// from the thread summary plus the last RECENT_WITH_SUMMARY messages.
+export const ROTATE_TURNS = 25;
+const RECENT_WITH_SUMMARY = 6;
+const RECENT_WITHOUT_SUMMARY = 30;
+// A fresh start in a thread longer than this refreshes the summary first.
+const SUMMARY_AFTER = 30;
+const SUMMARY_INPUT_CHARS = 60000;
+const SUMMARY_TIMEOUT_MS = 3 * 60000;
+export function summaryPrompt(previous, transcript) {
+	return [
+		'You maintain the running summary of a Workbench team thread: a chat where a human (@you) works with AI agents on a software project. Agents joining or resuming the thread read this summary instead of the full history.',
+		previous ? `Current summary:\n${previous}` : 'There is no summary yet.',
+		`Messages to fold in:\n${transcript}`,
+		'Write the updated summary. Keep: the goal, decisions made and why, what was built or changed (files, features), open questions, outstanding tasks and who owns them, and any preferences or constraints the human stated. Drop chit-chat and superseded details. Use terse Markdown bullets under short headings, at most about 500 words. Reply with the summary only.'
+	].join('\n\n');
+}
+// One-shot, tool-free run of the member's provider CLI that only writes text.
+export function summaryArgs(provider) {
+	return provider === 'codex'
+		? ['exec', '--skip-git-repo-check', '--sandbox', 'read-only', '--json', '-']
+		: ['--print', '--model', 'haiku', '--permission-mode', 'plan', '--output-format', 'text'];
+}
+// Thread view for the client: the open chat's latest `limit` messages, and only a one-line preview of
+// every other chat. Shipping every message of every thread on each streaming refresh was the cost.
+export function clientChats(chats, open, limit = 60) {
+	return chats.map((c) => {
+		const { messages, events, summary, summaryUpTo, ...rest } = c;
+		if (c.id === open)
+			return {
+				...rest,
+				events,
+				hasSummary: !!summary,
+				messageCount: messages.length,
+				messages: messages.slice(-Math.max(1, limit))
+			};
+		const last = messages.findLast((m) => m.role !== 'system' && m.text);
+		return {
+			...rest,
+			events: [],
+			partial: true,
+			messageCount: messages.length,
+			messages: last
+				? [{ id: last.id, role: last.role, memberId: last.memberId, text: last.text.slice(0, 200), at: last.at }]
+				: []
+		};
+	});
+}
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const GENERATED_EXT = {
 	'.png': 'png',
@@ -355,6 +404,7 @@ function migrateChat(c) {
 		m.status = 'idle';
 		m.live = false;
 	}
+	delete c.summarizing;
 	if (c.status === 'running' || c.status === 'queued') {
 		c.status = 'interrupted';
 		c.messages.push({
@@ -403,7 +453,8 @@ export class Store {
 	}
 	save() {
 		const tmp = `${this.file}.tmp`;
-		fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
+		// Compact: this runs on every flush during a streaming turn, and long threads make it large.
+		fs.writeFileSync(tmp, JSON.stringify(this.state), { mode: 0o600 });
 		fs.renameSync(tmp, this.file);
 	}
 	get(kind, key) {
@@ -1089,9 +1140,113 @@ export class Engine {
 				(w.environmentId && this.store.get('environments', w.environmentId).busy)
 			)
 				continue;
+			if (chat.summarizing || this.prepareContext(chat, member, w)) continue;
 			this.queue.splice(this.queue.indexOf(job), 1);
 			this.run(chat, member, job);
 		}
+	}
+	// Before a member's turn: rotate an oversized session, and make sure a fresh start in a long thread
+	// has an up-to-date summary. Returns true while a summary is being written; pump() retries after.
+	prepareContext(chat, member, w) {
+		const rotate = !!member.sessionId && (member.turns || 0) >= ROTATE_TURNS;
+		const fresh = !member.sessionId || rotate;
+		const stale =
+			chat.messages.length > SUMMARY_AFTER &&
+			chat.messages.length - (chat.summaryUpTo || 0) > RECENT_WITH_SUMMARY &&
+			chat.summaryTriedAt !== chat.messages.length;
+		if (fresh && stale) {
+			this.summarize(chat, member, w).finally(() => {
+				if (rotate) this.dropSession(chat, member);
+				this.changed();
+				this.pump();
+			});
+			return true;
+		}
+		if (rotate) this.dropSession(chat, member);
+		return false;
+	}
+	// Ends a member's provider session so its next turn starts from the summary and recent messages.
+	dropSession(chat, member) {
+		member.sessionId = null;
+		member.turns = 0;
+		member.seen = 0;
+		this.killSession(`${chat.id}:${member.id}`);
+	}
+	// Folds the messages since the last summary into chat.summary with a one-shot provider run. Never
+	// rejects: on failure the old summary stays and the turn goes ahead with it (or raw recent messages).
+	summarize(chat, member, w) {
+		const running = chat.messages.findIndex((m) => m.status === 'running');
+		const upTo = running === -1 ? chat.messages.length : running;
+		const name = (m) =>
+			m.role === 'user'
+				? '@you'
+				: m.role === 'system'
+					? 'Workbench'
+					: `@${chat.members.find((x) => x.id === m.memberId)?.handle || 'former-agent'}`;
+		const transcript = chat.messages
+			.slice(chat.summaryUpTo || 0, upTo)
+			.filter((m) => m.text)
+			.map((m) => `[${name(m)}] ${m.text}`)
+			.join('\n\n')
+			.slice(-SUMMARY_INPUT_CHARS);
+		chat.summarizing = true;
+		chat.summaryTriedAt = chat.messages.length;
+		this.changed();
+		const environment = w.environmentId ? this.store.get('environments', w.environmentId) : null;
+		return new Promise((resolve) => {
+			let out = '';
+			let child;
+			const done = (text, error) => {
+				if (!chat.summarizing) return;
+				chat.summarizing = false;
+				clearTimeout(timer);
+				if (text?.trim()) {
+					chat.summary = text.trim().slice(0, 12000);
+					chat.summaryUpTo = upTo;
+					chat.summaryError = null;
+				} else chat.summaryError = error || 'Summary came back empty';
+				resolve();
+			};
+			const timer = setTimeout(() => {
+				if (child) killGroup(child, 'SIGKILL');
+				done(null, 'Summary timed out');
+			}, SUMMARY_TIMEOUT_MS);
+			timer.unref?.();
+			try {
+				child = this.spawn(member.provider, summaryArgs(member.provider), {
+					cwd: w.path,
+					env: this.workspaceEnv(w, environment),
+					detached: process.platform !== 'win32',
+					stdio: ['pipe', 'pipe', 'pipe']
+				});
+			} catch (error) {
+				done(null, error.message);
+				return;
+			}
+			child.stdout.setEncoding('utf8');
+			child.stderr.setEncoding('utf8');
+			child.stdout.on('data', (chunk) => {
+				out = (out + chunk).slice(-200000);
+			});
+			child.stderr.on('data', () => {});
+			child.on('error', (error) => done(null, error.message));
+			child.on('close', (code) => {
+				if (code !== 0) return done(null, `Summary exited with code ${code}`);
+				if (member.provider !== 'codex') return done(out);
+				// Codex --json: the reply is the last completed agent_message item.
+				let text = '';
+				for (const line of out.split('\n')) {
+					try {
+						const data = JSON.parse(line);
+						if (data.type === 'item.completed' && data.item?.type === 'agent_message')
+							text = data.item.text;
+					} catch {}
+				}
+				done(text);
+			});
+			child.stdin.on('error', () => {});
+			child.stdin.end(summaryPrompt(chat.summary, transcript));
+		});
 	}
 	uploads(chatId) {
 		return path.join(this.store.directory, 'uploads', chatId);
@@ -1155,10 +1310,14 @@ export class Engine {
 	// tracked in member.held by run(), so they arrive complete on the member's next turn.
 	unseen(chat, member) {
 		const held = new Set(member.held);
-		const messages = member.sessionId
-			? chat.messages.filter((m, i) => i >= member.seen || held.has(m.id))
-			: chat.messages.slice(-30);
-		return messages.filter((m) => m.memberId !== member.id && m.status !== 'running');
+		if (!member.sessionId)
+			// A fresh session has no memory of the member's own earlier replies, so include them too.
+			return chat.messages
+				.slice(-(chat.summary ? RECENT_WITH_SUMMARY : RECENT_WITHOUT_SUMMARY))
+				.filter((m) => m.status !== 'running');
+		return chat.messages
+			.filter((m, i) => i >= member.seen || held.has(m.id))
+			.filter((m) => m.memberId !== member.id && m.status !== 'running');
 	}
 	// Where worktrees live, not which one is the agent's: its cwd says that, and it may move between them.
 	worktreesContext(w) {
@@ -1215,8 +1374,11 @@ export class Engine {
 			first
 				? "How this thread works:\n- Write like a teammate in Slack: concise, direct, Markdown allowed.\n- @mention a teammate's handle when you need them to act or answer. Every agent you mention starts after your reply; several mentioned agents may work at the same time. Do not mention anyone just to acknowledge or thank them.\n- Use @all only when every agent truly needs to respond.\n- Address the human as @you, and ask @you when a decision needs a human.\n- Other agents may be working in parallel with you; you only see their replies once they finish. Read-only agents run concurrently; agents that edit files take turns in the workspace. Never claim work you have not done."
 				: '',
+			first && chat.summary
+				? `Summary of the thread so far (older messages are not shown; ask @you if a detail you need is missing):\n${chat.summary}`
+				: '',
 			transcript
-				? `${first ? 'Recent thread messages' : 'New thread messages since your last turn'}:\n${transcript}`
+				? `${first ? (chat.summary ? 'Latest thread messages' : 'Recent thread messages') : 'New thread messages since your last turn'}:\n${transcript}`
 				: '',
 			images.length
 				? `${images.length} image${images.length === 1 ? ' is' : 's are'} attached to this turn (${images.map((i) => i.name).join(', ')}). Look at them before replying.`
@@ -1235,6 +1397,7 @@ export class Engine {
 			.filter((i) => fs.existsSync(i.path))
 			.slice(-MAX_IMAGES);
 		const prompt = this.prompt(chat, member, job, w, environment, images);
+		member.turns = (member.sessionId ? member.turns || 0 : 0) + 1;
 		member.seen = chat.messages.length;
 		member.held = chat.messages
 			.filter((m) => m.status === 'running' && m.memberId !== member.id)

@@ -29,19 +29,19 @@ pnpm dlx web-push generate-vapid-keys   # → PUBLIC_VAPID_KEY / VAPID_PRIVATE_K
 docker compose up -d              # Postgres :5432, Mailpit :1025 (UI at http://localhost:8025)
 pnpm install
 pnpm db:migrate
-pnpm dev                          # web :5173, collab :1234, worker
+pnpm dev                          # web :2222, collab :1234, worker
 ```
 
 ### Integrations (per user)
 
 Create OAuth apps and set the env vars:
 
-- **GitHub** — callback `http://localhost:5173/integrations/github/callback` (and `/api/auth/callback/github` to enable GitHub sign-in). Scopes: `repo read:user`.
-- **Linear** — callback `http://localhost:5173/integrations/linear/callback`. Scope: `read`.
-- **Google Calendar** (`GOOGLE_CLIENT_ID/SECRET`) — Google Cloud → enable the Calendar API → OAuth client (Web) with redirect `http://localhost:5173/integrations/google-calendar/callback`. While the consent screen is in "Testing", add yourself as a test user.
+- **GitHub** — callback `http://localhost:2222/integrations/github/callback` (and `/api/auth/callback/github` to enable GitHub sign-in). Scopes: `repo read:user`.
+- **Linear** — callback `http://localhost:2222/integrations/linear/callback`. Scope: `read`.
+- **Google Calendar** (`GOOGLE_CLIENT_ID/SECRET`) — Google Cloud → enable the Calendar API → OAuth client (Web) with redirect `http://localhost:2222/integrations/google-calendar/callback`. While the consent screen is in "Testing", add yourself as a test user.
 - **Slack**, either way:
   - **User token (no OAuth app, no tunnel)** — create an app at api.slack.com/apps, add these under **OAuth & Permissions → User Token Scopes** (not Bot Token Scopes): `channels:read groups:read im:read mpim:read channels:history groups:history im:history mpim:history users:read chat:write search:read`. Install it to your workspace (an admin may need to approve), copy the **User OAuth Token** (`xoxp-…`), and paste it under **Integrations → Slack → Connect with user OAuth token**. After adding scopes, reinstall the app and update the token.
-  - **OAuth** (`SLACK_CLIENT_ID/SECRET`) — add redirect URL `{PUBLIC_APP_URL}/integrations/slack/callback`. Slack only accepts **https** redirects, so in dev run a tunnel (e.g. `cloudflared tunnel --url http://localhost:5173`) and set `PUBLIC_APP_URL` to it. Corpus requests the same user scopes.
+  - **OAuth** (`SLACK_CLIENT_ID/SECRET`) — add redirect URL `{PUBLIC_APP_URL}/integrations/slack/callback`. Slack only accepts **https** redirects, so in dev run a tunnel (e.g. `cloudflared tunnel --url http://localhost:2222`) and set `PUBLIC_APP_URL` to it. Corpus requests the same user scopes.
 
 **Google Calendar** is two-way: the Google calendars you pick (primary by default) appear as calendars in your personal workspace. Edits made in Corpus are pushed within seconds; changes made in Google are pulled every minute. You're notified when someone invites you, or moves or cancels an event they organize.
 
@@ -66,7 +66,7 @@ Every storage setting starts with `STORAGE_` (see `.env.example`). `STORAGE_DRIV
    ```json
    [
    	{
-   		"AllowedOrigins": ["http://localhost:5173", "https://your-domain"],
+   		"AllowedOrigins": ["http://localhost:2222", "https://your-domain"],
    		"AllowedMethods": ["PUT", "GET", "HEAD"],
    		"AllowedHeaders": ["content-type"],
    		"ExposeHeaders": ["ETag"],

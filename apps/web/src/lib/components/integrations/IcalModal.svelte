@@ -44,11 +44,12 @@
 			In Google Calendar open <span class="font-medium text-ink"
 				>Settings → your calendar → Integrate calendar</span
 			>
-			and copy <span class="font-medium text-ink">Secret address in iCal format</span>. Treat it
-			like a password — it’s stored encrypted.
+			and copy <span class="font-medium text-ink">Secret address in iCal format</span> (treat it
+			like a password — it’s stored encrypted), or the
+			<span class="font-medium text-ink">Public address in iCal format</span> of any public calendar.
 		</p>
 		<label class="block">
-			<span class="label">Secret address</span>
+			<span class="label">iCal address</span>
 			<input
 				class="input font-mono text-[11px]"
 				type="url"

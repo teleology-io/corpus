@@ -314,7 +314,7 @@
 										>Use a service account instead</button
 									>
 									<button class="btn-ghost h-8 w-full text-xs" onclick={() => (icalOpen = true)}
-										>Use a secret iCal address (read-only)</button
+										>Use an iCal address (read-only)</button
 									>
 								{/if}
 							{:else}
@@ -323,7 +323,7 @@
 										>Connect with a service account</button
 									>
 									<button class="btn-outline h-9 w-full" onclick={() => (icalOpen = true)}
-										>Use a secret iCal address (read-only)</button
+										>Use an iCal address (read-only)</button
 									>
 								{/if}
 								{#if p.personalToken}

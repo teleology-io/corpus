@@ -151,7 +151,7 @@
 			<input
 				class="input h-7 min-w-0 flex-1 font-mono text-[11px]"
 				type="url"
-				placeholder="Another secret iCal address"
+				placeholder="Another iCal address (secret or public)"
 				autocomplete="off"
 				bind:value={newId}
 				disabled={saving}

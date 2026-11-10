@@ -146,7 +146,7 @@ export async function connectIcal(userId: string, input: string) {
 		parseIcal(await fetchIcal(url, 15_000), 'UTC');
 	} catch (e) {
 		if (e instanceof IcalFetchError) error(400, `Couldn’t read that address: ${e.message}`);
-		error(400, 'Couldn’t read that address — make sure it’s the secret iCal address');
+		error(400, 'Couldn’t read that address — make sure it’s a Google iCal address');
 	}
 	const next = [...feeds, { id, url }];
 	const login = icalCalendarId(next[0]!.url) ?? 'iCal';

@@ -117,16 +117,23 @@ describe('ical helpers', () => {
 		expect(parseDuration('junk')).toBeNull();
 	});
 
-	it('validates Google secret addresses', () => {
+	it('validates Google secret and public addresses', () => {
 		const ok =
 			'https://calendar.google.com/calendar/ical/me%40gmail.com/private-0123abcd/basic.ics';
 		expect(parseIcalUrl(ok)).toBe(ok);
 		expect(parseIcalUrl(ok.replace('https://', 'webcal://'))).toBe(ok);
 		expect(() => parseIcalUrl('https://evil.example/calendar/ical/a/b/basic.ics')).toThrow();
 		expect(() => parseIcalUrl('http://calendar.google.com/calendar/ical/a/b/basic.ics')).toThrow();
-		expect(() =>
-			parseIcalUrl('https://calendar.google.com/calendar/ical/a/public/basic.ics')
-		).toThrow(/public/);
+		const pub =
+			'https://calendar.google.com/calendar/ical/en.usa%23holiday%40group.v.calendar.google.com/public/basic.ics';
+		expect(parseIcalUrl(pub)).toBe(pub);
+		const id = 'en.usa#holiday@group.v.calendar.google.com';
+		expect(
+			parseIcalUrl(`https://calendar.google.com/calendar/embed?src=${encodeURIComponent(id)}`)
+		).toBe(pub);
+		const cid = Buffer.from(id).toString('base64');
+		expect(parseIcalUrl(`https://calendar.google.com/calendar/u/0?cid=${cid}`)).toBe(pub);
+		expect(() => parseIcalUrl('https://calendar.google.com/calendar/u/0?cid=junk')).toThrow();
 	});
 
 	it('polls every 5–15 minutes', () => {

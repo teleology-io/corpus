@@ -22,7 +22,7 @@ export interface IcalFeed {
 export const feedId = (url: string) => createHash('sha256').update(url).digest('hex').slice(0, 24);
 
 /**
- * Validates a Google secret iCal address and returns its canonical https URL.
+ * Validates a Google iCal address (secret or public) and returns its canonical https URL.
  * Only calendar.google.com is accepted so the worker never fetches arbitrary hosts.
  * Throws Error with a user-facing message.
  */
@@ -34,15 +34,32 @@ export function parseIcalUrl(input: string): string {
 		throw new Error('That isn’t a valid URL');
 	}
 	if (u.protocol !== 'https:' || u.hostname !== 'calendar.google.com' || u.port)
-		throw new Error('Use the secret address from calendar.google.com');
+		throw new Error('Use an iCal address from calendar.google.com');
+	// Public share links (…/embed?src=ID, …?cid=BASE64) point at the calendar's public iCal feed.
+	const shared = sharedCalendarId(u);
+	if (shared)
+		return `https://calendar.google.com/calendar/ical/${encodeURIComponent(shared)}/public/basic.ics`;
 	if (!/^\/calendar\/ical\/[^/]+\/[^/]+\/[^/]+\.ics$/.test(u.pathname))
 		throw new Error(
 			'Expected a Google iCal address (…/calendar/ical/…/basic.ics) — Settings → Integrate calendar'
 		);
-	if (/\/public\/[^/]+\.ics$/.test(u.pathname))
-		throw new Error('That’s the public address — copy the secret address instead');
 	u.hash = '';
 	return u.toString();
+}
+
+function sharedCalendarId(u: URL): string | null {
+	if (u.pathname.startsWith('/calendar/ical/')) return null;
+	const src = u.searchParams.get('src');
+	if (src && /^[^\s/]+@[^\s/]+$/.test(src)) return src;
+	const cid = u.searchParams.get('cid');
+	if (!cid) return null;
+	if (/^[^\s/]+@[^\s/]+$/.test(cid)) return cid;
+	try {
+		const decoded = Buffer.from(cid, 'base64').toString('utf8');
+		return /^[^\s/]+@[^\s/]+$/.test(decoded) ? decoded : null;
+	} catch {
+		return null;
+	}
 }
 
 /** Calendar id embedded in a Google iCal URL (usually the owner's email). */
@@ -71,7 +88,7 @@ export async function fetchIcal(url: string, timeoutMs = 30_000): Promise<string
 		signal: AbortSignal.timeout(timeoutMs)
 	});
 	if (res.status === 404 || res.status === 403)
-		throw new IcalFetchError(res.status, 'Feed not found — the secret address may have been reset');
+		throw new IcalFetchError(res.status, 'Feed not found — the address may have been reset or the calendar made private');
 	if (!res.ok) throw new IcalFetchError(res.status, `Google returned ${res.status}`);
 	const length = Number(res.headers.get('content-length') ?? 0);
 	if (length > MAX_BYTES) throw new IcalFetchError(413, 'Feed is too large');

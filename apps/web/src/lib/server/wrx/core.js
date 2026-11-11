@@ -226,6 +226,20 @@ export const IMAGE_TYPES = {
 	'image/webp': 'webp'
 };
 export const MAX_IMAGES = 6;
+// Any other file the human attaches is saved next to the thread's images under its own name and
+// handed to agents as an absolute path to read with their tools.
+export const MAX_ATTACHMENTS = 10;
+export const MAX_FILE_BYTES = 20 * 1024 * 1024;
+export const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
+export function safeFileName(name, fallback) {
+	const clean = String(name || '')
+		.replace(/[\/\\]/g, '_')
+		.replace(/[^\w.\- ()+@,]/g, '_')
+		.replace(/^\.+/, '')
+		.trim()
+		.slice(0, 120);
+	return clean || fallback;
+}
 // Long threads: a member's provider session grows with every turn (tool calls, file reads), which
 // slows each resume. After ROTATE_TURNS turns the session is dropped and the next turn starts fresh
 // from the thread summary plus the last RECENT_WITH_SUMMARY messages.
@@ -270,7 +284,15 @@ export function clientChats(chats, open, limit = 60) {
 			partial: true,
 			messageCount: messages.length,
 			messages: last
-				? [{ id: last.id, role: last.role, memberId: last.memberId, text: last.text.slice(0, 200), at: last.at }]
+				? [
+						{
+							id: last.id,
+							role: last.role,
+							memberId: last.memberId,
+							text: last.text.slice(0, 200),
+							at: last.at
+						}
+					]
 				: []
 		};
 	});
@@ -315,7 +337,7 @@ export function codexGeneratedImages(sessionId, since, env = process.env) {
 }
 // Images reach Codex as --image files and Claude as image blocks on stream-json input. Claude runs
 // as one long-lived process per thread member that takes each turn as a stream-json line on stdin.
-export function agentArgs(agent, images = []) {
+export function agentArgs(agent, images = [], dirs = []) {
 	const model = agent.model?.trim();
 	if (agent.provider === 'codex')
 		return [
@@ -349,7 +371,9 @@ export function agentArgs(agent, images = []) {
 		// tools. Full access bypasses every permission prompt.
 		agent.fullAccess ? 'bypassPermissions' : agent.mode === 'implement' ? 'acceptEdits' : 'plan',
 		...(model ? ['--model', model] : []),
-		...(agent.sessionId ? ['--resume', agent.sessionId] : [])
+		...(agent.sessionId ? ['--resume', agent.sessionId] : []),
+		// Lets Claude read attached files kept outside the workspace.
+		...dirs.flatMap((d) => ['--add-dir', d])
 	];
 }
 export function agentInput(agent, prompt, images = []) {
@@ -1265,35 +1289,51 @@ export class Engine {
 			return { file, name: f.name, type: GENERATED_TYPES[ext], size: f.stat.size, generated: true };
 		});
 	}
-	turn(chatId, text, images = []) {
+	// `attachments` may hold any file; PNG/JPEG/GIF/WebP become images agents see directly.
+	turn(chatId, text, attachments = []) {
 		const chat = this.store.get('chats', chatId);
-		if (!Array.isArray(images) || images.length > MAX_IMAGES)
-			throw new Error(`Attach up to ${MAX_IMAGES} images`);
-		text = images.length && !String(text ?? '').trim() ? '' : requireText(text, 'Message', 50000);
-		const decoded = images.map((img, i) => {
-			const ext = IMAGE_TYPES[img?.type];
-			if (!ext) throw new Error('Images must be PNG, JPEG, GIF or WebP');
-			const data = Buffer.from(String(img.data || ''), 'base64');
-			if (!data.length || data.length > MAX_IMAGE_BYTES)
-				throw new Error('Each image must be under 5 MB');
-			return {
-				ext,
-				data,
-				name: String(img.name || `image-${i + 1}.${ext}`)
-					.replace(/[\r\n]+/g, ' ')
-					.slice(0, 120),
-				type: img.type
-			};
+		if (!Array.isArray(attachments) || attachments.length > MAX_ATTACHMENTS)
+			throw new Error(`Attach up to ${MAX_ATTACHMENTS} files`);
+		text =
+			attachments.length && !String(text ?? '').trim() ? '' : requireText(text, 'Message', 50000);
+		let total = 0;
+		const decoded = attachments.map((a, i) => {
+			const data = Buffer.from(String(a?.data || ''), 'base64');
+			const ext = IMAGE_TYPES[a?.type];
+			const name = String(a?.name || (ext ? `image-${i + 1}.${ext}` : `file-${i + 1}`))
+				.replace(/[\r\n]+/g, ' ')
+				.slice(0, 120);
+			if (ext && data.length > MAX_IMAGE_BYTES)
+				throw new Error(`${name}: images must be under 5 MB`);
+			if (data.length > MAX_FILE_BYTES) throw new Error(`${name}: files must be under 20 MB`);
+			total += data.length;
+			return { ext, data, name, type: ext ? a.type : String(a?.type || '').slice(0, 100) || null };
 		});
+		if (total > MAX_TOTAL_BYTES) throw new Error('Attachments must total under 32 MB');
+		if (decoded.filter((a) => a.ext).length > MAX_IMAGES)
+			throw new Error(`Attach up to ${MAX_IMAGES} images`);
 		const msg = { id: id(), role: 'user', text, at: now() };
 		if (decoded.length) {
 			const dir = this.uploads(chat.id);
 			fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-			msg.images = decoded.map((img, i) => {
-				const file = `${msg.id}-${i}.${img.ext}`;
-				fs.writeFileSync(path.join(dir, file), img.data, { mode: 0o600 });
-				return { file, name: img.name, type: img.type, size: img.data.length };
+			const images = [];
+			const files = [];
+			decoded.forEach((a, i) => {
+				if (a.ext) {
+					const file = `${msg.id}-${i}.${a.ext}`;
+					fs.writeFileSync(path.join(dir, file), a.data, { mode: 0o600 });
+					images.push({ file, name: a.name, type: a.type, size: a.data.length });
+				} else {
+					// Own folder per file so the agent sees the original name.
+					const sub = `${msg.id}-${i}`;
+					const file = `${sub}/${safeFileName(a.name, `file-${i + 1}`)}`;
+					fs.mkdirSync(path.join(dir, sub), { mode: 0o700 });
+					fs.writeFileSync(path.join(dir, file), a.data, { mode: 0o600 });
+					files.push({ file, name: a.name, type: a.type, size: a.data.length });
+				}
 			});
+			if (images.length) msg.images = images;
+			if (files.length) msg.files = files;
 		}
 		chat.messages.push(msg);
 		chat.error = null;
@@ -1333,7 +1373,7 @@ export class Engine {
 		const more = found.length - PROMPT_COMMANDS;
 		return `Project commands found in this checkout: ${listed}${more > 0 ? `, and ${more} more` : ''}.\n`;
 	}
-	prompt(chat, member, job, w, environment, images = []) {
+	prompt(chat, member, job, w, environment, images = [], files = []) {
 		const first = !member.sessionId;
 		const who = (m) =>
 			m.role === 'user'
@@ -1354,7 +1394,7 @@ export class Engine {
 		const transcript = history
 			.map(
 				(m) =>
-					`[${who(m)}] ${m.text}${m.images?.length ? `${m.text ? ' ' : ''}[attached ${m.images.map((i) => i.name).join(', ')}]` : ''}`
+					`[${who(m)}] ${m.text}${[...(m.images || []), ...(m.files || [])].length ? `${m.text ? ' ' : ''}[attached ${[...(m.images || []), ...(m.files || [])].map((i) => i.name).join(', ')}]` : ''}`
 			)
 			.join('\n\n')
 			.slice(-24000);
@@ -1383,6 +1423,9 @@ export class Engine {
 			images.length
 				? `${images.length} image${images.length === 1 ? ' is' : 's are'} attached to this turn (${images.map((i) => i.name).join(', ')}). Look at them before replying.`
 				: '',
+			files.length
+				? `The human attached ${files.length === 1 ? 'a file' : `${files.length} files`}. Read ${files.length === 1 ? 'it' : 'them'} from these absolute paths with your tools before replying (they are outside your working directory; do not edit them):\n${files.map((f) => `- ${f.name}${f.type ? ` (${f.type})` : ''}: ${f.path}`).join('\n')}`
+				: '',
 			`${job.by === 'you' ? 'The human addressed you.' : `@${job.by} mentioned you and is waiting for your reply.`} Reply now as ${member.name}.`
 		]
 			.filter(Boolean)
@@ -1396,7 +1439,12 @@ export class Engine {
 			.map((i) => ({ ...i, path: path.join(this.uploads(chat.id), i.file) }))
 			.filter((i) => fs.existsSync(i.path))
 			.slice(-MAX_IMAGES);
-		const prompt = this.prompt(chat, member, job, w, environment, images);
+		const files = this.unseen(chat, member)
+			.flatMap((m) => m.files || [])
+			.map((f) => ({ ...f, path: path.join(this.uploads(chat.id), f.file) }))
+			.filter((f) => fs.existsSync(f.path))
+			.slice(-MAX_ATTACHMENTS * 2);
+		const prompt = this.prompt(chat, member, job, w, environment, images, files);
 		member.turns = (member.sessionId ? member.turns || 0 : 0) + 1;
 		member.seen = chat.messages.length;
 		member.held = chat.messages
@@ -1688,7 +1736,9 @@ export class Engine {
 		const key = `${chat.id}:${member.id}`;
 		const live = this.sessions.get(key);
 		if (live) return live;
-		const child = this.spawn(member.provider, agentArgs(member), {
+		const uploads = this.uploads(chat.id);
+		fs.mkdirSync(uploads, { recursive: true, mode: 0o700 });
+		const child = this.spawn(member.provider, agentArgs(member, [], [uploads]), {
 			cwd: w.path,
 			env: this.workspaceEnv(w, environment),
 			detached: process.platform !== 'win32',

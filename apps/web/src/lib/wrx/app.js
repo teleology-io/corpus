@@ -7,7 +7,7 @@ import { openSearch } from '#lib/stores/search.svelte.js';
 
 // Drafts and pending images survive navigating away from the workbench during this session.
 const drafts = new Map();
-const attachments = new Map(); // chatId → [{ name, type, data (base64), url (data: preview) }]
+const attachments = new Map(); // chatId → [{ name, type, size, data (base64), url (data: preview, images only) }]
 
 export function mountWrx(root) {
 	root.innerHTML =
@@ -49,6 +49,8 @@ export function mountWrx(root) {
 			'<circle cx="7" cy="17" r="3"/><circle cx="18" cy="15" r="3"/><path d="M10 17V5l11-2v12"/>',
 		film: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4m10 0h4M3 15h4m10 0h4"/>',
 		refresh: '<path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/>',
+		paperclip:
+			'<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
 		image:
 			'<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="m21 16-5-5-9 9"/>',
 		mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
@@ -565,9 +567,22 @@ export function mountWrx(root) {
 		}${block.result ? `<pre class="tool-result">${esc(block.result)}</pre>` : ''}${!block.detail && !block.result ? `<p class="tool-empty">${block.status === 'running' ? 'Running…' : 'No output.'}</p>` : ''}</details>`;
 	}
 	const imagesView = (chat, m) =>
-		m.images?.length
+		(m.images?.length
 			? `<div class="message-images ${m.role === 'agent' ? 'generated' : ''}">${m.images.map((i) => `<a href="/api/wrx/uploads/${esc(chat.id)}/${esc(i.file)}" target="_blank" rel="noopener noreferrer" title="${esc(i.name)}"><img src="/api/wrx/uploads/${esc(chat.id)}/${esc(i.file)}" alt="${esc(i.name)}" loading="lazy"></a>`).join('')}</div>`
-			: '';
+			: '') +
+		(m.files?.length
+			? `<div class="message-files">${m.files
+					.map(
+						(f) =>
+							`<a href="/api/wrx/uploads/${esc(chat.id)}/${f.file
+								.split('/')
+								.map((p) => esc(encodeURIComponent(p)))
+								.join(
+									'/'
+								)}" download title="${esc(f.name)}">${icon('file')}<span>${esc(f.name)}</span><small>${esc(bytes(f.size))}</small></a>`
+					)
+					.join('')}</div>`
+			: '');
 	// Rendered message HTML, reused across refreshes while nothing it depends on changed. A
 	// streaming run refreshes several times a second; without this every message in the
 	// transcript re-ran Markdown/escaping each time, so cost grew with the conversation.
@@ -647,13 +662,18 @@ export function mountWrx(root) {
 		if (!menu?.items.length) return '';
 		return `<div class="composer-menu" role="listbox">${menu.items.map((item, i) => `<button type="button" class="${i === menu.index ? 'active' : ''}" data-menu="${i}" role="option" aria-selected="${i === menu.index}">${item.chip || ''}<b>${esc(item.label)}</b>${item.hint ? `<i>${esc(item.hint)}</i>` : ''}<span>${esc(item.description)}</span></button>`).join('')}</div>`;
 	}
-	// ─── Image attachments: drop onto the conversation, paste, or pick ──────────
+	// ─── Attachments: drop onto the conversation, paste, or pick ────────────────
+	// PNG/JPEG/GIF/WebP go to agents as images; any other file is saved and handed over by path.
 	const IMAGE_MIME = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+	const MAX_ATTACHMENTS = 10;
+	const MAX_IMAGES = 6;
+	const MAX_FILE_BYTES = 20 * 1024 * 1024;
+	const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 	const attachmentsView = (id) =>
 		(attachments.get(id) || [])
 			.map(
 				(a, i) =>
-					`<span class="attachment" title="${esc(a.name)}"><img src="${a.url}" alt=""><span>${esc(a.name)}</span><button type="button" class="ghost" data-remove-attachment="${i}" aria-label="Remove ${esc(a.name)}">×</button></span>`
+					`<span class="attachment${a.url ? '' : ' file'}" title="${esc(a.name)}">${a.url ? `<img src="${a.url}" alt="">` : `<i class="file-icon">${icon('file')}</i>`}<span>${esc(a.name)}</span><button type="button" class="ghost" data-remove-attachment="${i}" aria-label="Remove ${esc(a.name)}">×</button></span>`
 			)
 			.join('');
 	function showAttachments() {
@@ -663,34 +683,55 @@ export function mountWrx(root) {
 			el.hidden = !attachments.get(chatId)?.length;
 		}
 	}
-	async function addImages(files) {
+	async function addFiles(files) {
 		const id = chatId;
 		if (!id) return;
 		const list = attachments.get(id) || [];
 		for (const file of files) {
-			if (!IMAGE_MIME.includes(file.type)) {
-				toast(`${file.name || 'That file'} isn't a PNG, JPEG, GIF or WebP image`);
+			const image = IMAGE_MIME.includes(file.type);
+			if (list.length >= MAX_ATTACHMENTS) {
+				toast(`Attach up to ${MAX_ATTACHMENTS} files per message`);
+				break;
+			}
+			if (image && list.filter((a) => a.url).length >= MAX_IMAGES) {
+				toast(`Attach up to ${MAX_IMAGES} images per message`);
 				continue;
 			}
-			if (file.size > 5 * 1024 * 1024) {
+			if (image && file.size > 5 * 1024 * 1024) {
 				toast(`${file.name} is larger than 5 MB`);
 				continue;
 			}
-			if (list.length >= 6) {
-				toast('Attach up to 6 images per message');
-				break;
+			if (file.size > MAX_FILE_BYTES) {
+				toast(`${file.name} is larger than 20 MB`);
+				continue;
 			}
-			const url = await new Promise((resolve, reject) => {
-				const reader = new FileReader();
-				reader.onload = () => resolve(reader.result);
-				reader.onerror = () => reject(reader.error);
-				reader.readAsDataURL(file);
-			});
+			if (list.reduce((n, a) => n + a.size, 0) + file.size > MAX_TOTAL_BYTES) {
+				toast('Attachments must total under 32 MB');
+				continue;
+			}
+			// Folders dropped from Finder arrive as empty, typeless File objects that fail to read.
+			let url;
+			try {
+				url = await new Promise((resolve, reject) => {
+					const reader = new FileReader();
+					reader.onload = () => resolve(reader.result);
+					reader.onerror = () => reject(reader.error);
+					reader.readAsDataURL(file);
+				});
+			} catch {
+				toast(`${file.name || 'That item'} can't be attached — folders aren't supported`);
+				continue;
+			}
 			list.push({
-				name: file.name || `pasted-image-${list.length + 1}.${file.type.split('/')[1]}`,
+				name:
+					file.name ||
+					(image
+						? `pasted-image-${list.length + 1}.${file.type.split('/')[1]}`
+						: `pasted-file-${list.length + 1}`),
 				type: file.type,
+				size: file.size,
 				data: url.slice(url.indexOf(',') + 1),
-				url
+				url: image ? url : null
 			});
 		}
 		attachments.set(id, list);
@@ -828,7 +869,7 @@ export function mountWrx(root) {
 		const running = working[0];
 		const queued = chat?.members.filter((m) => m.status === 'queued') || [];
 		const draft = drafts.get(chatId) || '';
-		return `<div class="agent-layout"><div class="conversation-list">${conversationListHtml(chats, chat)}</div><section class="conversation-main">${chat ? `<div class="chat-heading"><button class="square conversations-toggle" data-action="conversations" aria-label="Conversations" aria-haspopup="dialog">${icon('menu')}${chats.some((c) => c.id !== chat.id && c.members.some((m) => m.status === 'running')) ? '<i class="live-dot"></i>' : ''}</button><div class="chat-title"><h3>${esc(chat.title)}</h3><small>${chat.members.length} agent${chat.members.length === 1 ? '' : 's'} · ${esc(running ? 'working' : chat.status)}${chat.members.some((m) => m.costUsd) ? ` · ${money(chat.members.reduce((s, m) => s + (m.costUsd || 0), 0))}` : ''}</small></div><div class="roster">${chat.members.map((m) => `<button class="member ${m.status}${m.live ? ' live' : ''}" data-member="${m.id}" title="${esc(`${m.name} (@${m.handle}) · ${m.provider} / ${MODE_LABELS[m.mode]}${m.live ? ' · session open, background tasks can wake it' : ''}${m.role ? `\n${m.role}` : ''}`)}">${avatar(m)}<span>${esc(m.name)}</span>${m.id === chat.leadId ? '<em title="Thread lead">★</em>' : ''}<i class="member-state"></i></button>`).join('')}${btn('Add agent', 'add-member', 'plus')}<button data-action="conversation-fullscreen" aria-label="${conversationFullscreen ? 'Minimize conversation' : 'Expand conversation to full screen'}" aria-pressed="${conversationFullscreen}" title="${conversationFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(conversationFullscreen ? 'minimize' : 'expand')}<span>${conversationFullscreen ? 'Minimize' : 'Full screen'}</span></button>${running || queued.length || chat.members.some((m) => m.live) ? btn('Stop', 'cancel', 'check') : ''}</div></div><div id="transcript" class="transcript">${chat.partial ? '<div class="empty"><p class="muted">Loading conversation…</p></div>' : `${hidden > 0 ? `<div class="earlier"><button class="text-button" data-action="earlier">Show earlier messages (${hidden} more)</button></div>` : ''}${!chat.messages.length ? `<div class="empty thread-welcome"><span class="logo">✻</span><h3>What should the team work on?</h3><p>Messages go to the thread lead, <b>@${esc(member(chat, chat.leadId)?.handle || '')}</b>, unless you @mention someone.<br>Agents hand work to each other with @mentions. Read-only agents work in parallel; agents that edit files take turns.</p><div class="tips"><span><kbd>@</kbd> mention an agent</span><span><kbd>@all</kbd> everyone</span><span><kbd>/</kbd> commands</span><span><kbd>Esc</kbd> stop</span></div></div>` : chat.messages.map((m) => messageView(chat, m)).join('')}`}${running ? `<div class="working"><span class="spark">✻</span>${working.map((m) => `<b>${esc(m.name)}</b>`).join(', ')} ${working.length > 1 ? 'are' : 'is'} working…${queued.length ? ` <span>Up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</span>` : ''}<span class="esc">esc to stop</span></div>` : queued.length ? `<div class="working"><i class="live-dot"></i> ${chat.summarizing ? 'Summarizing the thread so agents start from a fresh, smaller context' : 'Waiting for the workspace'} · up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</div>` : ''}${chat.events.length ? `<details class="activity-log" data-open="events:${chat.id}" ${openKeys.has(`events:${chat.id}`) ? 'open' : ''}><summary>Activity & diagnostics (${chat.events.length})</summary><pre class="activity">${esc(chat.events.join('\n'))}</pre></details>` : ''}</div><button class="jump hidden" data-action="jump" aria-label="Scroll to latest">↓</button>${todoBar(chat)}<form id="message-form" class="composer"><div id="composer-menu">${menuView()}</div><div id="attachments" class="attachments" ${attachments.get(chatId)?.length ? '' : 'hidden'}>${attachmentsView(chatId)}</div><div id="dictation-status" class="dictation-status ${voice.partial ? 'partial' : ''}" ${voice.status === 'idle' ? 'hidden' : ''} aria-live="polite"><i></i><span>${esc(dictationText())}</span></div><textarea id="message" name="message" placeholder="Message ${esc(chat.title)} — @mention agents, / for commands" rows="3" aria-label="Message to agents"></textarea><div class="composer-bar"><div class="composer-left"><button type="button" class="ib" data-action="mention" title="Mention an agent" aria-label="Mention an agent">@</button><button type="button" class="ib" data-action="slash" title="Commands" aria-label="Commands">/</button><button type="button" class="ib" data-action="attach" title="Attach images — or drop / paste them" aria-label="Attach images">${icon('image')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><button type="button" id="mic" class="ib mic ${voice.status}" data-action="dictate" title="${micTitle()}" aria-label="Voice input" aria-pressed="${voice.status === 'listening'}">${icon('mic')}</button><span id="recipients" class="recipients">${recipientsLabel(chat, draft)}</span></div><div class="composer-right"><small>Enter to send · ⇧Enter for a new line</small><button class="primary" aria-label="Send">Send ${icon('arrow')}</button></div></div></form>` : `<div class="empty"><h3>Your team is ready.</h3><p>Start a thread with one or more agents — a lead, designer, engineer, marketer…</p>${btn('New conversation', 'chat', 'plus', 'primary')}</div>`}</section></div>`;
+		return `<div class="agent-layout"><div class="conversation-list">${conversationListHtml(chats, chat)}</div><section class="conversation-main">${chat ? `<div class="chat-heading"><button class="square conversations-toggle" data-action="conversations" aria-label="Conversations" aria-haspopup="dialog">${icon('menu')}${chats.some((c) => c.id !== chat.id && c.members.some((m) => m.status === 'running')) ? '<i class="live-dot"></i>' : ''}</button><div class="chat-title"><h3>${esc(chat.title)}</h3><small>${chat.members.length} agent${chat.members.length === 1 ? '' : 's'} · ${esc(running ? 'working' : chat.status)}${chat.members.some((m) => m.costUsd) ? ` · ${money(chat.members.reduce((s, m) => s + (m.costUsd || 0), 0))}` : ''}</small></div><div class="roster">${chat.members.map((m) => `<button class="member ${m.status}${m.live ? ' live' : ''}" data-member="${m.id}" title="${esc(`${m.name} (@${m.handle}) · ${m.provider} / ${MODE_LABELS[m.mode]}${m.live ? ' · session open, background tasks can wake it' : ''}${m.role ? `\n${m.role}` : ''}`)}">${avatar(m)}<span>${esc(m.name)}</span>${m.id === chat.leadId ? '<em title="Thread lead">★</em>' : ''}<i class="member-state"></i></button>`).join('')}${btn('Add agent', 'add-member', 'plus')}<button data-action="conversation-fullscreen" aria-label="${conversationFullscreen ? 'Minimize conversation' : 'Expand conversation to full screen'}" aria-pressed="${conversationFullscreen}" title="${conversationFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(conversationFullscreen ? 'minimize' : 'expand')}<span>${conversationFullscreen ? 'Minimize' : 'Full screen'}</span></button>${running || queued.length || chat.members.some((m) => m.live) ? btn('Stop', 'cancel', 'check') : ''}</div></div><div id="transcript" class="transcript">${chat.partial ? '<div class="empty"><p class="muted">Loading conversation…</p></div>' : `${hidden > 0 ? `<div class="earlier"><button class="text-button" data-action="earlier">Show earlier messages (${hidden} more)</button></div>` : ''}${!chat.messages.length ? `<div class="empty thread-welcome"><span class="logo">✻</span><h3>What should the team work on?</h3><p>Messages go to the thread lead, <b>@${esc(member(chat, chat.leadId)?.handle || '')}</b>, unless you @mention someone.<br>Agents hand work to each other with @mentions. Read-only agents work in parallel; agents that edit files take turns.</p><div class="tips"><span><kbd>@</kbd> mention an agent</span><span><kbd>@all</kbd> everyone</span><span><kbd>/</kbd> commands</span><span><kbd>Esc</kbd> stop</span></div></div>` : chat.messages.map((m) => messageView(chat, m)).join('')}`}${running ? `<div class="working"><span class="spark">✻</span>${working.map((m) => `<b>${esc(m.name)}</b>`).join(', ')} ${working.length > 1 ? 'are' : 'is'} working…${queued.length ? ` <span>Up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</span>` : ''}<span class="esc">esc to stop</span></div>` : queued.length ? `<div class="working"><i class="live-dot"></i> ${chat.summarizing ? 'Summarizing the thread so agents start from a fresh, smaller context' : 'Waiting for the workspace'} · up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</div>` : ''}${chat.events.length ? `<details class="activity-log" data-open="events:${chat.id}" ${openKeys.has(`events:${chat.id}`) ? 'open' : ''}><summary>Activity & diagnostics (${chat.events.length})</summary><pre class="activity">${esc(chat.events.join('\n'))}</pre></details>` : ''}</div><button class="jump hidden" data-action="jump" aria-label="Scroll to latest">↓</button>${todoBar(chat)}<form id="message-form" class="composer"><div id="composer-menu">${menuView()}</div><div id="attachments" class="attachments" ${attachments.get(chatId)?.length ? '' : 'hidden'}>${attachmentsView(chatId)}</div><div id="dictation-status" class="dictation-status ${voice.partial ? 'partial' : ''}" ${voice.status === 'idle' ? 'hidden' : ''} aria-live="polite"><i></i><span>${esc(dictationText())}</span></div><textarea id="message" name="message" placeholder="Message ${esc(chat.title)} — @mention agents, / for commands" rows="3" aria-label="Message to agents"></textarea><div class="composer-bar"><div class="composer-left"><button type="button" class="ib" data-action="mention" title="Mention an agent" aria-label="Mention an agent">@</button><button type="button" class="ib" data-action="slash" title="Commands" aria-label="Commands">/</button><button type="button" class="ib" data-action="attach" title="Attach files — or drop / paste them" aria-label="Attach files">${icon('paperclip')}</button><input type="file" id="image-input" multiple hidden><button type="button" id="mic" class="ib mic ${voice.status}" data-action="dictate" title="${micTitle()}" aria-label="Voice input" aria-pressed="${voice.status === 'listening'}">${icon('mic')}</button><span id="recipients" class="recipients">${recipientsLabel(chat, draft)}</span></div><div class="composer-right"><small>Enter to send · ⇧Enter for a new line</small><button class="primary" aria-label="Send">Send ${icon('arrow')}</button></div></div></form>` : `<div class="empty"><h3>Your team is ready.</h3><p>Start a thread with one or more agents — a lead, designer, engineer, marketer…</p>${btn('New conversation', 'chat', 'plus', 'primary')}</div>`}</section></div>`;
 	}
 	const recipientsLabel = (chat, text) =>
 		`→ ${recipients(chat, text)
@@ -2395,7 +2436,7 @@ export function mountWrx(root) {
 				await api('turn', {
 					chatId,
 					text: text.replace(/^\/\//, '/'),
-					images: pending.map(({ name, type, data }) => ({ name, type, data }))
+					attachments: pending.map(({ name, type, data }) => ({ name, type, data }))
 				});
 				attachments.delete(chatId);
 			}
@@ -2409,18 +2450,16 @@ export function mountWrx(root) {
 	});
 	on(root, 'change', (event) => {
 		if (event.target.id === 'image-input') {
-			addImages([...event.target.files]).catch((e) => toast(e.message, 'error'));
+			addFiles([...event.target.files]).catch((e) => toast(e.message, 'error'));
 			event.target.value = '';
 		}
 	});
 	on(root, 'paste', (event) => {
 		if (event.target.id !== 'message') return;
-		const files = [...(event.clipboardData?.files || [])].filter((f) =>
-			f.type.startsWith('image/')
-		);
+		const files = [...(event.clipboardData?.files || [])];
 		if (!files.length) return;
 		event.preventDefault();
-		addImages(files).catch((e) => toast(e.message, 'error'));
+		addFiles(files).catch((e) => toast(e.message, 'error'));
 	});
 	// Files dropped anywhere outside a conversation must not navigate the page away.
 	const hasFiles = (event) => [...(event.dataTransfer?.types || [])].includes('Files');
@@ -2441,7 +2480,7 @@ export function mountWrx(root) {
 		const main = event.target.closest?.('.conversation-main');
 		if (!main || !chatId) return;
 		main.classList.remove('dropping');
-		addImages([...event.dataTransfer.files]).catch((e) => toast(e.message, 'error'));
+		addFiles([...event.dataTransfer.files]).catch((e) => toast(e.message, 'error'));
 	});
 	on(document, 'keydown', (event) => {
 		if (event.altKey && !event.metaKey && !event.ctrlKey && event.code === 'KeyM' && $('#mic')) {

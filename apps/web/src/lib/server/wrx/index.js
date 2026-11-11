@@ -8,16 +8,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { chooseDirectory, listDirectories } from './directories.js';
 import { listDirectory, readFilePreview, searchFiles, serveRaw } from './files.js';
-import {
-	Store,
-	Engine,
-	command,
-	agentEnv,
-	id,
-	now,
-	requireText,
-	clientChats
-} from './core.js';
+import { Store, Engine, command, agentEnv, id, now, requireText, clientChats } from './core.js';
 
 const root = path.resolve(process.env.WRX_DATA || '.wrx');
 const machine = { id: os.hostname(), name: os.hostname() };
@@ -307,6 +298,23 @@ export async function handleWrx({ request, url, route, userId }) {
 		const upload = route.match(
 			/^uploads\/([0-9a-f-]{36})\/([0-9a-f-]{36}-\d+\.(png|jpg|gif|webp))$/
 		);
+		// Non-image attachments: always downloaded, never rendered inline.
+		const attached = route.match(/^uploads\/([0-9a-f-]{36})\/([0-9a-f-]{36}-\d+)\/([^/]+)$/);
+		if (attached && request.method === 'GET') {
+			const name = attached[3]; // SvelteKit already decoded the path
+			if (/[/\\]|^\.\.?$/.test(name)) return new Response('Not found', { status: 404 });
+			const file = path.join(directory, 'uploads', attached[1], attached[2], name);
+			if (!fs.existsSync(file)) return new Response('Not found', { status: 404 });
+			return new Response(Readable.toWeb(fs.createReadStream(file)), {
+				headers: {
+					'Content-Type': 'application/octet-stream',
+					'Content-Disposition': `attachment; filename="${name.replace(/[^\w.-]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+					'X-Content-Type-Options': 'nosniff',
+					'Cache-Control': 'private, max-age=86400',
+					'Cross-Origin-Resource-Policy': 'same-origin'
+				}
+			});
+		}
 		if (upload && request.method === 'GET') {
 			const file = path.join(directory, 'uploads', upload[1], upload[2]);
 			if (!fs.existsSync(file)) return new Response('Not found', { status: 404 });
@@ -453,7 +461,7 @@ export async function handleWrx({ request, url, route, userId }) {
 				result = engine.removeMember(body.chatId, body.memberId);
 				break;
 			case 'turn':
-				result = engine.turn(body.chatId, body.text, body.images);
+				result = engine.turn(body.chatId, body.text, body.attachments ?? body.images);
 				break;
 			case 'cancel':
 				engine.cancel(body.chatId);

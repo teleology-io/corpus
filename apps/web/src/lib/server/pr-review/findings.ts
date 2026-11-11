@@ -21,6 +21,23 @@ export interface Finding {
 	outcome?: 'open' | 'dismissed' | 'posted' | 'addressed';
 	/** The finding reworded in the user's voice. This is what gets posted when present. */
 	voiced?: string;
+	/** The user's own comment, written in the app. Posted verbatim in place of everything else. */
+	custom?: string;
+}
+
+/**
+ * Reviewers pick their own ids and sometimes repeat one (or copy the prompt's example). Every action
+ * addresses a finding by id, so a repeat would make one click hit several findings. Later repeats get
+ * a numbered suffix. The result depends only on order, so stored findings keep the same ids each read.
+ */
+export function uniqueIds<T extends { id: string }>(findings: T[]): T[] {
+	const seen = new Set<string>();
+	return findings.map((f) => {
+		let id = f.id;
+		for (let n = 2; seen.has(id); n++) id = `${f.id}#${n}`;
+		seen.add(id);
+		return id === f.id ? f : { ...f, id };
+	});
 }
 
 export interface ReviewerResult {
@@ -91,7 +108,12 @@ export function parseReview(text: string, reviewer: ReviewerRole): ReviewerResul
 	const notReviewed = Array.isArray(coverage?.not_reviewed)
 		? coverage.not_reviewed.map((n) => ({ path: asText(n?.path), reason: asText(n?.reason) }))
 		: [];
-	return { verdict: raw.verdict, notReviewed, findings, questions: asTexts(raw.questions) };
+	return {
+		verdict: raw.verdict,
+		notReviewed,
+		findings: uniqueIds(findings),
+		questions: asTexts(raw.questions)
+	};
 }
 
 export function parseCrosscheck(text: string): CrosscheckResult[] | null {

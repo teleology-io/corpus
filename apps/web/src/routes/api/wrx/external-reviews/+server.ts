@@ -9,6 +9,7 @@ import {
 	postGithubReview,
 	previewGithubReview,
 	saveReviewerSettings,
+	setCustomComment,
 	startExternalReview
 } from '#lib/server/pr-review/service.js';
 
@@ -29,6 +30,9 @@ export const POST: RequestHandler = async (event) => {
 			return json(await startExternalReview(userId, body.itemId));
 		case 'dismiss':
 			await dismissFinding(userId, body.reviewId, body.findingId);
+			return json({});
+		case 'comment':
+			await setCustomComment(userId, body.reviewId, body.findingId, body.text);
 			return json({});
 		case 'preview':
 			return json(await previewGithubReview(userId, body.reviewId));

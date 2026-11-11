@@ -51,7 +51,7 @@ Write a short summary, then finish with exactly one fenced block tagged review-f
   "verdict": "clean" | "findings",
   "coverage": { "reviewed": ["..."], "not_reviewed": [{"path": "...", "reason": "..."}] },
   "findings": [{
-    "id": "short-stable-slug",
+    "id": "a slug unique to this finding, e.g. retry-double-charge",
     "severity": "blocker" | "major" | "minor",
     "category": "correctness" | "integration" | "security" | "reliability" | "data" | "testing",
     "file": "path", "line": 1,

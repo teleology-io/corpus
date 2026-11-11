@@ -16,7 +16,7 @@ import {
 } from '@corpus/core/integrations';
 import { agentEnv, command } from '../wrx/core.js';
 import { buildBundle, removeTree } from './bundle';
-import type { Finding } from './findings';
+import { uniqueIds, type Finding } from './findings';
 import { DEFAULT_SLOTS, resolveSlots, reviewPullRequest, ROLES } from './orchestrate';
 import { buildGithubReview } from './post';
 import { PERSONAS } from './prompts';
@@ -125,7 +125,11 @@ export async function listExternalReviews(userId: string) {
 		.orderBy(desc(review.createdAt));
 	const withProgress = (r: (typeof reviews)[number]) => {
 		const progress = liveProgress.get(r.id);
-		return { ...r, progress: progress ? progressView(progress) : null };
+		return {
+			...r,
+			findings: withUniqueIds(r.findings),
+			progress: progress ? progressView(progress) : null
+		};
 	};
 	return items.map((i) => {
 		const latest = reviews.find((r) => r.itemId === i.id);
@@ -150,6 +154,10 @@ async function ownItem(userId: string, itemId: string) {
 	return { connection: row.connection, ref };
 }
 
+// Reviews stored before ids were made unique can repeat one, so ids are fixed up on every read.
+const withUniqueIds = (findings: Record<string, unknown>[]) =>
+	uniqueIds(findings as unknown as Finding[]) as unknown as Record<string, unknown>[];
+
 async function ownReview(userId: string, reviewId: string) {
 	const [row] = await db
 		.select()
@@ -157,7 +165,7 @@ async function ownReview(userId: string, reviewId: string) {
 		.where(and(eq(review.id, reviewId), eq(review.userId, userId)))
 		.limit(1);
 	if (!row) error(404, 'Review not found');
-	return row;
+	return { ...row, findings: withUniqueIds(row.findings) };
 }
 
 /** Starts in the background and returns the running row. Failures end up on the row, not lost. */
@@ -279,6 +287,28 @@ export async function dismissFinding(userId: string, reviewId: string, findingId
 	const findings = row.findings.map((f) =>
 		f.id === findingId ? { ...f, outcome: f.outcome === 'dismissed' ? 'open' : 'dismissed' } : f
 	);
+	await db.update(review).set({ findings }).where(eq(review.id, reviewId));
+}
+
+const MAX_CUSTOM_LENGTH = 20000;
+
+/** Replaces what gets posted for one finding with the user's own text. Blank text goes back to the finding. */
+export async function setCustomComment(
+	userId: string,
+	reviewId: string,
+	findingId: string,
+	text: unknown
+) {
+	const row = await ownReview(userId, reviewId);
+	if (row.postedUrl) error(409, 'This review is already posted.');
+	const custom = typeof text === 'string' ? text.trim() : '';
+	if (custom.length > MAX_CUSTOM_LENGTH) error(400, 'That comment is too long.');
+	if (!row.findings.some((f) => f.id === findingId)) error(404, 'Finding not found');
+	const findings = row.findings.map((f) => {
+		if (f.id !== findingId) return f;
+		const { custom: _, ...rest } = f;
+		return custom ? { ...rest, custom } : rest;
+	});
 	await db.update(review).set({ findings }).where(eq(review.id, reviewId));
 }
 

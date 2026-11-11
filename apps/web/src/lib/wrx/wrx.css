@@ -3709,6 +3709,11 @@ body:has(.recording-bar) .wrx.conversation-fullscreen {
 .wrx .review-finding p {
 	margin: 6px 0;
 }
+.wrx .review-finding .review-custom {
+	white-space: pre-wrap;
+	border-left: 2px solid var(--border);
+	padding-left: 8px;
+}
 .wrx .review-finding ul,
 .wrx .review-note ul {
 	margin: 6px 0;

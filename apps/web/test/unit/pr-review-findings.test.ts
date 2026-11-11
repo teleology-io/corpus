@@ -5,6 +5,7 @@ import {
 	liveBlockers,
 	parseCrosscheck,
 	parseReview,
+	uniqueIds,
 	type Finding,
 	type ReviewerResult
 } from '../../src/lib/server/pr-review/findings';
@@ -145,5 +146,28 @@ describe('finalStatus', () => {
 		expect(finalStatus({ results: [clean, clean], partial: false, findings: [finding()] })).toBe(
 			'findings'
 		);
+	});
+});
+
+describe('uniqueIds', () => {
+	it('numbers repeated ids so each finding can be addressed alone', () => {
+		const ids = uniqueIds([
+			finding({ id: 'breaker:x' }),
+			finding({ id: 'breaker:x' }),
+			finding({ id: 'breaker:y' }),
+			finding({ id: 'breaker:x' })
+		]).map((f) => f.id);
+		expect(ids).toEqual(['breaker:x', 'breaker:x#2', 'breaker:y', 'breaker:x#3']);
+	});
+
+	it('gives parsed findings distinct ids when the reviewer repeats one', () => {
+		const text = fenced('review-findings', {
+			verdict: 'findings',
+			findings: [rawFinding, { ...rawFinding, title: 'Another' }]
+		});
+		expect(parseReview(text, 'breaker')?.findings.map((f) => f.id)).toEqual([
+			'breaker:race',
+			'breaker:race#2'
+		]);
 	});
 });

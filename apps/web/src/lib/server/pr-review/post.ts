@@ -6,6 +6,8 @@ import type { Finding } from './findings';
 const quiet = (text: string) => text.replace(/@(?=[\w-])/g, '@​');
 
 function renderFinding(f: Finding) {
+	// The user's own words, so they post as written, mentions included.
+	if (f.custom) return f.custom;
 	const label = `${f.severity}${f.disputed ? ' (disputed)' : ''}`;
 	// The label stays outside the rewording, so no voice can change how serious a finding reads.
 	if (f.voiced) return quiet(`**${label}**\n\n${f.voiced}`);

@@ -1435,10 +1435,43 @@ export function mountWrx(root) {
 		stale: ['New commits since review', 'red']
 	};
 	const SEVERITY_ORDER = { blocker: 0, major: 1, minor: 2 };
-	function reviewFinding(reviewId, f) {
+	function reviewFinding(r, f) {
 		const dismissed = f.outcome === 'dismissed';
 		const where = f.file ? `${f.file}${f.line ? `:${f.line}` : ''}` : '';
-		return `<article class="review-finding ${esc(f.severity)}${dismissed ? ' dismissed' : ''}"><header><span class="severity">${esc(f.severity)}</span>${f.disputed ? '<span class="severity disputed">disputed</span>' : ''}${f.outcome === 'posted' ? '<span class="severity disputed">posted</span>' : ''}<strong>${esc(f.title)}</strong>${f.dropped ? '' : `<button class="text-button" data-review-dismiss="${esc(reviewId)}" data-finding="${esc(f.id)}">${dismissed ? 'Restore' : 'Dismiss'}</button>`}</header>${where ? `<code>${esc(where)}</code>` : ''}${f.voiced ? `<p><b>In your voice</b> ${esc(f.voiced)}</p>` : ''}${f.trigger ? `<p><b>Trigger</b> ${esc(f.trigger)}</p>` : ''}${f.impact ? `<p><b>Impact</b> ${esc(f.impact)}</p>` : ''}${f.fix ? `<p><b>Fix</b> ${esc(f.fix)}</p>` : ''}${f.evidence?.length ? `<ul>${f.evidence.map((e) => `<li><code>${esc(e)}</code></li>`).join('')}</ul>` : ''}${f.dropped ? `<p><b>Refuted by the other reviewer</b></p><ul>${f.dropped.evidence.map((e) => `<li><code>${esc(e)}</code></li>`).join('')}</ul>` : ''}<small>Found by ${esc(f.reviewer)}</small></article>`;
+		const ids = `data-review="${esc(r.id)}" data-finding="${esc(f.id)}"`;
+		const actions =
+			f.dropped || r.postedUrl
+				? ''
+				: `${dismissed ? '' : `<button class="text-button" data-review-comment ${ids}>${f.custom ? 'Edit comment' : 'Write own comment'}</button>`}<button class="text-button" data-review-dismiss ${ids}>${dismissed ? 'Restore' : 'Dismiss'}</button>`;
+		return `<article class="review-finding ${esc(f.severity)}${dismissed ? ' dismissed' : ''}"><header><span class="severity">${esc(f.severity)}</span>${f.disputed ? '<span class="severity disputed">disputed</span>' : ''}${f.outcome === 'posted' ? '<span class="severity disputed">posted</span>' : ''}<strong>${esc(f.title)}</strong>${actions}</header>${where ? `<code>${esc(where)}</code>` : ''}${f.custom ? `<p class="review-custom"><b>Your comment, posted instead</b> ${esc(f.custom)}</p>` : ''}${f.voiced ? `<p><b>In your voice</b> ${esc(f.voiced)}</p>` : ''}${f.trigger ? `<p><b>Trigger</b> ${esc(f.trigger)}</p>` : ''}${f.impact ? `<p><b>Impact</b> ${esc(f.impact)}</p>` : ''}${f.fix ? `<p><b>Fix</b> ${esc(f.fix)}</p>` : ''}${f.evidence?.length ? `<ul>${f.evidence.map((e) => `<li><code>${esc(e)}</code></li>`).join('')}</ul>` : ''}${f.dropped ? `<p><b>Refuted by the other reviewer</b></p><ul>${f.dropped.evidence.map((e) => `<li><code>${esc(e)}</code></li>`).join('')}</ul>` : ''}<small>Found by ${esc(f.reviewer)}</small></article>`;
+	}
+	// Starts from whatever would post now, so a small tweak doesn't mean retyping the finding.
+	function reviewCommentDialog(reviewId, findingId) {
+		const f = externalReviews
+			?.find((x) => x.review?.id === reviewId)
+			?.review.findings.find((x) => x.id === findingId);
+		if (!f) return;
+		const draft =
+			f.custom ||
+			f.voiced ||
+			[
+				f.title,
+				f.trigger && `Trigger: ${f.trigger}`,
+				f.impact && `Impact: ${f.impact}`,
+				f.fix && `Fix: ${f.fix}`
+			]
+				.filter(Boolean)
+				.join('\n\n');
+		modal(
+			'Your comment',
+			`Posted to GitHub as written, in place of this finding${f.file ? ` on <code>${esc(f.file)}${f.line ? `:${esc(f.line)}` : ''}</code>` : ''}. Leave it blank to post the finding again.`,
+			`<label>Comment<textarea name="text" rows="10">${esc(draft)}</textarea></label>`,
+			'Save comment',
+			async ({ text }) => {
+				await reviewAction({ action: 'comment', reviewId, findingId, text });
+				reviewPreview = null;
+			}
+		);
 	}
 	function reviewPreviewPanel(reviewId) {
 		if (reviewPreview?.reviewId !== reviewId) return '';
@@ -1500,12 +1533,12 @@ export function mountWrx(root) {
 			r.notReviewed.length
 				? `<p class="review-warning">Not reviewed: ${r.notReviewed.map((n) => `${esc(n.path)}${n.reason ? ` (${esc(n.reason)})` : ''}`).join(', ')}</p>`
 				: '',
-			live.map((f) => reviewFinding(r.id, f)).join(''),
+			live.map((f) => reviewFinding(r, f)).join(''),
 			r.questions.length
 				? `<div class="review-note"><b>Questions</b><ul>${r.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ul></div>`
 				: '',
 			dropped.length
-				? `<details class="review-dropped"><summary>${dropped.length} refuted finding${dropped.length === 1 ? '' : 's'}</summary>${dropped.map((f) => reviewFinding(r.id, f)).join('')}</details>`
+				? `<details class="review-dropped"><summary>${dropped.length} refuted finding${dropped.length === 1 ? '' : 's'}</summary>${dropped.map((f) => reviewFinding(r, f)).join('')}</details>`
 				: '',
 			`<div class="review-meta"><span>${esc(r.headSha.slice(0, 10))} · $${Number(r.costUsd).toFixed(2)}</span>${r.postedUrl ? `<a href="${esc(r.postedUrl)}" target="_blank" rel="noreferrer">Posted to GitHub</a>` : canPost ? `<button class="text-button" data-review-preview="${esc(r.id)}">Preview and post</button>` : ''}</div>`,
 			reviewPreviewPanel(r.id)
@@ -2179,12 +2212,14 @@ export function mountWrx(root) {
 				await reviewAction({ action: 'start', itemId: target.dataset.reviewStart });
 				toast('Review started');
 			}
-			if (target.dataset.reviewDismiss)
+			if (target.dataset.reviewDismiss !== undefined)
 				await reviewAction({
 					action: 'dismiss',
-					reviewId: target.dataset.reviewDismiss,
+					reviewId: target.dataset.review,
 					findingId: target.dataset.finding
 				});
+			if (target.dataset.reviewComment !== undefined)
+				reviewCommentDialog(target.dataset.review, target.dataset.finding);
 			if (target.dataset.reviewPreview) {
 				const reviewId = target.dataset.reviewPreview;
 				reviewPreview = {

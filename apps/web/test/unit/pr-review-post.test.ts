@@ -55,6 +55,14 @@ describe('buildGithubReview', () => {
 		expect(out.comments).toEqual([]);
 	});
 
+	it('posts your own comment verbatim in place of the finding', () => {
+		const built = buildGithubReview(
+			[finding({ custom: 'Nit: @sam can we rename this?', voiced: 'Voiced' })],
+			patch
+		);
+		expect(built.comments[0].body).toBe('Nit: @sam can we rename this?');
+	});
+
 	it('labels disputed findings', () => {
 		expect(buildGithubReview([finding({ disputed: true })], patch).comments[0].body).toContain(
 			'(disputed)'

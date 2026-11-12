@@ -9,6 +9,7 @@ import { Readable } from 'node:stream';
 import { chooseDirectory, listDirectories } from './directories.js';
 import { listDirectory, readFilePreview, searchFiles, serveRaw } from './files.js';
 import { Store, Engine, command, agentEnv, id, now, requireText, clientChats } from './core.js';
+import { Terminals } from './terminal.js';
 
 const root = path.resolve(process.env.WRX_DATA || '.wrx');
 const machine = { id: os.hostname(), name: os.hostname() };
@@ -43,7 +44,10 @@ const userDirectory = (userId) => path.join(root, String(userId).replace(/[^\w-]
 
 function host(userId) {
 	let h = hosts.get(userId);
-	if (h) return h;
+	if (h) {
+		h.terminals ??= new Terminals(); // a host from before an HMR reload that added terminals
+		return h;
+	}
 	const directory = userDirectory(userId);
 	fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 	lockDirectory(directory);
@@ -52,7 +56,7 @@ function host(userId) {
 	const engine = new Engine(store, () => {
 		for (const send of clients) send('event: change\ndata: {}\n\n');
 	});
-	h = { directory, store, engine, clients };
+	h = { directory, store, engine, clients, terminals: new Terminals() };
 	hosts.set(userId, h);
 	void probeRuntimes();
 	// Agents run detached in their own process groups; stop them with the server.
@@ -63,6 +67,7 @@ function host(userId) {
 			} catch {}
 		engine.stopCommands();
 		engine.stopSessions();
+		h.terminals.closeAll();
 	});
 	return h;
 }
@@ -216,6 +221,61 @@ async function readBody(request, limit = 100000) {
 	return JSON.parse(raw || '{}');
 }
 
+// One workspace's terminal output, as `reset`, `data` (a JSON string) and `exit` events.
+function terminalEvents(h, workspaceId, request) {
+	const encoder = new TextEncoder();
+	let cleanup = () => {};
+	const stream = new ReadableStream({
+		start(controller) {
+			let closed = false;
+			const end = () => {
+				if (closed) return;
+				closed = true;
+				cleanup();
+				try {
+					controller.close();
+				} catch {}
+			};
+			const send = (chunk) => {
+				try {
+					controller.enqueue(encoder.encode(chunk));
+				} catch {
+					end();
+				}
+			};
+			send('retry: 2000\n\n');
+			const heartbeat = setInterval(() => send(': ping\n\n'), 20000);
+			let unsubscribe = () => {};
+			cleanup = () => {
+				clearInterval(heartbeat);
+				unsubscribe();
+				cleanup = () => {};
+			};
+			unsubscribe = h.terminals.subscribe(workspaceId, (type, data) => {
+				if (type === 'data') send(`event: data\ndata: ${JSON.stringify(data)}\n\n`);
+				else if (type === 'reset') send('event: reset\ndata: {}\n\n');
+				else {
+					send(`event: exit\ndata: ${JSON.stringify({ exitCode: data })}\n\n`);
+					// Defer so a subscribe that ends at once has finished assigning `unsubscribe`.
+					queueMicrotask(end);
+				}
+			});
+			request.signal.addEventListener('abort', end);
+		},
+		cancel() {
+			cleanup();
+		}
+	});
+	return new Response(stream, {
+		headers: {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-cache, no-transform',
+			Connection: 'keep-alive',
+			'X-Accel-Buffering': 'no'
+		}
+	});
+}
+
 function events(h, request) {
 	const encoder = new TextEncoder();
 	let cleanup = () => {};
@@ -281,7 +341,7 @@ const CLAUDE_MODELS = [
 ].map(([value, label]) => ({ value, label }));
 export async function handleWrx({ request, url, route, userId }) {
 	try {
-		const { store, engine, directory } = host(userId);
+		const { store, engine, directory, terminals } = host(userId);
 		const remote = !LOOPBACK.has(url.hostname);
 		const raw = route.match(/^workspace-file\/([0-9a-f-]{36})$/);
 		if (raw && (request.method === 'GET' || request.method === 'HEAD')) {
@@ -405,6 +465,10 @@ export async function handleWrx({ request, url, route, userId }) {
 				return json(200, engine.runTasks(url.searchParams.get('workspaceId')));
 			if (route === 'run-log') return json(200, engine.runLog(url.searchParams.get('runId')));
 			if (route === 'events') return events(hosts.get(userId), request);
+			if (route === 'terminal-stream') {
+				const w = store.get('workspaces', url.searchParams.get('workspaceId'));
+				return terminalEvents(hosts.get(userId), w.id, request);
+			}
 		}
 		if (request.method !== 'POST') return json(404, { error: 'Route not found' });
 		const body = await readBody(request, route === 'turn' ? 48 * 1024 * 1024 : 100000);
@@ -429,6 +493,31 @@ export async function handleWrx({ request, url, route, userId }) {
 				break;
 			case 'workspace-database':
 				result = engine.databaseAction(body.workspaceId, body.action, body.snapshot);
+				break;
+			case 'terminal-open': {
+				const w = store.get('workspaces', body.workspaceId);
+				if (!fs.statSync(w.path, { throwIfNoEntry: false })?.isDirectory())
+					throw new Error(`This checkout is missing: ${w.path}`);
+				const environment = w.environmentId ? store.get('environments', w.environmentId) : null;
+				result = await terminals.open(w.id, {
+					cwd: w.path,
+					env: engine.workspaceEnv(w, environment),
+					cols: body.cols,
+					rows: body.rows
+				});
+				break;
+			}
+			case 'terminal-input':
+				terminals.write(body.workspaceId, body.data);
+				result = {};
+				break;
+			case 'terminal-resize':
+				terminals.resize(body.workspaceId, body.cols, body.rows);
+				result = {};
+				break;
+			case 'terminal-close':
+				terminals.close(body.workspaceId);
+				result = {};
 				break;
 			case 'workspace-delete':
 				result = await engine.deleteWorkspace(body.workspaceId);
@@ -523,6 +612,9 @@ export async function handleWrx({ request, url, route, userId }) {
 			default:
 				return json(404, { error: 'Route not found' });
 		}
+		// A removed workspace (or project) takes its terminal with it.
+		for (const workspaceId of terminals.sessions.keys())
+			if (!store.state.workspaces.some((w) => w.id === workspaceId)) terminals.close(workspaceId);
 		return json(200, result);
 	} catch (error) {
 		return json(400, { error: error.message });

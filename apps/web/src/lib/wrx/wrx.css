@@ -1230,7 +1230,7 @@
 	font-size: 11px;
 }
 .wrx .runtime-note {
-	font-size: 10px;
+	font-size: 12px;
 	padding: 20px 25px;
 	color: var(--muted);
 }
@@ -1319,6 +1319,32 @@
 .wrx .run-output .runtime-log {
 	min-height: 120px;
 	max-height: 320px;
+}
+/* Run tab terminal. xterm.js draws inside .terminal-host, which fills the slot. */
+.wrx .run-terminal {
+	margin-bottom: 20px;
+}
+.wrx .run-terminal > .runtime-note,
+.wrx .run-terminal > .error {
+	/* padding: 0 25px 16px; */
+	margin: 0;
+}
+.wrx .terminal-slot {
+	height: min(480px, 60dvh);
+	min-height: 240px;
+	padding: 8px 4px 8px 10px;
+	/* Matches the xterm theme background in app.js (TERMINAL_THEMES). */
+	background: #fbfbfc;
+	border-top: 1px solid var(--border);
+	border-radius: 0 0 7px 7px;
+	overflow: hidden;
+}
+html.dark .wrx .terminal-slot {
+	background: #16181d;
+}
+.wrx .terminal-host {
+	width: 100%;
+	height: 100%;
 }
 .wrx dialog {
 	border: 1px solid var(--border);
@@ -3594,19 +3620,75 @@
 	color: var(--accent-text);
 	font-size: 12px;
 }
+.wrx .file-tree-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+/* Narrow screens only: ☰ (opens #files-drawer), the open file's name, and full screen. */
+.wrx .files-bar {
+	display: none;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px;
+	border-bottom: 1px solid var(--border);
+	background: var(--bg-raised);
+	flex-shrink: 0;
+}
+.wrx .files-bar .square {
+	width: 44px;
+	height: 44px;
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+.wrx .files-bar-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1;
+	min-width: 0;
+	font-size: 13px;
+	font-weight: 500;
+}
+.wrx .files-bar-title span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wrx .files-drawer .file-tree {
+	height: 100%;
+	border: 0;
+	padding-bottom: env(safe-area-inset-bottom);
+}
+.wrx .files-drawer .panel-heading .square {
+	width: 44px;
+	height: 44px;
+}
+/* The drawer is only opened on narrow screens, where its own fullscreen button would be redundant. */
+.wrx .files-drawer .files-fullscreen-toggle {
+	display: none;
+}
+.wrx .files-drawer .tree-row {
+	min-height: 40px;
+}
 @container wrx (max-width:760px) {
+	/* The tree moves into the ☰ drawer so the file gets the whole width. */
 	.wrx .files-layout {
 		display: flex;
 		flex-direction: column;
-		height: auto;
+		height: calc(100dvh - 200px);
+		min-height: 480px;
 	}
-	.wrx .file-tree {
-		max-height: 260px;
-		border-right: 0;
-		border-bottom: 1px solid var(--border);
+	.wrx .files-layout > .file-tree {
+		display: none;
+	}
+	.wrx .files-bar {
+		display: flex;
 	}
 	.wrx .file-viewer {
-		min-height: 450px;
+		flex: 1;
 	}
 	.wrx .markdown-view {
 		padding: 16px;
@@ -3623,14 +3705,37 @@
 }
 
 /* A fullscreen conversation covers the app shell, so it makes room for Telescope's recording bar. */
-body:has(.wrx.conversation-fullscreen) .recording-bar {
+body:has(.wrx.conversation-fullscreen) .recording-bar,
+body:has(.wrx.files-fullscreen) .recording-bar {
 	position: fixed;
 	inset: 0 0 auto;
 	z-index: 60;
 }
-body:has(.recording-bar) .wrx.conversation-fullscreen {
+body:has(.recording-bar) .wrx.conversation-fullscreen,
+body:has(.recording-bar) .wrx.files-fullscreen {
 	top: 2.75rem;
 	height: calc(100dvh - 2.75rem);
+}
+
+/* The file browser gets the same full-screen mode as conversations. */
+.wrx.files-fullscreen {
+	position: fixed;
+	inset: 0;
+	z-index: 50;
+	height: 100dvh;
+	overflow: hidden;
+}
+.wrx.files-fullscreen .sidebar,
+.wrx.files-fullscreen .wrx-main > :not(.content) {
+	display: none;
+}
+.wrx.files-fullscreen .files-layout {
+	position: absolute;
+	inset: 0;
+	height: 100%;
+	min-height: 0;
+	border: 0;
+	border-radius: 0;
 }
 
 /* Give long conversations the viewport while keeping the composer visible. */

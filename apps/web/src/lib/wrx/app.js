@@ -12,7 +12,7 @@ const attachments = new Map(); // chatId → [{ name, type, size, data (base64),
 
 export function mountWrx(root) {
 	root.innerHTML =
-		'<div id="app"></div><dialog id="dialog"></dialog><dialog id="switcher" class="switcher" aria-label="Switch workspace" autofocus></dialog><dialog id="conversations" class="conversations-drawer" aria-label="Conversations" autofocus></dialog>';
+		'<div id="app"></div><dialog id="dialog"></dialog><dialog id="switcher" class="switcher" aria-label="Switch workspace" autofocus></dialog><dialog id="conversations" class="conversations-drawer" aria-label="Conversations" autofocus></dialog><dialog id="files-drawer" class="conversations-drawer files-drawer" aria-label="Files" autofocus></dialog>';
 	let destroyed = false,
 		events = null;
 	const listeners = [];
@@ -63,6 +63,7 @@ export function mountWrx(root) {
 		workspaceId = localStorage.getItem('wrx.workspace'),
 		chatId = null,
 		conversationFullscreen = false,
+		filesFullscreen = false,
 		tab = 'overview',
 		diff = null,
 		committing = false,
@@ -188,17 +189,25 @@ export function mountWrx(root) {
 			if (!next.hasAttribute(name) && name !== 'style') el.removeAttribute(name); // style holds live values such as the mic level
 		for (const { name, value } of [...next.attributes])
 			if (el.getAttribute(name) !== value) el.setAttribute(name, value);
-		if (el.nodeName !== 'TEXTAREA') patchChildren(el, next); // a textarea's live value is managed separately
+		// A textarea's live value is managed separately; a data-keep element holds DOM built outside render().
+		if (el.nodeName !== 'TEXTAREA' && !el.hasAttribute('data-keep')) patchChildren(el, next);
 	}
 	function render() {
 		if (destroyed) return;
 		if ($('#switcher').open) patch($('#switcher'), switcherHtml());
 		if ($('#conversations').open) patch($('#conversations'), conversationsHtml());
+		if ($('#files-drawer').open) {
+			if (tab === 'files' && current())
+				patch($('#files-drawer'), fileTreeHtml('file-query-drawer'));
+			else $('#files-drawer').close();
+		}
 		const w = current(),
 			p = project();
 		const chats = state.chats.filter((c) => c.workspaceId === w?.id);
 		if (tab !== 'agents' || !chats.length) conversationFullscreen = false;
 		root.classList.toggle('conversation-fullscreen', conversationFullscreen);
+		if (tab !== 'files' || !w) filesFullscreen = false;
+		root.classList.toggle('files-fullscreen', filesFullscreen);
 		const active = state.chats.filter((c) => c.status === 'running');
 		const filtered = state.projects;
 		const old = $('#transcript');
@@ -236,6 +245,9 @@ export function mountWrx(root) {
 		} else renderedChat = null;
 		for (const log of $('#app').querySelectorAll('.run-output .runtime-log'))
 			if (!scrolledRunLogs.has(log.id)) log.scrollTop = log.scrollHeight;
+		// Another workspace's terminal isn't shown; its shell keeps running on the server.
+		if (terminal.workspace && terminal.workspace !== workspaceId) disposeTerminal();
+		mountTerminal();
 		// On narrow screens the tab strip scrolls sideways; bring the active tab into view only when the
 		// tab (or workspace) changes, so live refreshes never yank the strip around. Only scrollLeft is
 		// touched, so the page itself never scrolls.
@@ -871,7 +883,7 @@ export function mountWrx(root) {
 		const running = working[0];
 		const queued = chat?.members.filter((m) => m.status === 'queued') || [];
 		const draft = drafts.get(chatId) || '';
-		return `<div class="agent-layout"><div class="conversation-list">${conversationListHtml(chats, chat)}</div><section class="conversation-main">${chat ? `<div class="chat-heading"><button class="square conversations-toggle" data-action="conversations" aria-label="Conversations" aria-haspopup="dialog">${icon('menu')}${chats.some((c) => c.id !== chat.id && c.members.some((m) => m.status === 'running')) ? '<i class="live-dot"></i>' : ''}</button><div class="chat-title"><h3>${esc(chat.title)}</h3><small>${chat.members.length} agent${chat.members.length === 1 ? '' : 's'} · ${esc(running ? 'working' : chat.status)}${chat.members.some((m) => m.costUsd) ? ` · ${money(chat.members.reduce((s, m) => s + (m.costUsd || 0), 0))}` : ''}</small></div><div class="roster">${chat.members.map((m) => `<button class="member ${m.status}${m.live ? ' live' : ''}" data-member="${m.id}" title="${esc(`${m.name} (@${m.handle}) · ${m.provider} / ${MODE_LABELS[m.mode]}${m.live ? ' · session open, background tasks can wake it' : ''}${m.role ? `\n${m.role}` : ''}`)}">${avatar(m)}<span>${esc(m.name)}</span>${m.id === chat.leadId ? '<em title="Thread lead">★</em>' : ''}<i class="member-state"></i></button>`).join('')}${btn('Add agent', 'add-member', 'plus')}<button data-action="conversation-fullscreen" aria-label="${conversationFullscreen ? 'Minimize conversation' : 'Expand conversation to full screen'}" aria-pressed="${conversationFullscreen}" title="${conversationFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(conversationFullscreen ? 'minimize' : 'expand')}<span>${conversationFullscreen ? 'Minimize' : 'Full screen'}</span></button>${running || queued.length || chat.members.some((m) => m.live) ? btn('Stop', 'cancel', 'check') : ''}</div></div><div id="transcript" class="transcript">${chat.partial ? '<div class="empty"><p class="muted">Loading conversation…</p></div>' : `${hidden > 0 ? `<div class="earlier"><button class="text-button" data-action="earlier">Show earlier messages (${hidden} more)</button></div>` : ''}${!chat.messages.length ? `<div class="empty thread-welcome"><span class="logo">✻</span><h3>What should the team work on?</h3><p>Messages go to the thread lead, <b>@${esc(member(chat, chat.leadId)?.handle || '')}</b>, unless you @mention someone.<br>Agents hand work to each other with @mentions. Read-only agents work in parallel; agents that edit files take turns.</p><div class="tips"><span><kbd>@</kbd> mention an agent</span><span><kbd>@all</kbd> everyone</span><span><kbd>/</kbd> commands</span><span><kbd>Esc</kbd> stop</span></div></div>` : chat.messages.map((m) => messageView(chat, m)).join('')}`}${running ? `<div class="working"><span class="spark">✻</span>${working.map((m) => `<b>${esc(m.name)}</b>`).join(', ')} ${working.length > 1 ? 'are' : 'is'} working…${queued.length ? ` <span>Up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</span>` : ''}<span class="esc">esc to stop</span></div>` : queued.length ? `<div class="working"><i class="live-dot"></i> ${chat.summarizing ? 'Summarizing the thread so agents start from a fresh, smaller context' : 'Waiting for the workspace'} · up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</div>` : ''}${chat.events.length ? `<details class="activity-log" data-open="events:${chat.id}" ${openKeys.has(`events:${chat.id}`) ? 'open' : ''}><summary>Activity & diagnostics (${chat.events.length})</summary><pre class="activity">${esc(chat.events.join('\n'))}</pre></details>` : ''}</div><button class="jump hidden" data-action="jump" aria-label="Scroll to latest">↓</button>${todoBar(chat)}<form id="message-form" class="composer"><div id="composer-menu">${menuView()}</div><div id="attachments" class="attachments" ${attachments.get(chatId)?.length ? '' : 'hidden'}>${attachmentsView(chatId)}</div><div id="dictation-status" class="dictation-status ${voice.partial ? 'partial' : ''}" ${voice.status === 'idle' ? 'hidden' : ''} aria-live="polite"><i></i><span>${esc(dictationText())}</span></div><textarea id="message" name="message" placeholder="Message ${esc(chat.title)} — @mention agents, / for commands" rows="3" aria-label="Message to agents"></textarea><div class="composer-bar"><div class="composer-left"><button type="button" class="ib" data-action="mention" title="Mention an agent" aria-label="Mention an agent">@</button><button type="button" class="ib" data-action="slash" title="Commands" aria-label="Commands">/</button><button type="button" class="ib" data-action="attach" title="Attach files — or drop / paste them" aria-label="Attach files">${icon('paperclip')}</button><input type="file" id="image-input" multiple hidden><button type="button" id="mic" class="ib mic ${voice.status}" data-action="dictate" title="${micTitle()}" aria-label="Voice input" aria-pressed="${voice.status === 'listening'}">${icon('mic')}</button><span id="recipients" class="recipients">${recipientsLabel(chat, draft)}</span></div><div class="composer-right"><small>Enter to send · ⇧Enter for a new line</small><button class="primary" aria-label="Send">Send ${icon('arrow')}</button></div></div></form>` : `<div class="empty"><h3>Your team is ready.</h3><p>Start a thread with one or more agents — a lead, designer, engineer, marketer…</p>${btn('New conversation', 'chat', 'plus', 'primary')}</div>`}</section></div>`;
+		return `<div class="agent-layout"><div class="conversation-list">${conversationListHtml(chats, chat)}</div><section class="conversation-main">${chat ? `<div class="chat-heading"><button class="square conversations-toggle" data-action="conversations" aria-label="Conversations" aria-haspopup="dialog">${icon('menu')}${chats.some((c) => c.id !== chat.id && c.members.some((m) => m.status === 'running')) ? '<i class="live-dot"></i>' : ''}</button><div class="chat-title"><h3>${esc(chat.title)}</h3><small>${chat.members.length} agent${chat.members.length === 1 ? '' : 's'} · ${esc(running ? 'working' : chat.status)}${chat.members.some((m) => m.costUsd) ? ` · ${money(chat.members.reduce((s, m) => s + (m.costUsd || 0), 0))}` : ''}</small></div><div class="roster">${chat.members.map((m) => `<button class="member ${m.status}${m.live ? ' live' : ''}" data-member="${m.id}" title="${esc(`${m.name} (@${m.handle}) · ${m.provider} / ${MODE_LABELS[m.mode]}${m.live ? ' · session open, background tasks can wake it' : ''}${m.role ? `\n${m.role}` : ''}`)}">${avatar(m)}<span>${esc(m.name)}</span>${m.id === chat.leadId ? '<em title="Thread lead">★</em>' : ''}<i class="member-state"></i></button>`).join('')}${btn('Add agent', 'add-member', 'plus')}${running || queued.length || chat.members.some((m) => m.live) ? btn('Stop', 'cancel', 'check') : ''}<button class="square" data-action="conversation-fullscreen" aria-label="${conversationFullscreen ? 'Minimize conversation' : 'Expand conversation to full screen'}" aria-pressed="${conversationFullscreen}" title="${conversationFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(conversationFullscreen ? 'minimize' : 'expand')}</button></div></div><div id="transcript" class="transcript">${chat.partial ? '<div class="empty"><p class="muted">Loading conversation…</p></div>' : `${hidden > 0 ? `<div class="earlier"><button class="text-button" data-action="earlier">Show earlier messages (${hidden} more)</button></div>` : ''}${!chat.messages.length ? `<div class="empty thread-welcome"><span class="logo">✻</span><h3>What should the team work on?</h3><p>Messages go to the thread lead, <b>@${esc(member(chat, chat.leadId)?.handle || '')}</b>, unless you @mention someone.<br>Agents hand work to each other with @mentions. Read-only agents work in parallel; agents that edit files take turns.</p><div class="tips"><span><kbd>@</kbd> mention an agent</span><span><kbd>@all</kbd> everyone</span><span><kbd>/</kbd> commands</span><span><kbd>Esc</kbd> stop</span></div></div>` : chat.messages.map((m) => messageView(chat, m)).join('')}`}${running ? `<div class="working"><span class="spark">✻</span>${working.map((m) => `<b>${esc(m.name)}</b>`).join(', ')} ${working.length > 1 ? 'are' : 'is'} working…${queued.length ? ` <span>Up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</span>` : ''}<span class="esc">esc to stop</span></div>` : queued.length ? `<div class="working"><i class="live-dot"></i> ${chat.summarizing ? 'Summarizing the thread so agents start from a fresh, smaller context' : 'Waiting for the workspace'} · up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</div>` : ''}${chat.events.length ? `<details class="activity-log" data-open="events:${chat.id}" ${openKeys.has(`events:${chat.id}`) ? 'open' : ''}><summary>Activity & diagnostics (${chat.events.length})</summary><pre class="activity">${esc(chat.events.join('\n'))}</pre></details>` : ''}</div><button class="jump hidden" data-action="jump" aria-label="Scroll to latest">↓</button>${todoBar(chat)}<form id="message-form" class="composer"><div id="composer-menu">${menuView()}</div><div id="attachments" class="attachments" ${attachments.get(chatId)?.length ? '' : 'hidden'}>${attachmentsView(chatId)}</div><div id="dictation-status" class="dictation-status ${voice.partial ? 'partial' : ''}" ${voice.status === 'idle' ? 'hidden' : ''} aria-live="polite"><i></i><span>${esc(dictationText())}</span></div><textarea id="message" name="message" placeholder="Message ${esc(chat.title)} — @mention agents, / for commands" rows="3" aria-label="Message to agents"></textarea><div class="composer-bar"><div class="composer-left"><button type="button" class="ib" data-action="mention" title="Mention an agent" aria-label="Mention an agent">@</button><button type="button" class="ib" data-action="slash" title="Commands" aria-label="Commands">/</button><button type="button" class="ib" data-action="attach" title="Attach files — or drop / paste them" aria-label="Attach files">${icon('paperclip')}</button><input type="file" id="image-input" multiple hidden><button type="button" id="mic" class="ib mic ${voice.status}" data-action="dictate" title="${micTitle()}" aria-label="Voice input" aria-pressed="${voice.status === 'listening'}">${icon('mic')}</button><span id="recipients" class="recipients">${recipientsLabel(chat, draft)}</span></div><div class="composer-right"><small>Enter to send · ⇧Enter for a new line</small><button class="primary" aria-label="Send">Send ${icon('arrow')}</button></div></div></form>` : `<div class="empty"><h3>Your team is ready.</h3><p>Start a thread with one or more agents — a lead, designer, engineer, marketer…</p>${btn('New conversation', 'chat', 'plus', 'primary')}</div>`}</section></div>`;
 	}
 	const recipientsLabel = (chat, text) =>
 		`→ ${recipients(chat, text)
@@ -1356,8 +1368,9 @@ export function mountWrx(root) {
 											.join('')}</code></pre>`;
 		return `${head}<div class="viewer-body">${p.truncated ? '<p class="viewer-note">Showing the first 1 MB of this file.</p>' : ''}${body}</div>`;
 	}
-	function filesView() {
-		syncFiles();
+	// The tree panel, shown beside the viewer on wide screens and in the ☰ drawer (#files-drawer) on
+	// narrow ones. Each copy gets its own search box id.
+	function fileTreeHtml(queryId) {
 		const list = files.results
 			? files.results.length
 				? files.results
@@ -1368,7 +1381,13 @@ export function mountWrx(root) {
 						.join('')
 				: '<p class="tree-note">No matching files</p>'
 			: treeView('');
-		return `<div class="files-layout"><div class="file-tree"><div class="panel-heading"><h3>${icon('folder')}Files</h3><button class="square" data-action="files-refresh" aria-label="Refresh files" title="Refresh">${icon('refresh')}</button></div><label class="file-find">${icon('search')}<input id="file-query" type="search" placeholder="Go to file…" value="${esc(files.query)}" autocomplete="off" spellcheck="false" aria-label="Go to file"></label><div class="tree" role="tree" aria-label="Workspace files">${list}</div></div><section class="file-viewer">${previewView()}</section></div>`;
+		return `<div class="file-tree"><div class="panel-heading"><h3>${icon('folder')}Files</h3><div class="file-tree-actions"><button class="square files-fullscreen-toggle" data-action="files-fullscreen" aria-label="${filesFullscreen ? 'Minimize file browser' : 'Expand file browser to full screen'}" aria-pressed="${filesFullscreen}" title="${filesFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(filesFullscreen ? 'minimize' : 'expand')}</button><button class="square" data-action="files-refresh" aria-label="Refresh files" title="Refresh">${icon('refresh')}</button></div></div><label class="file-find">${icon('search')}<input id="${queryId}" class="file-query" type="search" placeholder="Go to file…" value="${esc(files.query)}" autocomplete="off" spellcheck="false" aria-label="Go to file"></label><div class="tree" role="tree" aria-label="Workspace files">${list}</div></div>`;
+	}
+	function filesView() {
+		syncFiles();
+		const name = files.selected?.split('/').pop();
+		const bar = `<div class="files-bar"><button class="square files-toggle" data-action="files-drawer" aria-label="Browse files" aria-haspopup="dialog">${icon('menu')}</button><div class="files-bar-title">${icon(name ? kindIcon(files.preview?.kind) : 'folder')}<span>${esc(name || 'Files')}</span></div><button class="square" data-action="files-fullscreen" aria-label="${filesFullscreen ? 'Minimize file browser' : 'Expand file browser to full screen'}" aria-pressed="${filesFullscreen}" title="${filesFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(filesFullscreen ? 'minimize' : 'expand')}</button></div>`;
+		return `<div class="files-layout">${fileTreeHtml('file-query')}<section class="file-viewer">${bar}${previewView()}</section></div>`;
 	}
 	let fileSearchTimer;
 	function searchWorkspaceFiles(q) {
@@ -1851,7 +1870,201 @@ export function mountWrx(root) {
 		const clear = runs.some((r) => r.status !== 'running')
 			? '<button data-run-clear>Clear finished</button>'
 			: '';
-		return `<div class="section-title"><div><h2>Run this checkout.</h2><p>Commands this branch declares and ones you've added, run in its worktree with its ports, env values and Docker target. They run on this computer as you.</p></div><div class="run-title-actions">${clear}<button data-run-command-add>${icon('plus')}Add command</button><button data-run-refresh>${icon('refresh')}Refresh</button></div></div>${notes.map((n) => `<p class="runtime-note run-warning">${esc(n)}</p>`).join('')}${runner.error ? `<p class="error">${esc(runner.error)}</p>` : ''}${taskList}`;
+		return `<div class="section-title"><div><h2>Run this checkout.</h2><p>Commands this branch declares and ones you've added, run in its worktree with its ports, env values and Docker target. They run on this computer as you.</p></div><div class="run-title-actions">${clear}<button data-run-command-add>${icon('plus')}Add command</button><button data-run-refresh>${icon('refresh')}Refresh</button></div></div>${notes.map((n) => `<p class="runtime-note run-warning">${esc(n)}</p>`).join('')}${runner.error ? `<p class="error">${esc(runner.error)}</p>` : ''}${terminalView()}${taskList}`;
+	}
+	// Run tab terminal: xterm.js on a server-side pseudo-terminal (see server/wrx/terminal.js). The
+	// xterm element lives outside the rendered HTML, in `terminal.host`, and is moved into
+	// #terminal-slot after each render, since patch() leaves a data-keep element's children alone.
+	const terminal = {
+		workspace: null,
+		status: 'closed', // closed | opening | open | exited
+		error: '',
+		xterm: null,
+		fit: null,
+		host: null,
+		source: null,
+		observer: null,
+		queue: '',
+		sending: false
+	};
+	// Follows Corpus's light/dark switch (the `dark` class on <html>). The light palette darkens the
+	// ANSI colours that are written for dark backgrounds, so yellow and white output stay readable.
+	const TERMINAL_THEMES = {
+		dark: { background: '#16181d', foreground: '#e6e6e6', cursor: '#e6e6e6' },
+		light: {
+			background: '#fbfbfc',
+			foreground: '#1f2328',
+			cursor: '#1f2328',
+			cursorAccent: '#fbfbfc',
+			selectionBackground: '#cfe1fb',
+			black: '#24292f',
+			red: '#cf222e',
+			green: '#116329',
+			yellow: '#7d4e00',
+			blue: '#0969da',
+			magenta: '#8250df',
+			cyan: '#1b7c83',
+			white: '#6e7781',
+			brightBlack: '#57606a',
+			brightRed: '#a40e26',
+			brightGreen: '#1a7f37',
+			brightYellow: '#633c01',
+			brightBlue: '#218bff',
+			brightMagenta: '#a475f9',
+			brightCyan: '#3192aa',
+			brightWhite: '#8c959f'
+		}
+	};
+	const terminalTheme = () => {
+		const dark = document.documentElement.classList.contains('dark');
+		return {
+			theme: TERMINAL_THEMES[dark ? 'dark' : 'light'],
+			// Last resort for colours a program picks itself (24-bit escapes the palette can't remap).
+			minimumContrastRatio: dark ? 1 : 4.5
+		};
+	};
+	function terminalView() {
+		const mine = terminal.workspace === workspaceId;
+		const status = mine ? terminal.status : 'closed';
+		const actions =
+			status === 'open'
+				? `<button data-terminal-close>Close</button>`
+				: status === 'exited'
+					? `<button data-terminal-hide>Hide</button><button data-terminal-open>${icon('refresh')}Restart</button>`
+					: status === 'opening'
+						? '<button disabled>Opening…</button>'
+						: `<button data-terminal-open>${icon('terminal')}Open terminal</button>`;
+		const body =
+			status === 'closed'
+				? `<p class="runtime-note">Your shell, in this checkout, with its ports and env values. It keeps running when you leave this tab; open it again to pick up where you were.</p>${mine && terminal.error ? `<p class="error run-error">${esc(terminal.error)}</p>` : ''}`
+				: '<div id="terminal-slot" class="terminal-slot" data-keep></div>';
+		return `<section class="panel run-terminal"><div class="panel-heading"><h3>${icon('terminal')}Terminal</h3><div class="run-task-actions">${actions}</div></div>${body}</section>`;
+	}
+	function mountTerminal() {
+		const slot = $('#terminal-slot');
+		if (!slot || !terminal.host || terminal.workspace !== workspaceId) return;
+		if (terminal.host.parentNode !== slot) {
+			slot.replaceChildren(terminal.host);
+			requestAnimationFrame(fitTerminal);
+		}
+	}
+	function fitTerminal() {
+		if (!terminal.fit || !terminal.host?.isConnected || !terminal.host.offsetWidth) return;
+		try {
+			terminal.fit.fit();
+		} catch {}
+	}
+	// Drops this browser's view. The shell keeps running on the server unless `kill` is set.
+	function disposeTerminal() {
+		terminal.source?.close();
+		terminal.observer?.disconnect();
+		terminal.themeObserver?.disconnect();
+		terminal.xterm?.dispose();
+		terminal.host?.remove();
+		Object.assign(terminal, {
+			workspace: null,
+			status: 'closed',
+			xterm: null,
+			fit: null,
+			host: null,
+			source: null,
+			observer: null,
+			themeObserver: null,
+			queue: '',
+			sending: false
+		});
+	}
+	// Keystrokes go one request at a time, so they can't arrive out of order.
+	async function sendTerminalInput(data) {
+		terminal.queue += data;
+		if (terminal.sending) return;
+		terminal.sending = true;
+		const id = terminal.workspace;
+		while (terminal.queue && terminal.workspace === id) {
+			const chunk = terminal.queue;
+			terminal.queue = '';
+			try {
+				await api('terminal-input', { workspaceId: id, data: chunk });
+			} catch (error) {
+				terminal.queue = '';
+				toast(error.message, 'error');
+			}
+		}
+		if (terminal.workspace === id) terminal.sending = false;
+	}
+	async function openTerminal() {
+		const id = workspaceId;
+		if (terminal.workspace !== id || terminal.status === 'exited') disposeTerminal();
+		Object.assign(terminal, { workspace: id, status: 'opening', error: '' });
+		render();
+		try {
+			const [{ Terminal }, { FitAddon }] = await Promise.all([
+				import('@xterm/xterm'),
+				import('@xterm/addon-fit'),
+				import('@xterm/xterm/css/xterm.css')
+			]);
+			if (terminal.workspace !== id) return;
+			const host = document.createElement('div');
+			host.className = 'terminal-host';
+			const xterm = new Terminal({
+				cursorBlink: true,
+				fontFamily: "'SFMono-Regular', Menlo, Consolas, monospace",
+				fontSize: 12,
+				scrollback: 5000,
+				...terminalTheme()
+			});
+			const fit = new FitAddon();
+			xterm.loadAddon(fit);
+			Object.assign(terminal, { xterm, fit, host });
+			mountTerminal();
+			xterm.open(host);
+			fitTerminal();
+			xterm.onData(sendTerminalInput);
+			xterm.onResize(({ cols, rows }) => {
+				if (terminal.status === 'open')
+					api('terminal-resize', { workspaceId: id, cols, rows }).catch(() => {});
+			});
+			terminal.observer = new ResizeObserver(() => fitTerminal());
+			terminal.observer.observe(host);
+			terminal.themeObserver = new MutationObserver(() =>
+				Object.assign(xterm.options, terminalTheme())
+			);
+			terminal.themeObserver.observe(document.documentElement, {
+				attributes: true,
+				attributeFilter: ['class']
+			});
+			await api('terminal-open', { workspaceId: id, cols: xterm.cols, rows: xterm.rows });
+			if (terminal.workspace !== id) return;
+			const source = new EventSource(
+				`/api/wrx/terminal-stream?workspaceId=${encodeURIComponent(id)}`
+			);
+			terminal.source = source;
+			// Sent on every (re)connect, before the screen so far is replayed.
+			source.addEventListener('reset', () => xterm.reset());
+			source.addEventListener('data', (event) => xterm.write(JSON.parse(event.data)));
+			source.addEventListener('exit', () => {
+				source.close();
+				if (terminal.source !== source) return;
+				xterm.write('\r\n\x1b[2m[Shell exited]\x1b[0m\r\n');
+				terminal.status = 'exited';
+				if (tab === 'run') render();
+			});
+			terminal.status = 'open';
+			render();
+			xterm.focus();
+		} catch (error) {
+			if (terminal.workspace !== id) return;
+			disposeTerminal();
+			terminal.workspace = id;
+			terminal.error = error.message;
+			render();
+		}
+	}
+	async function closeTerminal() {
+		const id = terminal.workspace;
+		disposeTerminal();
+		render();
+		if (id) await api('terminal-close', { workspaceId: id });
 	}
 	async function createWorkspace(input) {
 		const w = await api('workspaces', input);
@@ -1990,6 +2203,15 @@ export function mountWrx(root) {
 		switcher: () => {
 			const d = $('#switcher');
 			patch(d, switcherHtml());
+			if (!d.open) d.showModal();
+		},
+		'files-fullscreen': () => {
+			filesFullscreen = !filesFullscreen;
+			render();
+		},
+		'files-drawer': () => {
+			const d = $('#files-drawer');
+			patch(d, fileTreeHtml('file-query-drawer'));
 			if (!d.open) d.showModal();
 		},
 		conversations: () => {
@@ -2245,6 +2467,11 @@ export function mountWrx(root) {
 		const d = $('#conversations');
 		if (event.target === d || event.target.closest('[data-action], [data-chat]')) d.close();
 	});
+	// Opening a file closes the files drawer; expanding a folder or searching keeps it open.
+	on($('#files-drawer'), 'click', (event) => {
+		const d = $('#files-drawer');
+		if (event.target === d || event.target.closest('[data-action], [data-file]')) d.close();
+	});
 	on(root, 'click', async (event) => {
 		const target = event.target.closest('button');
 		if (!target) return;
@@ -2342,6 +2569,13 @@ export function mountWrx(root) {
 				runner.opened.add(run.taskId);
 				runner.selected.delete(run.taskId);
 				await refresh();
+			} else if (target.dataset.terminalOpen !== undefined) {
+				await openTerminal();
+			} else if (target.dataset.terminalClose !== undefined) {
+				await closeTerminal();
+			} else if (target.dataset.terminalHide !== undefined) {
+				disposeTerminal();
+				render();
 			} else if (target.dataset.runCommandAdd !== undefined) {
 				commandDialog();
 			} else if (target.dataset.runCommandEdit) {
@@ -2429,14 +2663,19 @@ export function mountWrx(root) {
 		if (event.target.id === 'message') updateMenu();
 	});
 	on(root, 'input', (event) => {
-		if (event.target.id === 'file-query') searchWorkspaceFiles(event.target.value);
+		if (event.target.classList.contains('file-query')) searchWorkspaceFiles(event.target.value);
 	});
 	on(root, 'keydown', (event) => {
-		if (event.target.id === 'file-query' && event.key === 'Enter' && files.results?.length) {
+		if (
+			event.target.classList.contains('file-query') &&
+			event.key === 'Enter' &&
+			files.results?.length
+		) {
 			event.preventDefault();
+			if ($('#files-drawer').open) $('#files-drawer').close();
 			openFile(files.results[0].path);
 		}
-		if (event.target.id === 'file-query' && event.key === 'Escape' && files.query) {
+		if (event.target.classList.contains('file-query') && event.key === 'Escape' && files.query) {
 			event.preventDefault();
 			event.target.value = '';
 			searchWorkspaceFiles('');
@@ -2747,6 +2986,7 @@ export function mountWrx(root) {
 	const destroy = () => {
 		destroyed = true;
 		events?.close();
+		disposeTerminal();
 		stopDictation();
 		for (const off of listeners) off();
 	};

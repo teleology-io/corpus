@@ -4,6 +4,7 @@
 import { Dictation } from '#lib/components/notes/dictation.js';
 import { toast as notify } from '#lib/stores/toast.svelte.js';
 import { openSearch } from '#lib/stores/search.svelte.js';
+import { generateCommitMessage } from './commit-message.js';
 
 // Drafts and pending images survive navigating away from the workbench during this session.
 const drafts = new Map();
@@ -64,6 +65,7 @@ export function mountWrx(root) {
 		conversationFullscreen = false,
 		tab = 'overview',
 		diff = null,
+		committing = false,
 		loading = false;
 	const current = () => state?.workspaces.find((w) => w.id === workspaceId);
 	const project = () => state?.projects.find((p) => p.id === current()?.projectId);
@@ -1392,7 +1394,7 @@ export function mountWrx(root) {
 		}, 120);
 	}
 	function changes() {
-		return `<div class="section-title"><div><h2>Working changes</h2><p>Tracked changes against HEAD, with untracked paths in the status list.</p></div>${btn('Refresh changes', 'diff', 'code')}</div>${
+		return `<div class="section-title"><div><h2>Working changes</h2><p>Tracked changes against HEAD, with untracked paths in the status list.</p></div><div class="actions">${btn('Refresh changes', 'diff', 'code')}<button class="primary" data-action="commit" ${committing ? 'disabled' : ''}>${icon('check')}${committing ? 'Committing…' : 'Commit & push'}</button></div></div>${
 			diff
 				? `<div class="two-columns diff-columns"><section class="panel"><div class="panel-heading"><h3>Git status</h3></div><pre class="code-block">${esc(diff.status || 'Working tree is clean.')}</pre><div class="panel-heading"><h3>Recent commits</h3></div><pre class="code-block">${esc(diff.log || 'No commits yet.')}</pre></section><section class="panel"><div class="panel-heading"><h3>Diff / HEAD</h3></div><pre class="diff code-block">${
 						diff.diff
@@ -1871,6 +1873,17 @@ export function mountWrx(root) {
 		await api('workspace-database', { workspaceId, action, snapshot });
 		await refresh();
 	}
+	async function commitAndPush(wid, message) {
+		const result = await api('commit', { workspaceId: wid, message });
+		toast(
+			result.pushed
+				? `Committed and pushed: ${message.split('\n')[0]}`
+				: `Committed, but not pushed: ${result.reason}`,
+			result.pushed ? 'success' : 'error'
+		);
+		if (wid === workspaceId) diff = await api(`diff?workspaceId=${wid}`);
+		render();
+	}
 	const KEEP_OPEN = Symbol('keep dialog open');
 	function modal(title, description, fields, submit, handler) {
 		const d = $('#dialog');
@@ -2127,6 +2140,33 @@ export function mountWrx(root) {
 		diff: async () => {
 			diff = await api(`diff?workspaceId=${workspaceId}`);
 			render();
+		},
+		commit: async () => {
+			if (committing) return;
+			const wid = workspaceId;
+			committing = true;
+			render();
+			let message = null;
+			try {
+				diff = await api(`diff?workspaceId=${wid}`);
+				if (!diff.status) return toast('Nothing to commit');
+				// The on-device model writes the message when it's ready; otherwise the user does.
+				message = await generateCommitMessage(diff.status, diff.diff);
+				if (message) await commitAndPush(wid, message);
+			} catch (e) {
+				toast(e.message, 'error');
+			} finally {
+				committing = false;
+				render();
+			}
+			if (!message && diff?.status && wid === workspaceId)
+				modal(
+					'Commit & push',
+					'Commits every change in this workspace and pushes the branch.',
+					`<label>Commit message<textarea name="message" rows="3" placeholder="e.g. Add session expiry tests" required></textarea></label>`,
+					'Commit & push',
+					({ message }) => commitAndPush(wid, message)
+				);
 		},
 		environment: () =>
 			modal(

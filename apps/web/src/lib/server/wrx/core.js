@@ -979,6 +979,40 @@ export class Engine {
 		]);
 		return { status, diff, log };
 	}
+	// Stages everything, commits, and pushes the branch, setting its upstream on first push.
+	async commit(workspaceId, message) {
+		const w = this.store.get('workspaces', workspaceId);
+		const text = requireText(message, 'Commit message', 5000);
+		if (!(await repositoryRoot(w.path).catch(() => null)))
+			throw new Error('This workspace is not a Git repository');
+		// Hooks (lint-staged and the like) need the agent PATH; a credential prompt would hang forever.
+		const git = (args, timeout = 120000) =>
+			command('git', args, {
+				cwd: w.path,
+				timeout,
+				env: { ...agentEnv(), GIT_TERMINAL_PROMPT: '0' }
+			}).catch((e) => {
+				throw new Error(String(e.stderr || e.stdout || e.message).trim() || 'Git failed');
+			});
+		if (!(await git(['status', '--porcelain']))) throw new Error('Nothing to commit');
+		await git(['add', '-A', '--', '.']);
+		await git(['commit', '-m', text]);
+		const remotes = (await git(['remote'])).split('\n').filter(Boolean);
+		if (!remotes.length) return { pushed: false, reason: 'No remote to push to' };
+		const upstream = await git([
+			'rev-parse',
+			'--abbrev-ref',
+			'--symbolic-full-name',
+			'@{u}'
+		]).catch(() => '');
+		const remote = remotes.includes('origin') ? 'origin' : remotes[0];
+		try {
+			await git(upstream ? ['push'] : ['push', '-u', remote, 'HEAD'], 180000);
+		} catch (e) {
+			return { pushed: false, reason: e.message };
+		}
+		return { pushed: true };
+	}
 	// A chat is a Slack-style thread: the human and any number of agent members.
 	// Each member keeps its own provider session. Messages addressed with @handle
 	// queue that member's turn; members reply in turn and can hand off to each other.

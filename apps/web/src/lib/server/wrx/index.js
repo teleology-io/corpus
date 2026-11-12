@@ -494,6 +494,9 @@ export async function handleWrx({ request, url, route, userId }) {
 			case 'run-clear':
 				result = engine.runClear(body.workspaceId);
 				break;
+			case 'commit':
+				result = await engine.commit(body.workspaceId, body.message);
+				break;
 			case 'tasks': {
 				store.get('workspaces', body.workspaceId);
 				result = {

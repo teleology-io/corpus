@@ -18,7 +18,7 @@ const GENERATE_TIMEOUT_MS = 30_000;
  * True only when the on-device model can write a message right now: no WebGPU, the feature off,
  * or the model not fully on disk (including mid-download) all mean the user types it instead.
  */
-async function commitModelReady() {
+export async function commitModelReady() {
 	try {
 		return (
 			readRewritePrefs().enabled && (await rewriteSupported()) && (await rewriteModelComplete())
@@ -28,20 +28,22 @@ async function commitModelReady() {
 	}
 }
 
-/** Null when the model can't run, fails, stalls, or gives nothing usable: the caller then asks. */
+/** Null when the model can't run, fails, stalls, is cancelled, or gives nothing usable. */
 export async function generateCommitMessage(
 	status: string,
 	diff: string,
-	untracked: UntrackedFile[] = []
+	untracked: UntrackedFile[] = [],
+	signal?: AbortSignal
 ) {
 	const messages = buildCommitMessages({ status, diff, untracked });
-	if (!messages || !(await commitModelReady())) return null;
+	if (!messages || signal?.aborted || !(await commitModelReady())) return null;
 	let run: { cancel: () => void } | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		return await new Promise<string | null>((resolve, reject) => {
 			let output = '';
 			timer = setTimeout(() => reject(new Error('Timed out')), GENERATE_TIMEOUT_MS);
+			signal?.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true });
 			run = startRewrite(messages, MAX_COMMIT_TOKENS, {
 				ontoken: (text) => (output += text),
 				ondone: () => resolve(cleanCommitMessage(output) || null),

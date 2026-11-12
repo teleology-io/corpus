@@ -4,7 +4,7 @@
 import { Dictation } from '#lib/components/notes/dictation.js';
 import { toast as notify } from '#lib/stores/toast.svelte.js';
 import { openSearch } from '#lib/stores/search.svelte.js';
-import { generateCommitMessage } from './commit-message.js';
+import { commitModelReady, generateCommitMessage } from './commit-message.js';
 
 // Drafts and pending images survive navigating away from the workbench during this session.
 const drafts = new Map();
@@ -1428,7 +1428,7 @@ export function mountWrx(root) {
 		}, 120);
 	}
 	function changes() {
-		return `<div class="section-title"><div><h2>Working changes</h2><p>Tracked changes against HEAD, with untracked paths in the status list.</p></div><div class="actions">${btn('Refresh changes', 'diff', 'code')}<button class="primary" data-action="commit" ${committing ? 'disabled' : ''}>${icon('check')}${committing ? 'Committing…' : 'Commit & push'}</button></div></div>${
+		return `<div class="section-title"><div><h2>Working changes</h2><p>Tracked changes against HEAD, with untracked paths in the status list.</p></div><div class="actions">${btn('Refresh changes', 'diff', 'code')}${diff?.status?.trim() ? `<button class="primary" data-action="commit" ${committing ? 'disabled' : ''}>${icon('check')}${committing ? 'Checking…' : 'Commit & push'}</button>` : ''}</div></div>${
 			diff
 				? `<div class="two-columns diff-columns"><section class="panel"><div class="panel-heading"><h3>Git status</h3></div><pre class="code-block">${esc(diff.status || 'Working tree is clean.')}</pre><div class="panel-heading"><h3>Recent commits</h3></div><pre class="code-block">${esc(diff.log || 'No commits yet.')}</pre></section><section class="panel"><div class="panel-heading"><h3>Diff / HEAD</h3></div><pre class="diff code-block">${
 						diff.diff
@@ -2387,34 +2387,59 @@ export function mountWrx(root) {
 			diff = await api(`diff?workspaceId=${workspaceId}`);
 			render();
 		},
+		// Always asks for the message. When the on-device model is ready it writes a suggestion into
+		// the box to keep, edit or replace; anything typed first wins over the suggestion.
 		commit: async () => {
 			if (committing) return;
 			const wid = workspaceId;
 			committing = true;
 			render();
-			let message = null;
+			let context = null,
+				ready = false;
 			try {
 				// The Changes tab's diff, plus the new files' first lines for the message writer.
-				const { untracked, ...changes } = await api(`commit-context?workspaceId=${wid}`);
-				diff = changes;
-				if (!diff.status) return toast('Nothing to commit');
-				// The on-device model writes the message when it's ready; otherwise the user does.
-				message = await generateCommitMessage(diff.status, diff.diff, untracked);
-				if (message) await commitAndPush(wid, message);
+				[context, ready] = await Promise.all([
+					api(`commit-context?workspaceId=${wid}`),
+					commitModelReady()
+				]);
+				const { untracked: _, ...changes } = context;
+				if (wid === workspaceId) diff = changes;
 			} catch (e) {
 				toast(e.message, 'error');
 			} finally {
 				committing = false;
 				render();
 			}
-			if (!message && diff?.status && wid === workspaceId)
-				modal(
-					'Commit & push',
-					'Commits every change in this workspace and pushes the branch.',
-					`<label>Commit message<textarea name="message" rows="3" placeholder="e.g. Add session expiry tests" required></textarea></label>`,
-					'Commit & push',
-					({ message }) => commitAndPush(wid, message)
-				);
+			if (!context || wid !== workspaceId) return;
+			if (!context.status) return toast('Nothing to commit');
+			const example = 'e.g. Add session expiry tests';
+			modal(
+				'Commit & push',
+				'Commits every change in this workspace, including new files, and pushes the branch.',
+				`<label>Commit message<textarea id="commit-message" name="message" rows="3" placeholder="${ready ? 'Liquid AI is writing a message…' : example}" required></textarea></label><p id="commit-note" class="muted">${ready ? 'Liquid AI is reading the changes on this device. Type your own to skip it.' : ''}</p>`,
+				'Commit & push',
+				({ message }) => commitAndPush(wid, message)
+			);
+			const box = $('#commit-message');
+			box.focus();
+			if (!ready) return;
+			const stop = new AbortController();
+			$('#dialog').addEventListener('close', () => stop.abort(), { once: true });
+			const message = await generateCommitMessage(
+				context.status,
+				context.diff,
+				context.untracked,
+				stop.signal
+			);
+			if (stop.signal.aborted || !box.isConnected) return;
+			const note = $('#commit-note');
+			box.placeholder = example;
+			if (box.value.trim()) note.textContent = '';
+			else if (message) {
+				box.value = message;
+				box.select();
+				note.textContent = 'Written by Liquid AI. Edit it or type over it before committing.';
+			} else note.textContent = "Liquid AI couldn't write a message for these changes.";
 		},
 		environment: () =>
 			modal(

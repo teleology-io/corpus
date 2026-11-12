@@ -7,7 +7,8 @@ import { readRewritePrefs } from '#lib/stores/rewrite-prefs.js';
 import {
 	buildCommitMessages,
 	cleanCommitMessage,
-	MAX_COMMIT_TOKENS
+	MAX_COMMIT_TOKENS,
+	type UntrackedFile
 } from './commit-message-prompt.js';
 
 /** Past this the user is better off typing the message themselves. */
@@ -28,8 +29,12 @@ async function commitModelReady() {
 }
 
 /** Null when the model can't run, fails, stalls, or gives nothing usable: the caller then asks. */
-export async function generateCommitMessage(status: string, diff: string) {
-	const messages = buildCommitMessages(status, diff);
+export async function generateCommitMessage(
+	status: string,
+	diff: string,
+	untracked: UntrackedFile[] = []
+) {
+	const messages = buildCommitMessages({ status, diff, untracked });
 	if (!messages || !(await commitModelReady())) return null;
 	let run: { cancel: () => void } | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;

@@ -2370,10 +2370,12 @@ export function mountWrx(root) {
 			render();
 			let message = null;
 			try {
-				diff = await api(`diff?workspaceId=${wid}`);
+				// The Changes tab's diff, plus the new files' first lines for the message writer.
+				const { untracked, ...changes } = await api(`commit-context?workspaceId=${wid}`);
+				diff = changes;
 				if (!diff.status) return toast('Nothing to commit');
 				// The on-device model writes the message when it's ready; otherwise the user does.
-				message = await generateCommitMessage(diff.status, diff.diff);
+				message = await generateCommitMessage(diff.status, diff.diff, untracked);
 				if (message) await commitAndPush(wid, message);
 			} catch (e) {
 				toast(e.message, 'error');

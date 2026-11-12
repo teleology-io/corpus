@@ -461,6 +461,8 @@ export async function handleWrx({ request, url, route, userId }) {
 				);
 			if (route === 'diff')
 				return json(200, await engine.diff(url.searchParams.get('workspaceId')));
+			if (route === 'commit-context')
+				return json(200, await engine.commitContext(url.searchParams.get('workspaceId')));
 			if (route === 'run-tasks')
 				return json(200, engine.runTasks(url.searchParams.get('workspaceId')));
 			if (route === 'run-log') return json(200, engine.runLog(url.searchParams.get('runId')));

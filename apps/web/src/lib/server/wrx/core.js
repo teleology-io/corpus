@@ -43,6 +43,10 @@ const RUN_LOG_LIMIT = 16 * 1024 * 1024;
 const RUN_LOG_TAIL = 256 * 1024;
 const RUNS_KEPT_PER_WORKSPACE = 20;
 const PROMPT_COMMANDS = 30;
+// How much of each new file the commit message writer gets to read.
+const COMMIT_UNTRACKED_FILES = 40;
+const COMMIT_UNTRACKED_BYTES = 512 * 1024;
+const COMMIT_UNTRACKED_LINES = 60;
 const composeProject = (w) => `wrx-${w.id.slice(0, 8)}`;
 const variantKey = (taskId, variantId) => `${taskId}#${variantId}`;
 const killGroup = (child, signal) => {
@@ -979,6 +983,39 @@ export class Engine {
 		]);
 		return { status, diff, log };
 	}
+	// What the commit message writer reads: the diff, plus the top of each untracked file, which
+	// `git diff HEAD` leaves out even though the commit will include it.
+	async commitContext(workspaceId) {
+		const w = this.store.get('workspaces', workspaceId);
+		const changes = await this.diff(workspaceId);
+		if (!changes.status) return { ...changes, untracked: [] };
+		const list = await command(
+			'git',
+			['ls-files', '--others', '--exclude-standard', '-z', '--', '.'],
+			{
+				cwd: w.path
+			}
+		).catch(() => '');
+		const untracked = [];
+		for (const file of list.split('\0').filter(Boolean).slice(0, COMMIT_UNTRACKED_FILES)) {
+			let head = '';
+			let lines = 0;
+			try {
+				const full = path.join(w.path, file);
+				const stat = fs.statSync(full);
+				if (stat.isFile() && stat.size <= COMMIT_UNTRACKED_BYTES) {
+					const text = fs.readFileSync(full, 'utf8');
+					if (!text.includes('\0')) {
+						const all = text.split('\n');
+						lines = all.length;
+						head = all.slice(0, COMMIT_UNTRACKED_LINES).join('\n');
+					}
+				}
+			} catch {}
+			untracked.push({ path: file, lines, head });
+		}
+		return { ...changes, untracked };
+	}
 	// Stages everything, commits, and pushes the branch, setting its upstream on first push.
 	async commit(workspaceId, message) {
 		const w = this.store.get('workspaces', workspaceId);
@@ -999,12 +1036,9 @@ export class Engine {
 		await git(['commit', '-m', text]);
 		const remotes = (await git(['remote'])).split('\n').filter(Boolean);
 		if (!remotes.length) return { pushed: false, reason: 'No remote to push to' };
-		const upstream = await git([
-			'rev-parse',
-			'--abbrev-ref',
-			'--symbolic-full-name',
-			'@{u}'
-		]).catch(() => '');
+		const upstream = await git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(
+			() => ''
+		);
 		const remote = remotes.includes('origin') ? 'origin' : remotes[0];
 		try {
 			await git(upstream ? ['push'] : ['push', '-u', remote, 'HEAD'], 180000);

@@ -9,6 +9,7 @@ import { Readable } from 'node:stream';
 import { chooseDirectory, listDirectories } from './directories.js';
 import { listDirectory, readFilePreview, searchFiles, serveRaw } from './files.js';
 import { Store, Engine, command, agentEnv, id, now, requireText, clientChats } from './core.js';
+import { searchRank } from '../search-matching.js';
 import { Terminals } from './terminal.js';
 
 const root = path.resolve(process.env.WRX_DATA || '.wrx');
@@ -144,7 +145,8 @@ export function workbenchSearch(userId, query) {
 					'Message',
 					m.text.replace(/\s+/g, ' ').slice(0, 180),
 					`${context(c.workspaceId)} · ${c.title}`,
-					href
+					link({ workspace: c.workspaceId, tab: 'agents', chat: c.id, message: m.id }),
+					m.text
 				);
 	}
 	for (const t of state.tasks)
@@ -166,6 +168,7 @@ export function workbenchSearch(userId, query) {
 	const kinds = new Map();
 	return entries
 		.filter((e) => terms.every((t) => e.text.includes(t)))
+		.sort((a, b) => searchRank(query, a.title) - searchRank(query, b.title))
 		.filter((e) => {
 			const n = (kinds.get(e.kind) ?? 0) + 1;
 			kinds.set(e.kind, n);
@@ -419,7 +422,8 @@ export async function handleWrx({ request, url, route, userId }) {
 					chats: clientChats(
 						store.state.chats,
 						url.searchParams.get('chat'),
-						Number(url.searchParams.get('limit')) || undefined
+						Number(url.searchParams.get('limit')) || undefined,
+						url.searchParams.get('message')
 					),
 					tools: await tools(),
 					machine,

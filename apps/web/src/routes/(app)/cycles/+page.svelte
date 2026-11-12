@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { invalidate } from '$app/navigation';
 	import { Pill, Plus, Bell, Pause, Play, Trash2, Repeat } from '@lucide/svelte';
 	import CycleModal from '#lib/components/cycles/CycleModal.svelte';
@@ -15,6 +16,15 @@
 	let cycleOpen = $state(false);
 	let reminderOpen = $state(false);
 	let editingReminder = $state<(typeof data.reminders)[number] | null>(null);
+
+	$effect(() => {
+		const id = page.url.searchParams.get('reminder');
+		const found = data.reminders.find((r) => r.id === id);
+		if (found) {
+			editingReminder = found;
+			reminderOpen = true;
+		}
+	});
 
 	async function pause(id: string, paused: boolean) {
 		await attempt(() => api(`/api/cycles/${id}`, { method: 'PATCH', body: { paused } }));

@@ -4,9 +4,23 @@
 	import { ArrowUpRight, Search } from '@lucide/svelte';
 	import { api } from '#lib/api.js';
 	import { search } from '#lib/stores/search.svelte.js';
-	import type { SearchResult } from '#lib/types.js';
+	import type { SearchResult, SearchResponse } from '#lib/types.js';
 
 	const MAX = 60;
+	const SOURCE_LABELS: Record<string, string> = {
+		pages: 'Pages',
+		notes: 'Notes',
+		tasks: 'Tasks',
+		events: 'Events',
+		cycles: 'Cycles',
+		reminders: 'Reminders',
+		videos: 'Recordings',
+		items: 'Integrations',
+		threads: 'Slack threads',
+		'slack-messages': 'Slack messages',
+		members: 'People',
+		workbench: 'Workbench'
+	};
 	const mac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad)/.test(navigator.platform);
 
 	let query = $state('');
@@ -14,10 +28,11 @@
 	let selected = $state(0);
 	let loading = $state(false);
 	let error = $state('');
+	let failedSources = $state<string[]>([]);
 	let list = $state<HTMLDivElement>();
 	let timer: ReturnType<typeof setTimeout>;
 	let generation = 0;
-	// Superseded searches are cancelled so the server stops work on stale keystrokes.
+	// Superseded searches cancel their database queries through the request signal.
 	let inflight: AbortController | null = null;
 
 	// Fresh palette every time it opens.
@@ -27,12 +42,14 @@
 		results = [];
 		selected = 0;
 		error = '';
+		failedSources = [];
 	});
 
 	function onInput() {
 		clearTimeout(timer);
 		inflight?.abort();
 		inflight = null;
+		failedSources = [];
 		const q = query.trim();
 		const request = ++generation;
 		if (!q) {
@@ -44,11 +61,12 @@
 		timer = setTimeout(async () => {
 			const controller = (inflight = new AbortController());
 			try {
-				const found = await api<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`, {
+				const found = await api<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}`, {
 					signal: controller.signal
 				});
 				if (request !== generation) return;
-				results = found.slice(0, MAX);
+				results = found.results.slice(0, MAX);
+				failedSources = found.failedSources;
 				selected = 0;
 				error = '';
 			} catch (e) {
@@ -58,6 +76,15 @@
 			}
 		}, 150);
 	}
+
+	$effect(() => {
+		if (search.open) return;
+		clearTimeout(timer);
+		inflight?.abort();
+		inflight = null;
+		generation++;
+		loading = false;
+	});
 
 	function open(r: SearchResult | undefined) {
 		if (!r) return;
@@ -113,6 +140,13 @@
 				<kbd class="rounded border border-line px-1.5 text-[10px] text-muted">Esc</kbd>
 			</div>
 
+			{#if failedSources.length}
+				<p role="status" class="border-b border-line px-4 py-2 text-xs text-amber-700">
+					Some sources are unavailable ({failedSources
+						.map((id) => SOURCE_LABELS[id] ?? id)
+						.join(', ')}). Results may be incomplete.
+				</p>
+			{/if}
 			<div
 				id="global-search-results"
 				role="listbox"

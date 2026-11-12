@@ -270,17 +270,26 @@ export function summaryArgs(provider) {
 }
 // Thread view for the client: the open chat's latest `limit` messages, and only a one-line preview of
 // every other chat. Shipping every message of every thread on each streaming refresh was the cost.
-export function clientChats(chats, open, limit = 60) {
+export function clientChats(chats, open, limit = 60, focus = null) {
 	return chats.map((c) => {
 		const { messages, events, summary, summaryUpTo, ...rest } = c;
-		if (c.id === open)
+		if (c.id === open) {
+			const index = focus ? messages.findIndex((m) => m.id === focus) : -1;
+			const count = Math.max(1, limit);
+			const start =
+				index < 0
+					? Math.max(0, messages.length - count)
+					: Math.max(0, index - Math.floor(count / 2));
 			return {
 				...rest,
 				events,
 				hasSummary: !!summary,
 				messageCount: messages.length,
-				messages: messages.slice(-Math.max(1, limit))
+				messageOffset: start,
+				messageAfter: index < 0 ? 0 : Math.max(0, messages.length - start - count),
+				messages: messages.slice(start, index < 0 ? undefined : start + count)
 			};
+		}
 		const last = messages.findLast((m) => m.role !== 'system' && m.text);
 		return {
 			...rest,

@@ -87,6 +87,12 @@ export interface SearchResult {
 	external?: boolean;
 }
 
+/** Partial source failures preserve successful search results. */
+export interface SearchResponse {
+	results: SearchResult[];
+	failedSources: string[];
+}
+
 /** A task from the Workbench (ported WRX) board, shown on the dashboard. */
 export interface WorkbenchTaskDTO {
 	id: string;

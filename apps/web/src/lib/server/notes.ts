@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '@corpus/db';
 import { atLeast, canManageNote, noteRole, type NoteRole } from '@corpus/db/access';
@@ -7,6 +7,7 @@ import { notify } from '@corpus/db/notify';
 import { randomToken } from '@corpus/core/crypto';
 import type { NoteTreeItem } from '#lib/types.js';
 import type { Ctx } from './ctx.js';
+import { sqlMatcher, sqlRank } from './search-matching.js';
 
 const { note, noteShare, noteLink, user, team, teamMember } = schema;
 
@@ -81,8 +82,16 @@ export async function archivedNotes(ctx: Ctx) {
 		.orderBy(desc(note.archivedAt));
 }
 
-export async function searchNotes(ctx: Ctx, q: string) {
-	return db
+export async function searchNotes(ctx: Ctx, q: string, limit = 20, database = db) {
+	const myTeams = database
+		.select({ id: teamMember.teamId })
+		.from(teamMember)
+		.where(eq(teamMember.userId, ctx.userId));
+	const shared = database
+		.select({ id: noteShare.noteId })
+		.from(noteShare)
+		.where(or(eq(noteShare.userId, ctx.userId), inArray(noteShare.teamId, myTeams)));
+	return database
 		.select({
 			id: note.id,
 			title: note.title,
@@ -92,12 +101,13 @@ export async function searchNotes(ctx: Ctx, q: string) {
 		.from(note)
 		.where(
 			and(
-				eq(note.workspaceId, ctx.workspaceId),
+				or(eq(note.workspaceId, ctx.workspaceId), inArray(note.id, shared)),
 				isNull(note.archivedAt),
-				or(ilike(note.title, `%${q}%`), ilike(note.contentText, `%${q}%`))
+				sqlMatcher(q)(note.title, note.contentText)
 			)
 		)
-		.limit(20);
+		.orderBy(sqlRank(q, note.title), desc(note.updatedAt), note.id)
+		.limit(limit);
 }
 
 export const noteCreate = z.object({

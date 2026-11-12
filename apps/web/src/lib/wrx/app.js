@@ -98,9 +98,11 @@ export function mountWrx(root) {
 	const HISTORY_PAGE = 60;
 	const historyLimits = new Map();
 	let loadingChat = false;
+	let focusMessage = null;
+	let scrolledMessage = null;
 	async function refresh() {
 		state = await api(
-			`state?chat=${encodeURIComponent(chatId || '')}&limit=${historyLimits.get(chatId) || HISTORY_PAGE}`
+			`state?chat=${encodeURIComponent(chatId || '')}&limit=${historyLimits.get(chatId) || HISTORY_PAGE}&message=${encodeURIComponent(focusMessage || '')}`
 		);
 		if (!current()) workspaceId = state.workspaces[0]?.id;
 		if (selecting()) {
@@ -208,7 +210,6 @@ export function mountWrx(root) {
 		root.classList.toggle('conversation-fullscreen', conversationFullscreen);
 		if (tab !== 'files' || !w) filesFullscreen = false;
 		root.classList.toggle('files-fullscreen', filesFullscreen);
-		const active = state.chats.filter((c) => c.status === 'running');
 		const filtered = state.projects;
 		const old = $('#transcript');
 		const stick = !old || old.scrollHeight - old.scrollTop - old.clientHeight < 24;
@@ -217,9 +218,9 @@ export function mountWrx(root) {
 			if (log.scrollHeight - log.scrollTop - log.clientHeight >= 24) scrolledRunLogs.add(log.id);
 		patch(
 			$('#app'),
-			`<aside class="sidebar"><div class="sidebar-top"><span class="eyebrow">YOUR WORKBENCH</span><button class="square" data-action="project" aria-label="Add project">${icon('plus')}</button></div><button class="search" data-action="search" aria-label="Search Corpus">${icon('search')}<span>Search Corpus…</span><kbd>${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd></button><nav><div class="nav-label">PROJECTS <span>${state.projects.length}</span></div>${
+			`<aside class="sidebar"><nav><div class="nav-label">PROJECTS <span class="project-controls"><span>${state.projects.length}</span><button class="square" data-action="project" aria-label="Add project" title="Add project">${icon('plus')}</button></span></div>${
 				projectTree(filtered, w) || '<p class="nav-empty">Your projects will appear here.</p>'
-			}</nav><div class="sidebar-bottom"><button data-action="environments">${icon('box')}Environments<span>${state.environments.length}</span></button><button data-action="computers">${icon('terminal')}Computers</button><button data-action="settings">${icon('settings')}Connections<span class="live-dot"></span></button><div class="user"><span class="avatar">${icon('terminal')}</span><div>Local workbench<small>On your machine. In your control.</small></div></div></div></aside><section class="wrx-main"><header><div class="breadcrumbs">Workbench${p ? ` ${icon('chevron')} <span>${esc(p.name)}</span> ${icon('chevron')} <strong>${esc(w.name)}</strong>` : ''}</div><div class="header-right">${((n) => badge(`${n} agent${n === 1 ? '' : 's'} running`, n ? 'green' : ''))(active.reduce((s, c) => s + c.members.filter((m) => m.status === 'running').length, 0))}<button class="machine-button" data-action="computers">${icon('terminal')} ${esc(state.machine?.name || 'This computer')}${state.remote ? ' · Remote' : ''}</button></div></header>${
+			}</nav><div class="sidebar-bottom"><button data-action="environments">${icon('box')}Environments<span>${state.environments.length}</span></button><button data-action="computers">${icon('terminal')}Computers</button><button data-action="settings">${icon('settings')}Connections<span class="live-dot"></span></button><div class="user"><span class="avatar">${icon('terminal')}</span><div>Local workbench<small>On your machine. In your control.</small></div></div></div></aside><section class="wrx-main">${
 				!w
 					? welcome()
 					: `<section class="workspace-header"><div><div class="eyebrow">PROJECT WORKSPACE</div><h1><span class="workspace-name">${esc(w.name)}</span><button class="workspace-switch" data-action="switcher" aria-haspopup="dialog" aria-label="${esc(w.name)}, switch workspace"><span>${esc(w.name)}</span>${icon('chevron')}</button><span class="workspace-tag">${icon('branch')}${esc(w.branch)}</span></h1><p>${esc(p.path)}</p></div><div class="actions">${w.path === p.path ? '' : btn('Delete workspace', 'workspace-delete', 'trash')}${p.folder ? '' : btn('New workspace', 'workspace', 'branch')}${btn('New agent', 'chat', 'plus', 'primary')}</div></section>${setupBanner(w)}<div class="tabs">${shownTabs(
@@ -239,7 +240,18 @@ export function mountWrx(root) {
 		// Follow new output only when already at the bottom; otherwise leave the reader where they are.
 		const t = $('#transcript');
 		if (t) {
-			if (stick || renderedChat !== chatId) t.scrollTop = t.scrollHeight;
+			const focused =
+				focusMessage &&
+				[...t.querySelectorAll('[data-message-id]')].find(
+					(el) => el.dataset.messageId === focusMessage
+				);
+			if (focused && scrolledMessage !== focusMessage) {
+				focused.scrollIntoView({ block: 'center' });
+				focused.animate([{ backgroundColor: '#fef3c7' }, { backgroundColor: 'transparent' }], {
+					duration: 1800
+				});
+				scrolledMessage = focusMessage;
+			} else if (!focused && (stick || renderedChat !== chatId)) t.scrollTop = t.scrollHeight;
 			renderedChat = chatId;
 			$('.jump')?.classList.toggle('hidden', t.scrollHeight - t.scrollTop - t.clientHeight < 80);
 		} else renderedChat = null;
@@ -621,10 +633,10 @@ export function mountWrx(root) {
 	}
 	function renderMessage(chat, m) {
 		if (m.role === 'system')
-			return `<div class="system-note"><span>${esc(m.text)}</span><small>${time(m.at)}</small></div>`;
+			return `<div data-message-id="${esc(m.id)}" class="system-note"><span>${esc(m.text)}</span><small>${time(m.at)}</small></div>`;
 		const actions = `<div class="message-actions"><button class="ghost" data-copy-message="${esc(m.id)}" title="Copy message" aria-label="Copy message">⧉</button>${m.role === 'agent' && member(chat, m.memberId) ? `<button class="ghost" data-reply="${esc(member(chat, m.memberId).handle)}" title="Reply to this agent" aria-label="Reply to this agent">↩</button>` : ''}</div>`;
 		if (m.role === 'user')
-			return `<article class="message user"><span class="avatar-chip you">Y</span><div class="message-body"><div class="message-meta"><b>YOU</b><span>${time(m.at)}</span></div>${m.text ? md(m.text, true) : ''}${imagesView(chat, m)}</div>${actions}</article>`;
+			return `<article data-message-id="${esc(m.id)}" class="message user"><span class="avatar-chip you">Y</span><div class="message-body"><div class="message-meta"><b>YOU</b><span>${time(m.at)}</span></div>${m.text ? md(m.text, true) : ''}${imagesView(chat, m)}</div>${actions}</article>`;
 		const a = member(chat, m.memberId) || {
 			name: 'Former agent',
 			handle: 'agent',
@@ -651,7 +663,7 @@ export function mountWrx(root) {
 		]
 			.filter(Boolean)
 			.join(' · ');
-		return `<article class="message agent ${m.status === 'running' ? 'live' : ''}">${avatar(a)}<div class="message-body"><div class="message-meta"><b class="name c${a.color ?? 0}">${esc(a.name)}</b><span class="handle">@${esc(a.handle)}</span>${a.provider ? `<span class="tag">${esc(a.provider)} · ${esc(MODE_LABELS[a.mode] || a.mode)}</span>` : ''}<span>${time(m.at)}</span>${m.by && m.by !== 'you' ? `<span class="via">${m.by === 'background' ? 'woken by a background task' : `via @${esc(m.by)}`}</span>` : ''}</div>${blocks}${imagesView(chat, m)}${m.status === 'running' && !m.blocks?.length ? '<div class="typing"><i></i><i></i><i></i></div>' : ''}${m.error ? `<pre class="error">${esc(m.error)}</pre>` : ''}${m.diagnostics && m.status === 'failed' ? `<details class="thinking"><summary>Provider diagnostics</summary><div>${esc(m.diagnostics)}</div></details>` : ''}${footer ? `<div class="message-footer">${esc(footer)}</div>` : ''}</div>${actions}</article>`;
+		return `<article data-message-id="${esc(m.id)}" class="message agent ${m.status === 'running' ? 'live' : ''}">${avatar(a)}<div class="message-body"><div class="message-meta"><b class="name c${a.color ?? 0}">${esc(a.name)}</b><span class="handle">@${esc(a.handle)}</span>${a.provider ? `<span class="tag">${esc(a.provider)} · ${esc(MODE_LABELS[a.mode] || a.mode)}</span>` : ''}<span>${time(m.at)}</span>${m.by && m.by !== 'you' ? `<span class="via">${m.by === 'background' ? 'woken by a background task' : `via @${esc(m.by)}`}</span>` : ''}</div>${blocks}${imagesView(chat, m)}${m.status === 'running' && !m.blocks?.length ? '<div class="typing"><i></i><i></i><i></i></div>' : ''}${m.error ? `<pre class="error">${esc(m.error)}</pre>` : ''}${m.diagnostics && m.status === 'failed' ? `<details class="thinking"><summary>Provider diagnostics</summary><div>${esc(m.diagnostics)}</div></details>` : ''}${footer ? `<div class="message-footer">${esc(footer)}</div>` : ''}</div>${actions}</article>`;
 	}
 	function recipients(chat, text) {
 		const handles = [
@@ -878,12 +890,15 @@ export function mountWrx(root) {
 					.finally(() => (loadingChat = false))
 			);
 		}
-		const hidden = chat && !chat.partial ? (chat.messageCount ?? 0) - chat.messages.length : 0;
+		const hidden =
+			chat && !chat.partial
+				? (chat.messageOffset ?? (chat.messageCount ?? 0) - chat.messages.length)
+				: 0;
 		const working = chat?.members.filter((m) => m.status === 'running') || [];
 		const running = working[0];
 		const queued = chat?.members.filter((m) => m.status === 'queued') || [];
 		const draft = drafts.get(chatId) || '';
-		return `<div class="agent-layout"><div class="conversation-list">${conversationListHtml(chats, chat)}</div><section class="conversation-main">${chat ? `<div class="chat-heading"><button class="square conversations-toggle" data-action="conversations" aria-label="Conversations" aria-haspopup="dialog">${icon('menu')}${chats.some((c) => c.id !== chat.id && c.members.some((m) => m.status === 'running')) ? '<i class="live-dot"></i>' : ''}</button><div class="chat-title"><h3>${esc(chat.title)}</h3><small>${chat.members.length} agent${chat.members.length === 1 ? '' : 's'} · ${esc(running ? 'working' : chat.status)}${chat.members.some((m) => m.costUsd) ? ` · ${money(chat.members.reduce((s, m) => s + (m.costUsd || 0), 0))}` : ''}</small></div><div class="roster">${chat.members.map((m) => `<button class="member ${m.status}${m.live ? ' live' : ''}" data-member="${m.id}" title="${esc(`${m.name} (@${m.handle}) · ${m.provider} / ${MODE_LABELS[m.mode]}${m.live ? ' · session open, background tasks can wake it' : ''}${m.role ? `\n${m.role}` : ''}`)}">${avatar(m)}<span>${esc(m.name)}</span>${m.id === chat.leadId ? '<em title="Thread lead">★</em>' : ''}<i class="member-state"></i></button>`).join('')}${btn('Add agent', 'add-member', 'plus')}${running || queued.length || chat.members.some((m) => m.live) ? btn('Stop', 'cancel', 'check') : ''}<button class="square" data-action="conversation-fullscreen" aria-label="${conversationFullscreen ? 'Minimize conversation' : 'Expand conversation to full screen'}" aria-pressed="${conversationFullscreen}" title="${conversationFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(conversationFullscreen ? 'minimize' : 'expand')}</button></div></div><div id="transcript" class="transcript">${chat.partial ? '<div class="empty"><p class="muted">Loading conversation…</p></div>' : `${hidden > 0 ? `<div class="earlier"><button class="text-button" data-action="earlier">Show earlier messages (${hidden} more)</button></div>` : ''}${!chat.messages.length ? `<div class="empty thread-welcome"><span class="logo">✻</span><h3>What should the team work on?</h3><p>Messages go to the thread lead, <b>@${esc(member(chat, chat.leadId)?.handle || '')}</b>, unless you @mention someone.<br>Agents hand work to each other with @mentions. Read-only agents work in parallel; agents that edit files take turns.</p><div class="tips"><span><kbd>@</kbd> mention an agent</span><span><kbd>@all</kbd> everyone</span><span><kbd>/</kbd> commands</span><span><kbd>Esc</kbd> stop</span></div></div>` : chat.messages.map((m) => messageView(chat, m)).join('')}`}${running ? `<div class="working"><span class="spark">✻</span>${working.map((m) => `<b>${esc(m.name)}</b>`).join(', ')} ${working.length > 1 ? 'are' : 'is'} working…${queued.length ? ` <span>Up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</span>` : ''}<span class="esc">esc to stop</span></div>` : queued.length ? `<div class="working"><i class="live-dot"></i> ${chat.summarizing ? 'Summarizing the thread so agents start from a fresh, smaller context' : 'Waiting for the workspace'} · up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</div>` : ''}${chat.events.length ? `<details class="activity-log" data-open="events:${chat.id}" ${openKeys.has(`events:${chat.id}`) ? 'open' : ''}><summary>Activity & diagnostics (${chat.events.length})</summary><pre class="activity">${esc(chat.events.join('\n'))}</pre></details>` : ''}</div><button class="jump hidden" data-action="jump" aria-label="Scroll to latest">↓</button>${todoBar(chat)}<form id="message-form" class="composer"><div id="composer-menu">${menuView()}</div><div id="attachments" class="attachments" ${attachments.get(chatId)?.length ? '' : 'hidden'}>${attachmentsView(chatId)}</div><div id="dictation-status" class="dictation-status ${voice.partial ? 'partial' : ''}" ${voice.status === 'idle' ? 'hidden' : ''} aria-live="polite"><i></i><span>${esc(dictationText())}</span></div><textarea id="message" name="message" placeholder="Message ${esc(chat.title)} — @mention agents, / for commands" rows="3" aria-label="Message to agents"></textarea><div class="composer-bar"><div class="composer-left"><button type="button" class="ib" data-action="mention" title="Mention an agent" aria-label="Mention an agent">@</button><button type="button" class="ib" data-action="slash" title="Commands" aria-label="Commands">/</button><button type="button" class="ib" data-action="attach" title="Attach files — or drop / paste them" aria-label="Attach files">${icon('paperclip')}</button><input type="file" id="image-input" multiple hidden><button type="button" id="mic" class="ib mic ${voice.status}" data-action="dictate" title="${micTitle()}" aria-label="Voice input" aria-pressed="${voice.status === 'listening'}">${icon('mic')}</button><span id="recipients" class="recipients">${recipientsLabel(chat, draft)}</span></div><div class="composer-right"><small>Enter to send · ⇧Enter for a new line</small><button class="primary" aria-label="Send">Send ${icon('arrow')}</button></div></div></form>` : `<div class="empty"><h3>Your team is ready.</h3><p>Start a thread with one or more agents — a lead, designer, engineer, marketer…</p>${btn('New conversation', 'chat', 'plus', 'primary')}</div>`}</section></div>`;
+		return `<div class="agent-layout"><div class="conversation-list">${conversationListHtml(chats, chat)}</div><section class="conversation-main">${chat ? `<div class="chat-heading"><button class="square conversations-toggle" data-action="conversations" aria-label="Conversations" aria-haspopup="dialog">${icon('menu')}${chats.some((c) => c.id !== chat.id && c.members.some((m) => m.status === 'running')) ? '<i class="live-dot"></i>' : ''}</button><div class="chat-title"><h3>${esc(chat.title)}</h3><small>${chat.members.length} agent${chat.members.length === 1 ? '' : 's'} · ${esc(running ? 'working' : chat.status)}${chat.members.some((m) => m.costUsd) ? ` · ${money(chat.members.reduce((s, m) => s + (m.costUsd || 0), 0))}` : ''}</small></div><div class="roster">${chat.members.map((m) => `<button class="member ${m.status}${m.live ? ' live' : ''}" data-member="${m.id}" title="${esc(`${m.name} (@${m.handle}) · ${m.provider} / ${MODE_LABELS[m.mode]}${m.live ? ' · session open, background tasks can wake it' : ''}${m.role ? `\n${m.role}` : ''}`)}">${avatar(m)}<span>${esc(m.name)}</span>${m.id === chat.leadId ? '<em title="Thread lead">★</em>' : ''}<i class="member-state"></i></button>`).join('')}${btn('Add agent', 'add-member', 'plus')}${running || queued.length || chat.members.some((m) => m.live) ? btn('Stop', 'cancel', 'check') : ''}<button class="square" data-action="conversation-fullscreen" aria-label="${conversationFullscreen ? 'Minimize conversation' : 'Expand conversation to full screen'}" aria-pressed="${conversationFullscreen}" title="${conversationFullscreen ? 'Return to normal view' : 'Full screen'}">${icon(conversationFullscreen ? 'minimize' : 'expand')}</button></div></div><div id="transcript" class="transcript">${chat.partial ? '<div class="empty"><p class="muted">Loading conversation…</p></div>' : `${hidden > 0 ? `<div class="earlier"><button class="text-button" data-action="earlier">Show earlier messages (${hidden} more)</button></div>` : ''}${!chat.messages.length ? `<div class="empty thread-welcome"><span class="logo">✻</span><h3>What should the team work on?</h3><p>Messages go to the thread lead, <b>@${esc(member(chat, chat.leadId)?.handle || '')}</b>, unless you @mention someone.<br>Agents hand work to each other with @mentions. Read-only agents work in parallel; agents that edit files take turns.</p><div class="tips"><span><kbd>@</kbd> mention an agent</span><span><kbd>@all</kbd> everyone</span><span><kbd>/</kbd> commands</span><span><kbd>Esc</kbd> stop</span></div></div>` : chat.messages.map((m) => messageView(chat, m)).join('')}`}${chat.messageAfter > 0 ? `<button class="text-button" data-action="latest">Show latest messages (${chat.messageAfter} newer)</button>` : ''}${running ? `<div class="working"><span class="spark">✻</span>${working.map((m) => `<b>${esc(m.name)}</b>`).join(', ')} ${working.length > 1 ? 'are' : 'is'} working…${queued.length ? ` <span>Up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</span>` : ''}<span class="esc">esc to stop</span></div>` : queued.length ? `<div class="working"><i class="live-dot"></i> ${chat.summarizing ? 'Summarizing the thread so agents start from a fresh, smaller context' : 'Waiting for the workspace'} · up next: ${queued.map((m) => `@${esc(m.handle)}`).join(', ')}</div>` : ''}${chat.events.length ? `<details class="activity-log" data-open="events:${chat.id}" ${openKeys.has(`events:${chat.id}`) ? 'open' : ''}><summary>Activity & diagnostics (${chat.events.length})</summary><pre class="activity">${esc(chat.events.join('\n'))}</pre></details>` : ''}</div><button class="jump hidden" data-action="jump" aria-label="Scroll to latest">↓</button>${todoBar(chat)}<form id="message-form" class="composer"><div id="composer-menu">${menuView()}</div><div id="attachments" class="attachments" ${attachments.get(chatId)?.length ? '' : 'hidden'}>${attachmentsView(chatId)}</div><div id="dictation-status" class="dictation-status ${voice.partial ? 'partial' : ''}" ${voice.status === 'idle' ? 'hidden' : ''} aria-live="polite"><i></i><span>${esc(dictationText())}</span></div><textarea id="message" name="message" placeholder="Message ${esc(chat.title)} — @mention agents, / for commands" rows="3" aria-label="Message to agents"></textarea><div class="composer-bar"><div class="composer-left"><button type="button" class="ib" data-action="mention" title="Mention an agent" aria-label="Mention an agent">@</button><button type="button" class="ib" data-action="slash" title="Commands" aria-label="Commands">/</button><button type="button" class="ib" data-action="attach" title="Attach files — or drop / paste them" aria-label="Attach files">${icon('paperclip')}</button><input type="file" id="image-input" multiple hidden><button type="button" id="mic" class="ib mic ${voice.status}" data-action="dictate" title="${micTitle()}" aria-label="Voice input" aria-pressed="${voice.status === 'listening'}">${icon('mic')}</button><span id="recipients" class="recipients">${recipientsLabel(chat, draft)}</span></div><div class="composer-right"><small>Enter to send · ⇧Enter for a new line</small><button class="primary" aria-label="Send">Send ${icon('arrow')}</button></div></div></form>` : `<div class="empty"><h3>Your team is ready.</h3><p>Start a thread with one or more agents — a lead, designer, engineer, marketer…</p>${btn('New conversation', 'chat', 'plus', 'primary')}</div>`}</section></div>`;
 	}
 	const recipientsLabel = (chat, text) =>
 		`→ ${recipients(chat, text)
@@ -2190,6 +2205,11 @@ export function mountWrx(root) {
 			if (resized) resized.scrollTop = atBottom ? resized.scrollHeight : top;
 			$('[data-action="conversation-fullscreen"]')?.focus({ preventScroll: true });
 		},
+		latest: async () => {
+			focusMessage = null;
+			scrolledMessage = null;
+			await refresh();
+		},
 		earlier: async () => {
 			const t = $('#transcript');
 			const fromBottom = t ? t.scrollHeight - t.scrollTop : 0;
@@ -2336,6 +2356,10 @@ export function mountWrx(root) {
 			$('#message')?.focus();
 		},
 		jump: () => {
+			if (focusMessage) {
+				void actions.latest();
+				return;
+			}
 			const t = $('#transcript');
 			t.scrollTop = t.scrollHeight;
 		},
@@ -2948,6 +2972,8 @@ export function mountWrx(root) {
 	// Deep links from Corpus (dashboard tasks, ⌘K search):
 	// /workbench?workspace=<id>&tab=<tab>&chat=<id> or ?dialog=environments
 	function applyLink(params) {
+		focusMessage = params.get('message');
+		scrolledMessage = null;
 		const ws = params.get('workspace');
 		if (ws && ws !== workspaceId) {
 			stopDictation();
@@ -2972,7 +2998,8 @@ export function mountWrx(root) {
 			menu = null;
 		}
 		if (!state) return;
-		render();
+		if (focusMessage) void refresh().catch((e) => toast(e.message, 'error'));
+		else render();
 		if (params.get('dialog') === 'environments') actions.environments();
 	}
 	async function boot() {

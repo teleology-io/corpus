@@ -152,6 +152,18 @@ async function notifyAssigned(ctx: Ctx, row: typeof task.$inferSelect) {
 	});
 }
 
+/** A single task with the same active-workspace/assignee visibility as search. */
+export async function getTask(ctx: Ctx, id: string): Promise<TaskDTO> {
+	const [row] = await db
+		.select(taskSelect)
+		.from(task)
+		.leftJoin(user, eq(task.assigneeId, user.id))
+		.where(and(mine(ctx), eq(task.id, id)))
+		.limit(1);
+	if (!row) error(404, 'Task not found');
+	return taskDTO(row);
+}
+
 export async function updateTask(ctx: Ctx, id: string, patch: z.infer<typeof taskPatch>) {
 	const prev = await ownTask(ctx, id);
 	const values: Partial<typeof task.$inferInsert> = {};

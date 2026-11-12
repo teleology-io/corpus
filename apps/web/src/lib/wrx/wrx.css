@@ -233,15 +233,22 @@
 }
 .wrx .nav-label {
 	display: flex;
+	align-items: center;
 	justify-content: space-between;
 	font-size: 9px;
 	color: var(--muted);
 	letter-spacing: 1px;
-	margin: 0 12px 17px;
+	margin: 16px 6px 17px 12px;
 }
 .wrx .nav-label span {
 	color: var(--muted);
 }
+.wrx .project-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
 .wrx .project-label {
 	display: flex;
 	align-items: center;

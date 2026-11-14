@@ -1,6 +1,7 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { organization, twoFactor } from 'better-auth/plugins';
+import { eq } from 'drizzle-orm';
 import { db, env, optionalEnv, schema } from '@corpus/db';
 import { onUserCreated, initialWorkspaceId, seedWorkspace } from './workspace';
 
@@ -41,7 +42,12 @@ export const auth = betterAuth({
 	user: {
 		additionalFields: {
 			timezone: { type: 'string', required: false, defaultValue: 'UTC', input: true },
-			weekStartsOn: { type: 'number', required: false, defaultValue: 0, input: true }
+			weekStartsOn: { type: 'number', required: false, defaultValue: 0, input: true },
+			// Platform operator (admin panel access). Never settable through sign-up or profile
+			// updates — granted with `pnpm --filter admin grant <email>`.
+			superadmin: { type: 'boolean', required: false, defaultValue: false, input: false },
+			// Set from the admin panel. Disabled users cannot start new sessions.
+			disabled: { type: 'boolean', required: false, defaultValue: false, input: false }
 		}
 	},
 	databaseHooks: {
@@ -55,6 +61,7 @@ export const auth = betterAuth({
 		session: {
 			create: {
 				before: async (session) => {
+					if (await isDisabled(session.userId)) return false;
 					const workspaceId = await initialWorkspaceId(session.userId);
 					return { data: { ...session, activeOrganizationId: workspaceId } };
 				}
@@ -83,6 +90,15 @@ export const auth = betterAuth({
 		twoFactor({ issuer: 'Corpus' })
 	]
 });
+
+async function isDisabled(userId: string) {
+	const [row] = await db
+		.select({ disabled: schema.user.disabled })
+		.from(schema.user)
+		.where(eq(schema.user.id, userId))
+		.limit(1);
+	return !!row?.disabled;
+}
 
 export type Auth = typeof auth;
 export type Session = typeof auth.$Infer.Session;

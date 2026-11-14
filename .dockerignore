@@ -1,0 +1,18 @@
+# Keep the build context small and free of secrets and local state.
+**/node_modules
+**/build
+**/.svelte-kit
+**/.wrx
+**/uploads
+**/*.log
+.git
+.env
+.env.*
+!.env.example
+deploy/.env
+design
+docs
+# Speech model: downloaded inside the image (Dockerfile "asr" stage), not copied from the host.
+apps/web/static/sherpa
+apps/web/test/.baseline
+.DS_Store

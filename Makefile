@@ -8,7 +8,8 @@ PACKAGE_JSONS := package.json $(wildcard apps/*/package.json packages/*/package.
 INSTALLED := node_modules/.modules.yaml
 
 .PHONY: help dev setup tools install env models services migrate stop down db-reset studio \
-	check lint test build format clean
+	check lint test build format clean \
+	deploy-build deploy-up deploy-logs deploy-down
 
 help: ## Show targets
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | \
@@ -78,3 +79,23 @@ format: $(INSTALLED) ## Format everything
 clean: ## Remove node_modules and build output
 	rm -rf node_modules apps/*/node_modules packages/*/node_modules \
 		apps/web/.svelte-kit apps/web/build apps/*/dist
+	rm -rf apps/admin/.svelte-kit apps/admin/build
+
+# ── Docker deployment (deploy/compose.yml, project "corpus-deploy"). Separate from the dev
+# services above: these never stop or reuse the dev Postgres. Needs deploy/.env.
+DEPLOY := docker compose -f deploy/compose.yml --env-file deploy/.env
+
+deploy/.env:
+	@echo "Create deploy/.env first: cp deploy/.env.example deploy/.env (then set the secrets)"; exit 1
+
+deploy-build: deploy/.env ## Build the Corpus image
+	$(DEPLOY) build
+
+deploy-up: deploy/.env ## Build + start the full Docker stack (migrates first)
+	$(DEPLOY) up -d --build
+
+deploy-logs: deploy/.env ## Follow logs of the Docker stack
+	$(DEPLOY) logs -f --tail=100
+
+deploy-down: deploy/.env ## Stop the Docker stack (keeps its volumes)
+	$(DEPLOY) down

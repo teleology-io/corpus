@@ -4,7 +4,7 @@
 	"type": "module",
 	"packageManager": "pnpm@10.33.2",
 	"scripts": {
-		"dev": "concurrently -n web,collab,worker -c blue,magenta,yellow \"pnpm --filter web dev\" \"pnpm --filter @corpus/collab dev\" \"pnpm --filter @corpus/worker dev\"",
+		"dev": "concurrently -n web,admin,collab,worker -c blue,cyan,magenta,yellow \"pnpm --filter web dev\" \"pnpm --filter admin dev\" \"pnpm --filter @corpus/collab dev\" \"pnpm --filter @corpus/worker dev\"",
 		"build": "pnpm -r build",
 		"check": "pnpm -r check",
 		"lint": "pnpm -r lint",

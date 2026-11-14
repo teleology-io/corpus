@@ -101,9 +101,13 @@
 				{formatDay(data.date, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 			</p>
 		</div>
-		<div class="ml-auto flex gap-2">
-			<a href="/calendar" class="btn-outline"><CalendarDays class="size-4" /> Open calendar</a>
-			<a href="/cycles" class="btn-outline"><Bell class="size-4" /> Reminders</a>
+		<div class="flex w-full gap-2 sm:ml-auto sm:w-auto">
+			<a href="/calendar" class="btn-outline flex-1 justify-center sm:flex-none"
+				><CalendarDays class="size-4" /> Open calendar</a
+			>
+			<a href="/cycles" class="btn-outline flex-1 justify-center sm:flex-none"
+				><Bell class="size-4" /> Reminders</a
+			>
 		</div>
 	</div>
 
@@ -159,9 +163,9 @@
 		</div>
 	</div>
 
-	<div class="grid gap-4 xl:grid-cols-3">
+	<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
 		<!-- tasks -->
-		<section class="card p-4">
+		<section class="min-w-0 card p-4 md:col-span-2 xl:col-span-1">
 			<div class="mb-1 flex items-center justify-between">
 				<h3 class="font-semibold">Today's tasks</h3>
 				<span class="text-xs text-muted">{data.stats.openToday} open</span>
@@ -173,7 +177,7 @@
 		</section>
 
 		<!-- schedule -->
-		<section class="card p-4">
+		<section class="min-w-0 card p-4">
 			<div class="mb-3 flex items-center justify-between">
 				<h3 class="font-semibold">Schedule</h3>
 				<a href="/calendar" class="text-xs font-medium text-primary-600 hover:underline">View all</a
@@ -199,13 +203,13 @@
 									<span style:color={e.color}
 										><Icon name={e.category?.icon ?? 'calendar'} class="size-3.5" /></span
 									>
-									<span class="flex-1 truncate text-sm font-medium">{e.title}</span>
+									<span class="min-w-0 flex-1 truncate text-sm font-medium">{e.title}</span>
 									{#if isNow(e.start, e.end)}<span
 											class="chip bg-primary-500 text-[10px] text-white">Now</span
 										>{/if}
 								</div>
-								<div class="mt-1 flex items-center justify-between gap-2">
-									<span class="text-xs text-muted"
+								<div class="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+									<span class="text-xs whitespace-nowrap text-muted"
 										>{e.allDay
 											? 'All day'
 											: `${formatTime(e.start, tz)} - ${formatTime(e.end, tz)}`}</span
@@ -227,7 +231,7 @@
 		</section>
 
 		<!-- reminders & doses -->
-		<section class="card p-4">
+		<section class="min-w-0 card p-4">
 			<div class="mb-3 flex items-center justify-between">
 				<h3 class="font-semibold">Reminders</h3>
 				<a href="/cycles" class="text-xs font-medium text-primary-600 hover:underline">Manage</a>
@@ -237,11 +241,11 @@
 					{#each data.cycles as c (c.id)}
 						<a
 							href="/cycles/{c.id}"
-							class="chip"
+							class="chip max-w-full"
 							style:background={tint(c.color, 0.1)}
 							style:color={c.color}
 						>
-							<Pill class="size-3" />{c.name} ·
+							<Pill class="size-3 shrink-0" /><span class="truncate">{c.name}</span> ·
 							{#if c.phase.status === 'on' || c.phase.status === 'off'}{c.phase.status}
 								{c.phase.dayOfPhase}/{c.phase.phaseLength}{:else}{c.phase.status.replace(
 									'_',
@@ -254,13 +258,15 @@
 			<ul class="space-y-1.5">
 				{#each nudges as n (n.kind + n.at + (n.kind === 'dose' ? n.dose.cycleId : n.id))}
 					<li
-						class="flex items-center gap-3 rounded-lg px-2 py-1.5 {isPast(n.at)
+						class="flex items-center gap-2 rounded-lg px-2 py-1.5 sm:gap-3 {isPast(n.at)
 							? ''
 							: 'bg-canvas/60'}"
 					>
-						<span class="w-16 shrink-0 text-xs font-medium text-muted">{formatTime(n.at, tz)}</span>
+						<span class="w-14 shrink-0 text-xs font-medium whitespace-nowrap text-muted sm:w-16"
+							>{formatTime(n.at, tz)}</span
+						>
 						{#if n.kind === 'dose'}
-							<span style:color={n.dose.color}><Pill class="size-4" /></span>
+							<span class="shrink-0" style:color={n.dose.color}><Pill class="size-4" /></span>
 							<span class="min-w-0 flex-1">
 								<span
 									class="block truncate text-sm {n.dose.status === 'taken'
@@ -272,7 +278,7 @@
 									>{/if}
 							</span>
 							<button
-								class="btn h-7 px-2.5 text-xs {n.dose.status === 'taken'
+								class="btn h-8 shrink-0 px-2.5 text-xs sm:h-7 {n.dose.status === 'taken'
 									? 'bg-emerald-50 text-emerald-700'
 									: isPast(n.at)
 										? 'bg-primary-500 text-white hover:bg-primary-600'
@@ -282,8 +288,8 @@
 								{#if n.dose.status === 'taken'}<Check class="size-3.5" /> Taken{:else}Take{/if}
 							</button>
 						{:else}
-							<span class="text-amber-500"><Bell class="size-4" /></span>
-							<span class="flex-1 truncate text-sm">{n.title}</span>
+							<span class="shrink-0 text-amber-500"><Bell class="size-4" /></span>
+							<span class="min-w-0 flex-1 truncate text-sm">{n.title}</span>
 						{/if}
 					</li>
 				{:else}
@@ -302,7 +308,7 @@
 
 	<div class="grid gap-4 xl:grid-cols-3">
 		<!-- integrations -->
-		<section class="card p-4 xl:col-span-2">
+		<section class="min-w-0 card p-4 xl:col-span-2">
 			<div class="mb-3 flex items-center justify-between">
 				<h3 class="flex items-center gap-2 font-semibold">Work queue</h3>
 				<a href="/integrations" class="text-xs font-medium text-primary-600 hover:underline"
@@ -391,7 +397,7 @@
 		</section>
 
 		<!-- tomorrow -->
-		<section class="card p-4">
+		<section class="min-w-0 card p-4">
 			<div class="mb-3 flex items-center justify-between">
 				<h3 class="flex items-center gap-2 font-semibold">
 					<Sunrise class="size-4 text-amber-500" /> Tomorrow

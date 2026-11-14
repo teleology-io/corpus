@@ -14,7 +14,9 @@ export const user = pgTable('user', {
 		.notNull(),
 	twoFactorEnabled: boolean('two_factor_enabled').default(false),
 	timezone: text('timezone').default('UTC'),
-	weekStartsOn: integer('week_starts_on').default(0)
+	weekStartsOn: integer('week_starts_on').default(0),
+	superadmin: boolean('superadmin').default(false),
+	disabled: boolean('disabled').default(false)
 });
 
 export const session = pgTable(

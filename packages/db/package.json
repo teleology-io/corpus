@@ -12,7 +12,8 @@
 		"./slack": "./src/slack.ts",
 		"./apps": "./src/apps.ts",
 		"./storage": "./src/storage.ts",
-		"./testing": "./src/testing.ts"
+		"./testing": "./src/testing.ts",
+		"./ops": "./src/ops.ts"
 	},
 	"scripts": {
 		"generate": "drizzle-kit generate",

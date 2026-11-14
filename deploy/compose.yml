@@ -1,0 +1,137 @@
+# Production-style stack: Postgres + migrations + web + admin + worker + collab, all from the
+# root Dockerfile. Separate compose project ("corpus-deploy") from the dev services in
+# ../docker-compose.yml, so it never touches the dev database or containers.
+#
+#   cp deploy/.env.example deploy/.env      # then fill in secrets
+#   docker compose -f deploy/compose.yml --env-file deploy/.env up -d --build
+#
+# Host ports default to the dev ports; set *_PORT in deploy/.env to run beside `make dev`.
+name: corpus-deploy
+
+x-app: &app
+  image: corpus:${CORPUS_TAG:-latest}
+  restart: unless-stopped
+  environment: &env
+    DATABASE_URL: postgres://corpus:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/corpus
+    PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:2222}
+    PUBLIC_COLLAB_URL: ${PUBLIC_COLLAB_URL:-ws://localhost:1234}
+    BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
+    ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY}
+    ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+    GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+    GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+    LINEAR_CLIENT_ID: ${LINEAR_CLIENT_ID:-}
+    LINEAR_CLIENT_SECRET: ${LINEAR_CLIENT_SECRET:-}
+    GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
+    SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
+    SMTP_URL: ${SMTP_URL:-smtp://mailpit:1025}
+    EMAIL_FROM: ${EMAIL_FROM:-Corpus <no-reply@corpus.local>}
+    PUBLIC_VAPID_KEY: ${PUBLIC_VAPID_KEY:-}
+    VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+    VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@corpus.local}
+    UPLOAD_DIR: /data/uploads
+    STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+    STORAGE_VIDEO_DIR: /data/uploads/videos
+    STORAGE_ACCOUNT_ID: ${STORAGE_ACCOUNT_ID:-}
+    STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-}
+    STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
+    STORAGE_BUCKET: ${STORAGE_BUCKET:-}
+    BODY_SIZE_LIMIT: ${BODY_SIZE_LIMIT:-48M}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: corpus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: corpus
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U corpus -d corpus']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    # No host port: only the app containers reach it. Uncomment to inspect from the host.
+    # ports: ['127.0.0.1:5433:5432']
+
+  # Applies pending Drizzle migrations, then exits. Everything else waits for it.
+  # Also the one service that builds the image; the others reuse the tag.
+  migrate:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: 'no'
+    working_dir: /app/packages/db
+    command: ['node_modules/.bin/drizzle-kit', 'migrate']
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    <<: *app
+    working_dir: /app/apps/web
+    command: ['node', 'build']
+    environment:
+      <<: *env
+      PORT: '2222'
+      ORIGIN: ${PUBLIC_APP_URL:-http://localhost:2222}
+    ports: ['${WEB_PORT:-2222}:2222']
+    volumes: [uploads:/data/uploads]
+    healthcheck: &http-health
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:'+process.env.PORT+'/').then(r=>process.exit(r.status<500?0:1),()=>process.exit(1))"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Infrastructure admin panel. Published on 127.0.0.1 only: reach it on the host itself or
+  # through an SSH tunnel / private network, never the public internet.
+  admin:
+    <<: *app
+    working_dir: /app/apps/admin
+    command: ['node', 'build']
+    environment:
+      <<: *env
+      PORT: '2223'
+      ORIGIN: ${ADMIN_URL:-http://localhost:2223}
+    ports: ['127.0.0.1:${ADMIN_PORT:-2223}:2223']
+    healthcheck: *http-health
+
+  worker:
+    <<: *app
+    working_dir: /app/apps/worker
+    command: ['node_modules/.bin/tsx', 'src/index.ts']
+    volumes: [uploads:/data/uploads]
+
+  collab:
+    <<: *app
+    working_dir: /app/apps/collab
+    command: ['node_modules/.bin/tsx', 'src/index.ts']
+    environment:
+      <<: *env
+      COLLAB_PORT: '1234'
+    ports: ['${COLLAB_PORT:-1234}:1234']
+
+  # Catches outgoing email until SMTP_URL points at a real server. UI on 127.0.0.1:8026.
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports: ['127.0.0.1:${MAILPIT_UI_PORT:-8026}:8025']
+
+volumes:
+  pgdata:
+  uploads:

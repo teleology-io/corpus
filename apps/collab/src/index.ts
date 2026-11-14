@@ -6,6 +6,7 @@ import { db, env, schema } from '@corpus/db';
 import { atLeast, linkRole, noteRole, type NoteRole } from '@corpus/db/access';
 import { notify } from '@corpus/db/notify';
 import { verifyToken } from '@corpus/core/crypto';
+import { startHeartbeat } from '@corpus/db/ops';
 
 interface Ctx {
 	userId: string;
@@ -157,4 +158,8 @@ const server = new Server<Ctx>({
 });
 
 await server.listen();
+startHeartbeat('collab', () => ({
+	connections: server.hocuspocus.getConnectionsCount(),
+	documents: server.hocuspocus.getDocumentsCount()
+}));
 console.log(`[collab] Hocuspocus listening on :${PORT}`);

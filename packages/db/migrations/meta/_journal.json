@@ -64,6 +64,20 @@
       "when": 1794133063359,
       "tag": "0008_slack_dm_unread",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794684990753,
+      "tag": "0009_admin_superadmin",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794685490081,
+      "tag": "0010_admin_ops",
+      "breakpoints": true
     }
   ]
 }

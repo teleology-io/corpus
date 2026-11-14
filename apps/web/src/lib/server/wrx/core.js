@@ -1176,6 +1176,28 @@ export class Engine {
 		this.changed();
 		return m;
 	}
+	// autoHandoff lifts the agent-turns-in-a-row limit for long-running automations. Turning it on
+	// also resumes a handoff the limit just paused, if nothing has happened in the thread since.
+	updateChat(chatId, patch) {
+		const chat = this.store.get('chats', chatId);
+		if (typeof patch.autoHandoff === 'boolean') chat.autoHandoff = patch.autoHandoff;
+		if (chat.autoHandoff) {
+			const i = chat.messages.findLastIndex((m) => m.paused);
+			const pause = chat.messages[i];
+			if (pause) {
+				const stale = chat.messages.slice(i + 1).some((m) => m.role !== 'system');
+				if (!stale)
+					for (const memberId of pause.paused.memberIds) {
+						const m = chat.members.find((x) => x.id === memberId);
+						if (m) this.enqueue(chat, m, pause.paused.hops, pause.paused.by);
+					}
+				delete pause.paused;
+			}
+		}
+		this.changed();
+		this.pump();
+		return chat;
+	}
 	removeMember(chatId, memberId) {
 		const chat = this.store.get('chats', chatId);
 		const m = chat.members.find((x) => x.id === memberId);
@@ -1412,6 +1434,7 @@ export class Engine {
 			if (images.length) msg.images = images;
 			if (files.length) msg.files = files;
 		}
+		for (const m of chat.messages) delete m.paused;
 		chat.messages.push(msg);
 		chat.error = null;
 		const targets = this.route(chat, text, null);
@@ -1696,11 +1719,13 @@ export class Engine {
 			msg.durationMs ??= Date.now() - started;
 			if (msg.status === 'done') {
 				const next = this.route(chat, msg.text, member);
-				if (next.length && job.hops + 1 > (chat.maxHops ?? MAX_HOPS))
+				if (next.length && !chat.autoHandoff && job.hops + 1 > (chat.maxHops ?? MAX_HOPS))
 					chat.messages.push({
 						id: id(),
 						role: 'system',
 						text: `Paused automatic handoffs after ${job.hops + 1} agent turns in a row. Reply to continue — mention who should go next.`,
+						// The handoff that was held back, so turning on auto handoffs can resume it.
+						paused: { memberIds: next.map((m) => m.id), hops: job.hops + 1, by: member.handle },
 						at: now()
 					});
 				else for (const m of next) this.enqueue(chat, m, job.hops + 1, member.handle);

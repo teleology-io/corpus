@@ -552,6 +552,9 @@ export async function handleWrx({ request, url, route, userId }) {
 			case 'member':
 				result = engine.updateMember(body.chatId, body.memberId, body);
 				break;
+			case 'chat':
+				result = engine.updateChat(body.chatId, body);
+				break;
 			case 'member-remove':
 				result = engine.removeMember(body.chatId, body.memberId);
 				break;

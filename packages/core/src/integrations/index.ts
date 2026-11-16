@@ -7,6 +7,8 @@ import type { Provider, ProviderId } from './types';
 export * from './types';
 export * from './diff';
 export * from './github-pr';
+export { githubOutcome, type GithubOutcomeNode } from './github';
+export { linearOutcome, type LinearOutcomeNode } from './linear';
 export * from './google';
 export * from './slack';
 export * from './ical';

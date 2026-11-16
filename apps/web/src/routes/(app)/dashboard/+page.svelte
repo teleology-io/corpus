@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { invalidate } from '$app/navigation';
 	import {
 		CircleCheck,
@@ -16,10 +17,12 @@
 		Eye,
 		Sunrise,
 		Plus,
-		AtSign
+		AtSign,
+		Sparkles
 	} from '@lucide/svelte';
 	import TaskList from '#lib/components/dashboard/TaskList.svelte';
 	import WorkbenchTasks from '#lib/components/dashboard/WorkbenchTasks.svelte';
+	import StandupSheet from '#lib/components/dashboard/StandupSheet.svelte';
 	import Icon from '#lib/components/ui/Icon.svelte';
 	import AvatarStack from '#lib/components/ui/AvatarStack.svelte';
 	import BrandIcon from '#lib/components/ui/BrandIcon.svelte';
@@ -33,6 +36,11 @@
 
 	let { data }: PageProps = $props();
 	const tz = $derived(data.user.timezone);
+
+	let standupOpen = $state(false);
+	// Seeded from the per-user setting; the sheet saves changes back. Kept local so a dashboard
+	// refresh mid-session doesn't reset what was just picked.
+	let standupDetail = $state(untrack(() => data.standup['standup.detail']));
 
 	let now = $state(new Date());
 	$effect(() => {
@@ -101,13 +109,20 @@
 				{formatDay(data.date, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 			</p>
 		</div>
-		<div class="flex w-full gap-2 sm:ml-auto sm:w-auto">
+		<!-- Phones: calendar + reminders share a row, Standup gets its own full-width row below. -->
+		<div class="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto sm:flex-nowrap">
 			<a href="/calendar" class="btn-outline flex-1 justify-center sm:flex-none"
 				><CalendarDays class="size-4" /> Open calendar</a
 			>
 			<a href="/cycles" class="btn-outline flex-1 justify-center sm:flex-none"
 				><Bell class="size-4" /> Reminders</a
 			>
+			{#if data.standup['standup.enabled']}
+				<button
+					class="btn-outline basis-full justify-center sm:basis-auto"
+					onclick={() => (standupOpen = true)}><Sparkles class="size-4" /> Standup</button
+				>
+			{/if}
 		</div>
 	</div>
 
@@ -460,3 +475,6 @@
 </div>
 
 <ItemPreviewModal bind:open={previewOpen} item={previewItem} />
+{#if data.standup['standup.enabled']}
+	<StandupSheet bind:open={standupOpen} bind:detail={standupDetail} />
+{/if}

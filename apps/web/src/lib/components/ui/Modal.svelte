@@ -9,6 +9,7 @@
 		description,
 		icon,
 		size = 'md',
+		fullscreenOnMobile = false,
 		children,
 		footer
 	}: {
@@ -17,11 +18,15 @@
 		description?: string;
 		icon?: Snippet;
 		size?: 'sm' | 'md' | 'lg' | 'xl';
+		/** Below `sm`, fill the screen instead of floating (long, editable content). */
+		fullscreenOnMobile?: boolean;
 		children: Snippet;
 		footer?: Snippet;
 	} = $props();
 
 	const widths = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' };
+	const mobileFull =
+		'max-sm:inset-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none max-sm:border-0';
 </script>
 
 <Dialog.Root bind:open>
@@ -30,9 +35,15 @@
 		<Dialog.Content
 			class="fixed top-1/2 left-1/2 z-50 flex max-h-[90dvh] w-[calc(100%-2rem)] {widths[
 				size
-			]} -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-line bg-surface shadow-pop outline-none"
+			]} -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-line bg-surface shadow-pop outline-none {fullscreenOnMobile
+				? mobileFull
+				: ''}"
 		>
-			<div class="flex items-start gap-3 border-b border-line px-5 py-4">
+			<div
+				class="flex items-start gap-3 border-b border-line px-5 py-4 {fullscreenOnMobile
+					? 'max-sm:pt-[max(1rem,env(safe-area-inset-top))]'
+					: ''}"
+			>
 				{#if icon}
 					<div
 						class="flex size-10 shrink-0 items-center justify-center rounded-xl border border-line text-ink"
@@ -54,7 +65,11 @@
 				{@render children()}
 			</div>
 			{#if footer}
-				<div class="flex items-center gap-2 border-t border-line px-5 py-3.5">
+				<div
+					class="flex items-center gap-2 border-t border-line px-5 py-3.5 {fullscreenOnMobile
+						? 'max-sm:pb-[max(0.875rem,env(safe-area-inset-bottom))]'
+						: ''}"
+				>
 					{@render footer()}
 				</div>
 			{/if}

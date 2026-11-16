@@ -15,6 +15,16 @@ export interface ExternalItem {
 	payload?: Record<string, unknown>;
 }
 
+/**
+ * What happened to an item after it left the open feed. `open` means it's still open on the
+ * provider (the user was unassigned or un-requested), so nothing was completed.
+ */
+export interface ItemOutcome {
+	outcome: 'merged' | 'closed' | 'completed' | 'canceled' | 'open';
+	/** Provider timestamp of the outcome; null for `open`. */
+	at: string | null;
+}
+
 /** Full description of one item, fetched when the user opens a preview. */
 export interface ItemPreview {
 	format: 'html' | 'markdown';
@@ -78,6 +88,11 @@ export interface Provider {
 	poll?(token: string, cursor: Record<string, string>): Promise<PollResult>;
 	/** Description of one polled item (externalId as returned by poll). */
 	preview?(token: string, externalId: string): Promise<ItemPreview>;
+	/**
+	 * Why items dropped out of the open feed, keyed by externalId. Missing entries mean the
+	 * provider couldn't tell (deleted, no access). Called once per poll with the resolved items.
+	 */
+	outcomes?(token: string, externalIds: string[]): Promise<Record<string, ItemOutcome>>;
 }
 
 export class ProviderAuthError extends Error {}

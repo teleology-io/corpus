@@ -1,4 +1,4 @@
-import type { ExternalItem, Provider, TokenSet } from './types';
+import type { ExternalItem, ItemOutcome, Provider, TokenSet } from './types';
 import { ProviderAuthError } from './types';
 
 const QUERY = `query {
@@ -15,6 +15,28 @@ const QUERY = `query {
 }`;
 
 const PREVIEW = `query($id: String!) { issue(id: $id) { description } }`;
+
+const OUTCOMES = `query($ids: [ID!]!) {
+	issues(first: 100, filter: { id: { in: $ids } }) {
+		nodes { id completedAt canceledAt state { type } }
+	}
+}`;
+
+export interface LinearOutcomeNode {
+	id: string;
+	completedAt?: string | null;
+	canceledAt?: string | null;
+	state?: { type: string } | null;
+}
+
+export function linearOutcome(n: LinearOutcomeNode): ItemOutcome | null {
+	if (n.state?.type === 'completed' || n.completedAt)
+		return { outcome: 'completed', at: n.completedAt ?? null };
+	if (n.state?.type === 'canceled' || n.canceledAt)
+		return { outcome: 'canceled', at: n.canceledAt ?? null };
+	if (n.state) return { outcome: 'open', at: null };
+	return null;
+}
 
 interface Issue {
 	id: string;
@@ -151,5 +173,21 @@ export const linear: Provider = {
 		const id = externalId.slice(externalId.indexOf(':') + 1);
 		const data = await gql<{ issue: { description: string | null } }>(token, PREVIEW, { id });
 		return { format: 'markdown', body: data.issue.description?.trim() || null };
+	},
+	async outcomes(token, externalIds) {
+		const byId = new Map(externalIds.map((e) => [e.slice(e.indexOf(':') + 1), e]));
+		const out: Record<string, ItemOutcome> = {};
+		const ids = [...byId.keys()];
+		for (let i = 0; i < ids.length; i += 100) {
+			const data = await gql<{ issues: { nodes: LinearOutcomeNode[] } }>(token, OUTCOMES, {
+				ids: ids.slice(i, i + 100)
+			});
+			for (const n of data.issues.nodes) {
+				const o = linearOutcome(n);
+				const ext = byId.get(n.id);
+				if (o && ext) out[ext] = o;
+			}
+		}
+		return out;
 	}
 };

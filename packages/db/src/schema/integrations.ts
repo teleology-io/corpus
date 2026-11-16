@@ -144,6 +144,8 @@ export const prReview = pgTable(
 			.default([]),
 		error: text('error'),
 		postedUrl: text('posted_url'),
+		/** GitHub login that authored the posted review, as returned by the review API. */
+		postedBy: text('posted_by'),
 		createdAt: createdAt(),
 		updatedAt: updatedAt()
 	},

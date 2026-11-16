@@ -97,6 +97,106 @@ export function workbenchTasks(userId) {
 	});
 }
 
+const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
+const githubRepo = (remoteUrl) =>
+	/github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?$/.exec(remoteUrl.trim())?.[1] ?? null;
+
+/**
+ * Read-only Workbench activity in [from, to) for the standup: agent threads with turns in the
+ * window (and exact GitHub PR URLs they mention), the user's own commits per repository, and
+ * tasks. Never starts agents or changes state. Users who never opened the workbench get nothing.
+ * @param {string} userId
+ * @param {Date} from
+ * @param {Date} to
+ */
+export async function workbenchActivity(userId, from, to) {
+	const empty = { threads: [], commits: [], tasks: [] };
+	if (!hosts.has(userId) && !fs.existsSync(path.join(userDirectory(userId), 'state.json')))
+		return empty;
+	const { projects, workspaces, chats } = host(userId).store.state;
+	const inWindow = (at) => !!at && at >= from.toISOString() && at < to.toISOString();
+	const label = (wid) => {
+		const w = workspaces.find((x) => x.id === wid);
+		return {
+			workspace: w?.name ?? null,
+			project: projects.find((p) => p.id === w?.projectId)?.name ?? null
+		};
+	};
+	const link = (params) => `/workbench?${new URLSearchParams(params)}`;
+
+	const threads = [];
+	for (const c of chats) {
+		const turns = c.messages.filter((m) => m.role === 'agent' && inWindow(m.at));
+		if (!turns.length) continue;
+		const last = c.messages.filter((m) => m.role === 'agent').at(-1);
+		const prUrls = new Set();
+		for (const m of c.messages)
+			if (inWindow(m.at) && m.text) for (const u of m.text.match(PR_URL) ?? []) prUrls.add(u);
+		threads.push({
+			id: c.id,
+			title: c.title || 'Untitled thread',
+			workspaceId: c.workspaceId,
+			...label(c.workspaceId),
+			url: link({ workspace: c.workspaceId, tab: 'agents', chat: c.id }),
+			turns: turns.length,
+			failed: turns.filter((m) => m.status === 'failed').length,
+			lastStatus: last?.status ?? null,
+			lastAt: turns.at(-1).at,
+			prUrls: [...prUrls]
+		});
+	}
+
+	// Worktrees of one repository share history, so each commit is counted once per repository.
+	const commits = [];
+	const seen = new Set();
+	for (const w of workspaces) {
+		if (projects.find((p) => p.id === w.projectId)?.folder || !fs.existsSync(w.path)) continue;
+		try {
+			const email = await command('git', ['-C', w.path, 'config', 'user.email'], { timeout: 5000 });
+			if (!email) continue;
+			const out = await command(
+				'git',
+				[
+					'-C',
+					w.path,
+					'log',
+					'HEAD',
+					'--no-merges',
+					`--author=${email}`,
+					`--since=${from.toISOString()}`,
+					`--until=${to.toISOString()}`,
+					'--format=%H%x1f%cI%x1f%s',
+					'-n',
+					'50'
+				],
+				{ timeout: 5000 }
+			);
+			const remote = await command('git', ['-C', w.path, 'remote', 'get-url', 'origin'], {
+				timeout: 5000
+			}).catch(() => '');
+			const repo = githubRepo(remote);
+			for (const line of out.split('\n').filter(Boolean)) {
+				const [sha, at, subject] = line.split('\x1f');
+				if (!sha || seen.has(sha) || !inWindow(new Date(at).toISOString())) continue;
+				seen.add(sha);
+				commits.push({
+					sha,
+					at: new Date(at).toISOString(),
+					subject: subject ?? '',
+					workspaceId: w.id,
+					branch: w.branch,
+					...label(w.id),
+					url: repo ? `https://github.com/${repo}/commit/${sha}` : null,
+					workspaceUrl: link({ workspace: w.id })
+				});
+			}
+		} catch {
+			// Not a repository any more, git missing, or a timeout: no commits from this workspace.
+		}
+	}
+	return { threads, commits, tasks: workbenchTasks(userId) };
+}
+
 /**
  * WRX's global search (projects, workspaces, conversations, messages, tasks, environments), moved
  * server-side so the Corpus-wide palette can include it. Results deep-link into /workbench.

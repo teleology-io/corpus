@@ -113,6 +113,29 @@ async function pollFeed(c: Conn, provider: Provider, token: string): Promise<Syn
 						diff.resolved.map((r) => r.id)
 					)
 				);
+			// Record why each item left the feed (merged / closed / unassigned) with the provider's
+			// timestamp, so the standup never infers "merged" from our poll time. Best effort.
+			if (provider.outcomes) {
+				try {
+					const outcomes = await provider.outcomes(
+						token,
+						diff.resolved.map((r) => r.externalId)
+					);
+					for (const r of diff.resolved) {
+						const o = outcomes[r.externalId];
+						if (!o) continue;
+						await db
+							.update(item)
+							.set({
+								payload: dsql`coalesce(${item.payload}, '{}'::jsonb) || ${JSON.stringify({ outcome: o.outcome, outcomeAt: o.at })}::jsonb`
+							})
+							.where(eq(item.id, r.id));
+					}
+				} catch (e) {
+					if (e instanceof ProviderAuthError) throw e;
+					console.warn(`[integrations] outcome lookup failed for ${c.id}:`, e);
+				}
+			}
 		}
 
 		// ----- notifications (skip the initial import to avoid a flood) -----

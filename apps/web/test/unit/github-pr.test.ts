@@ -98,10 +98,11 @@ describe('postPullReview', () => {
 		let sent: Record<string, unknown> = {};
 		route((_, init) => {
 			sent = JSON.parse(String(init.body));
-			return ok({ html_url: 'https://github.com/r' });
+			return ok({ html_url: 'https://github.com/r', user: { login: 'octo' } });
 		});
 		const out = await postPullReview('t', ref, { commitSha: 'head1', body: 'b', comments: [] });
 		expect(out.url).toBe('https://github.com/r');
+		expect(out.author).toBe('octo');
 		expect(sent.event).toBe('COMMENT');
 		expect(sent.commit_id).toBe('head1');
 	});

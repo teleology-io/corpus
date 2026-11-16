@@ -20,6 +20,12 @@
 		rewriteSupported,
 		stopRewriteDownload
 	} from '#lib/components/notes/rewrite.js';
+	import {
+		DEFAULT_STANDUP_DEVICE_PREFS,
+		readStandupDevicePrefs,
+		saveStandupDevicePrefs
+	} from '#lib/stores/standup-prefs.js';
+	import { SETTINGS, type SettingKey } from '#lib/settings.js';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -39,6 +45,9 @@
 	let rewriteAvailable = $state<boolean | null>(null);
 	let rewriteStored = $state(false);
 	let newCat = $state({ name: '', color: '#2C87F2', icon: 'calendar' });
+	let standupEnabled = $state(false);
+	let standupDetail = $state('compact');
+	let standupDevice = $state({ ...DEFAULT_STANDUP_DEVICE_PREFS });
 
 	// Seed the form once; live refreshes (refreshAll on notifications) must not wipe edits.
 	untrack(() => {
@@ -50,10 +59,13 @@
 		quietStart = data.prefs.quietStart ?? '22:00';
 		quietEnd = data.prefs.quietEnd ?? '07:00';
 		dailyDigest = data.prefs.dailyDigest;
+		standupEnabled = data.settings['standup.enabled'];
+		standupDetail = data.settings['standup.detail'];
 	});
 
 	onMount(async () => {
 		toastPrefs = readToastPrefs();
+		standupDevice = readStandupDevicePrefs();
 		rewritePrefs = readRewritePrefs();
 		void rewriteSupported().then((ok) => (rewriteAvailable = ok));
 		void rewriteModelStored().then((stored) => (rewriteStored = stored));
@@ -108,6 +120,13 @@
 		saveRewritePrefs($state.snapshot(rewritePrefs));
 		rewriteStored = false;
 		toast('Model removed from this browser', { tone: 'success' });
+	}
+
+	async function saveSetting(key: SettingKey, value: unknown) {
+		const ok = await attempt(() =>
+			api('/api/settings', { method: 'PATCH', body: { key, value } }).then(() => true)
+		);
+		if (ok) await refreshAll();
 	}
 
 	function toggleRewrite() {
@@ -315,13 +334,67 @@
 		</div>
 	</section>
 
+	<section class="card p-5" id="standup">
+		<label class="flex items-center justify-between gap-4">
+			<span class="flex min-w-0 flex-col">
+				<span class="font-semibold">{SETTINGS['standup.enabled'].label}</span>
+				<span class="text-sm text-muted">{SETTINGS['standup.enabled'].description}</span>
+			</span>
+			<Switch
+				bind:checked={standupEnabled}
+				onchange={(v) => saveSetting('standup.enabled', v)}
+				label={SETTINGS['standup.enabled'].label}
+			/>
+		</label>
+		{#if standupEnabled}
+			<div class="mt-4 space-y-3 border-t border-line pt-4">
+				<label class="flex flex-wrap items-center justify-between gap-3">
+					<span class="flex min-w-0 flex-col">
+						<span class="text-sm font-medium">{SETTINGS['standup.detail'].label}</span>
+						<span class="text-xs text-muted">{SETTINGS['standup.detail'].description}</span>
+					</span>
+					<select
+						class="input w-36 shrink-0"
+						bind:value={standupDetail}
+						onchange={() => saveSetting('standup.detail', standupDetail)}
+					>
+						{#each SETTINGS['standup.detail'].options as o (o.value)}
+							<option value={o.value}>{o.label}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="flex flex-wrap items-center justify-between gap-3">
+					<span class="flex min-w-0 flex-col">
+						<span class="text-sm font-medium">Writer on this device</span>
+						<span class="text-xs text-muted">
+							Liquid AI runs in this browser (needs the Rewrite model below). Hosted sends the
+							standup evidence to Claude through Workbench{data.hostedStandup
+								? ''
+								: ', which your account can’t use'}. Anything that fails its checks falls back to a
+							plain template.
+						</span>
+					</span>
+					<select
+						class="input w-44 shrink-0"
+						bind:value={standupDevice.provider}
+						onchange={() => saveStandupDevicePrefs($state.snapshot(standupDevice))}
+					>
+						<option value="auto">Liquid, then hosted</option>
+						<option value="liquid">Liquid only</option>
+						<option value="hosted">Hosted only</option>
+					</select>
+				</label>
+			</div>
+		{/if}
+	</section>
+
 	<section class="card p-5" id="notes-rewrite">
 		<label class="flex items-center justify-between gap-4">
 			<span class="flex min-w-0 flex-col">
 				<span class="font-semibold">Rewrite in notes</span>
 				<span class="text-sm text-muted">
-					Improve or clarify selected text, and title new Telescope recordings from their transcript.
-					Runs in this browser, so your text stays on this device.
+					Improve or clarify selected text, and title new Telescope recordings from their
+					transcript. Runs in this browser, so your text stays on this device.
 				</span>
 			</span>
 			<Switch

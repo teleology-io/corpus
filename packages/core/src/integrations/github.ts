@@ -1,17 +1,17 @@
-import type { ExternalItem, Provider } from './types';
+import type { ExternalItem, ItemOutcome, Provider } from './types';
 import { ProviderAuthError } from './types';
 
 const SEARCH_FIELDS = `
 	nodes {
 		... on PullRequest {
-			id number title url state isDraft updatedAt
+			id number title url state isDraft createdAt updatedAt
 			repository { nameWithOwner }
 			author { login avatarUrl }
 			reviewDecision
 			commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 		}
 		... on Issue {
-			id number title url state updatedAt
+			id number title url state createdAt updatedAt
 			repository { nameWithOwner }
 			author { login avatarUrl }
 			labels(first: 5) { nodes { name color } }
@@ -24,6 +24,32 @@ const PREVIEW = `query($id: ID!) {
 		... on Issue { bodyHTML }
 	}
 }`;
+
+const OUTCOMES = `query($ids: [ID!]!) {
+	nodes(ids: $ids) {
+		... on PullRequest { id state mergedAt closedAt }
+		... on Issue { id state closedAt stateReason }
+	}
+}`;
+
+export interface GithubOutcomeNode {
+	id: string;
+	state?: string;
+	mergedAt?: string | null;
+	closedAt?: string | null;
+	stateReason?: string | null;
+}
+
+/** MERGED / CLOSED / OPEN (PR) and CLOSED+reason / OPEN (issue) → an outcome. */
+export function githubOutcome(n: GithubOutcomeNode): ItemOutcome | null {
+	if (n.state === 'MERGED') return { outcome: 'merged', at: n.mergedAt ?? null };
+	if (n.state === 'OPEN') return { outcome: 'open', at: null };
+	if (n.state === 'CLOSED') {
+		if (n.stateReason === 'COMPLETED') return { outcome: 'completed', at: n.closedAt ?? null };
+		return { outcome: 'closed', at: n.closedAt ?? null };
+	}
+	return null;
+}
 
 const QUERY = `query {
 	viewer { login }
@@ -39,6 +65,7 @@ interface Node {
 	url: string;
 	state: string;
 	isDraft?: boolean;
+	createdAt?: string;
 	updatedAt: string;
 	repository: { nameWithOwner: string };
 	author?: { login: string; avatarUrl: string } | null;
@@ -85,6 +112,7 @@ function toItem(n: Node, kind: ExternalItem['kind']): ExternalItem {
 		state,
 		externalUpdatedAt: n.updatedAt,
 		payload: {
+			createdAt: n.createdAt ?? null,
 			author: n.author?.login,
 			authorAvatar: n.author?.avatarUrl,
 			checks,
@@ -188,5 +216,21 @@ export const github: Provider = {
 		const id = externalId.slice(externalId.indexOf(':') + 1);
 		const data = await gql<{ node: { bodyHTML?: string } | null }>(token, PREVIEW, { id });
 		return { format: 'html', body: data.node?.bodyHTML?.trim() || null };
+	},
+	async outcomes(token, externalIds) {
+		const byNode = new Map(externalIds.map((e) => [e.slice(e.indexOf(':') + 1), e]));
+		const out: Record<string, ItemOutcome> = {};
+		const ids = [...byNode.keys()];
+		for (let i = 0; i < ids.length; i += 100) {
+			const data = await gql<{ nodes: (GithubOutcomeNode | null)[] }>(token, OUTCOMES, {
+				ids: ids.slice(i, i + 100)
+			});
+			for (const n of data.nodes) {
+				const o = n?.id ? githubOutcome(n) : null;
+				const ext = n?.id ? byNode.get(n.id) : undefined;
+				if (o && ext) out[ext] = o;
+			}
+		}
+		return out;
 	}
 };

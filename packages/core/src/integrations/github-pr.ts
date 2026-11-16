@@ -178,7 +178,7 @@ export async function postPullReview(
 	token: string,
 	ref: PullRef,
 	review: { commitSha: string; body: string; comments: ReviewComment[] }
-): Promise<{ url: string }> {
+): Promise<{ url: string; author: string | null }> {
 	const path = `${base(ref)}/pulls/${ref.number}/reviews`;
 	const res = await request(token, path, {
 		method: 'POST',
@@ -195,7 +195,8 @@ export async function postPullReview(
 		})
 	});
 	if (!res.ok) throw new Error(`GitHub ${res.status} on ${path}: ${await res.text()}`);
-	return { url: ((await res.json()) as { html_url: string }).html_url };
+	const posted = (await res.json()) as { html_url: string; user?: { login?: string } | null };
+	return { url: posted.html_url, author: posted.user?.login ?? null };
 }
 
 /** Lines a review comment can anchor to: added or context lines on the new side, by file. */

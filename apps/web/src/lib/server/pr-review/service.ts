@@ -331,7 +331,7 @@ export async function postGithubReview(userId: string, reviewId: string) {
 	const { row, ref, token, built, headMoved } = await prepareGithubReview(userId, reviewId);
 	if (headMoved) error(409, 'New commits landed since this review. Re-review before posting.');
 	if (!built.ids.length) error(400, 'There are no findings to post.');
-	const { url } = await postPullReview(token, ref, {
+	const { url, author } = await postPullReview(token, ref, {
 		commitSha: row.headSha,
 		body: built.body,
 		comments: built.comments
@@ -341,6 +341,9 @@ export async function postGithubReview(userId: string, reviewId: string) {
 		.update(review)
 		.set({
 			postedUrl: url,
+			// GitHub's record of who posted it; the standup only says "reviewed" when this matches
+			// the connection's account.
+			postedBy: author,
 			findings: row.findings.map((f) =>
 				posted.has(f.id as string) ? { ...f, outcome: 'posted' } : f
 			)

@@ -18,7 +18,7 @@ const LABEL: Record<string, string> = { github: 'GitHub', linear: 'Linear' };
 
 export async function collectStandup(ctx: Ctx, now = new Date()): Promise<StandupSnapshot> {
 	const w = standupWindow(ctx.tz, now);
-	const window = { label: w.label, from: w.from, to: w.to, todayEnd: w.todayEnd };
+	const window = { label: w.label, from: w.from, to: w.to, todayEnd: w.todayEnd, today: w.today };
 	const hasWorkbench = workbenchAllowed(ctx.user.email);
 
 	const [tasksDone, tasksOpen, events, connections, items, reviews, workbench] = await Promise.all([
@@ -45,7 +45,8 @@ export async function collectStandup(ctx: Ctx, now = new Date()): Promise<Standu
 				url: item.url,
 				state: item.state,
 				payload: item.payload,
-				resolvedAt: item.resolvedAt
+				resolvedAt: item.resolvedAt,
+				accountLogin: conn.accountLogin
 			})
 			.from(item)
 			.innerJoin(conn, eq(item.connectionId, conn.id))

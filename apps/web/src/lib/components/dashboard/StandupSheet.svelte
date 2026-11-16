@@ -1,5 +1,12 @@
 <script lang="ts">
-	import { ClipboardCopy, LoaderCircle, RefreshCw, Sparkles, TriangleAlert } from '@lucide/svelte';
+	import {
+		ClipboardCopy,
+		ExternalLink,
+		LoaderCircle,
+		RefreshCw,
+		Sparkles,
+		TriangleAlert
+	} from '@lucide/svelte';
 	import Modal from '#lib/components/ui/Modal.svelte';
 	import { untrack } from 'svelte';
 	import { api } from '#lib/api.js';
@@ -8,6 +15,7 @@
 	import { readStandupDevicePrefs } from '#lib/stores/standup-prefs.js';
 	import { generateStandup, type SignedSnapshot } from '#lib/standup/generate.js';
 	import {
+		PLAN_GROUPS,
 		VERBS,
 		VISIBLE_PER_SECTION,
 		type Detail,
@@ -37,6 +45,29 @@
 	let expanded = $state<Record<string, boolean>>({});
 
 	const edited = $derived(!!result && markdown !== result.markdown);
+
+	// ----- Today checklist -----
+	// The user's picks, keyed by source (not item id) so they survive Refresh evidence; they also
+	// survive Compact/Verbose switches and Regenerate because nothing here resets them.
+	let picks = $state<Record<string, boolean>>({});
+	let resultSelection = $state('');
+	const GROUP_PREVIEW = 8;
+	const sourceKey = (i: StandupItem) => `${i.source.type}:${i.source.id}`;
+	const isAuto = (i: StandupItem) => i.plan === 'auto' || i.plan === undefined;
+	const isPicked = (i: StandupItem) => isAuto(i) || (picks[sourceKey(i)] ?? i.plan === 'on');
+	const todayItems = $derived((snapshot?.items ?? []).filter((i) => i.section === 'today'));
+	const selected = $derived(todayItems.filter((i) => !isAuto(i) && isPicked(i)).map((i) => i.id));
+	const pickedCount = $derived(selected.length);
+	const planChanged = $derived(!!result && resultSelection !== selected.join(','));
+	const planGroups = $derived(
+		PLAN_GROUPS.map((g) => ({ ...g, items: todayItems.filter((i) => i.group === g.key) })).filter(
+			(g) => g.items.length
+		)
+	);
+	function setGroup(items: StandupItem[], on: boolean) {
+		for (const i of items) if (!isAuto(i)) picks[sourceKey(i)] = on;
+	}
+	const external = (url: string) => !url.startsWith('/');
 	const byId = $derived(new Map((snapshot?.items ?? []).map((i) => [i.id, i])));
 	const missing = $derived((snapshot?.coverage ?? []).filter((c) => c.status !== 'included'));
 
@@ -89,8 +120,10 @@
 				signed,
 				detail,
 				pref: readStandupDevicePrefs().provider,
+				selected,
 				onstatus: (s) => (status = s)
 			});
+			resultSelection = selected.join(',');
 			result = r;
 			markdown = r.markdown;
 			expanded = {};
@@ -100,6 +133,23 @@
 			generating = false;
 			status = '';
 		}
+	}
+
+	const ATTEMPT_LABEL = { liquid: 'Liquid AI', hosted: 'Hosted', template: 'Template' } as const;
+
+	function copyDiagnostics() {
+		if (!result) return;
+		const report = {
+			by: result.by,
+			detail: result.detail,
+			attempts: result.attempts,
+			userAgent: navigator.userAgent,
+			items: snapshot?.items.length
+		};
+		navigator.clipboard.writeText(JSON.stringify(report, null, 2)).then(
+			() => toast('Details copied', { tone: 'success' }),
+			() => toast('Could not copy details', { tone: 'error' })
+		);
 	}
 
 	function copy() {
@@ -127,6 +177,77 @@
 			.filter(Boolean)
 			.join('; ');
 </script>
+
+{#snippet checklist()}
+	<p class="text-xs text-muted">
+		Only what you check goes under Today. Checking something doesn’t start any work.
+	</p>
+	{#each planGroups as g (g.key)}
+		{@const shown = expanded[`g:${g.key}`] ? g.items : g.items.slice(0, GROUP_PREVIEW)}
+		<div class="mt-3 flex items-center justify-between gap-2">
+			<p class="text-[11px] font-semibold tracking-wide text-muted uppercase">{g.label}</p>
+			{#if g.key !== 'meeting' && g.items.length > 1}
+				<span class="flex gap-2 text-xs">
+					<button class="text-primary-600 hover:underline" onclick={() => setGroup(g.items, true)}
+						>All</button
+					>
+					<button class="text-primary-600 hover:underline" onclick={() => setGroup(g.items, false)}
+						>None</button
+					>
+				</span>
+			{/if}
+		</div>
+		<ul class="mt-1 space-y-1">
+			{#each shown as i (i.id)}
+				<li class="flex items-start gap-2 text-sm">
+					{#if isAuto(i)}
+						<span class="mt-0.5 w-4 shrink-0 text-center text-muted" aria-hidden="true">•</span>
+						<span class="min-w-0 flex-1">
+							<span class="text-muted">{i.lead ?? VERBS[i.verb]}</span>
+							<span class="font-medium">{i.title}</span>
+						</span>
+					{:else}
+						<label class="flex min-w-0 flex-1 cursor-pointer items-start gap-2">
+							<input
+								type="checkbox"
+								class="mt-0.5 size-4 shrink-0 accent-primary-500"
+								checked={isPicked(i)}
+								onchange={(e) => (picks[sourceKey(i)] = e.currentTarget.checked)}
+							/>
+							<span class="min-w-0">
+								<span class="font-medium break-words">{i.title}</span>
+								{#if i.statements.length}
+									<span class="block text-xs text-muted"
+										>{i.statements.map((s) => s.text).join(' · ')}</span
+									>
+								{/if}
+							</span>
+						</label>
+					{/if}
+					{#if i.url}
+						<a
+							class="btn-icon size-7 shrink-0"
+							href={i.url}
+							target={external(i.url) ? '_blank' : undefined}
+							rel="noreferrer"
+							aria-label="Open {i.title}"><ExternalLink class="size-3.5" /></a
+						>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+		{#if g.items.length > GROUP_PREVIEW}
+			<button
+				class="mt-1 text-xs font-medium text-primary-600 hover:underline"
+				onclick={() => (expanded[`g:${g.key}`] = !expanded[`g:${g.key}`])}
+			>
+				{expanded[`g:${g.key}`] ? 'Show fewer' : `+${g.items.length - GROUP_PREVIEW} more`}
+			</button>
+		{/if}
+	{:else}
+		<p class="mt-2 text-sm text-muted">No meetings or open work for today.</p>
+	{/each}
+{/snippet}
 
 <Modal bind:open title="Standup" size="lg" fullscreenOnMobile>
 	{#snippet icon()}<Sparkles class="size-5" />{/snippet}
@@ -212,6 +333,15 @@
 		<p class="mt-4 text-sm text-red-600">{generateError}</p>
 	{:else if result}
 		{#if generateError}<p class="mt-4 text-sm text-red-600">{generateError}</p>{/if}
+		<details class="mt-4 rounded-lg border border-line px-3 py-2" open={planChanged}>
+			<summary class="cursor-pointer text-sm font-medium">
+				Today’s plan · {pickedCount} picked
+				{#if planChanged}<span class="ml-1 text-xs font-normal text-amber-600"
+						>changed — Regenerate to apply</span
+					>{/if}
+			</summary>
+			<div class="mt-1 pb-1">{@render checklist()}</div>
+		</details>
 		<div class="mt-4 flex gap-1 border-b border-line text-sm">
 			{#each [['preview', 'Preview'], ['markdown', 'Markdown']] as [value, label] (value)}
 				<button
@@ -274,10 +404,52 @@
 				bind:value={markdown}
 				aria-label="Standup Markdown"></textarea>
 		{/if}
+		<details class="mt-5 rounded-lg border border-line px-3 py-2 text-xs">
+			<summary class="cursor-pointer font-medium text-muted"> How this was generated </summary>
+			<ol class="mt-2 space-y-2">
+				{#each result.attempts as a, n (n)}
+					<li>
+						<span class="font-medium text-ink">{ATTEMPT_LABEL[a.provider]}</span>
+						<span
+							class="ml-1 rounded px-1.5 py-0.5 {a.outcome === 'used'
+								? 'bg-green-500/10 text-green-700 dark:text-green-400'
+								: 'bg-amber-500/10 text-amber-700 dark:text-amber-400'}">{a.outcome}</span
+						>
+						{#if a.ms !== undefined}<span class="ml-1 text-muted">{(a.ms / 1000).toFixed(1)}s</span
+							>{/if}
+						<p class="mt-0.5 text-muted">{a.reason}</p>
+						{#if a.checks}
+							<p class="mt-0.5 font-mono text-[11px] text-muted">
+								{Object.entries(a.checks)
+									.map(([k, v]) => `${k}=${v}`)
+									.join(' · ')}
+							</p>
+						{/if}
+						{#if a.errors && a.errors.length > 1}
+							<ul class="mt-0.5 list-disc pl-4 text-muted">
+								{#each a.errors as e, i (i)}<li>{e}</li>{/each}
+							</ul>
+						{/if}
+						{#if a.output}
+							<pre
+								class="mt-1 max-h-32 overflow-auto rounded bg-black/5 p-2 font-mono text-[11px] whitespace-pre-wrap dark:bg-white/5">{a.output}</pre>
+						{/if}
+					</li>
+				{/each}
+			</ol>
+			<button
+				class="mt-2 text-xs font-medium text-primary-600 hover:underline"
+				onclick={copyDiagnostics}>Copy details</button
+			>
+		</details>
 	{:else if snapshot}
-		<p class="mt-4 text-sm text-muted">
-			Pick Compact or Verbose, then Generate. Both use the same evidence; Verbose adds context from
-			it, never new facts.
+		<section class="mt-4">
+			<h3 class="text-sm font-semibold text-ink">What do you plan to work on today?</h3>
+			{@render checklist()}
+		</section>
+		<p class="mt-4 text-xs text-muted">
+			Then pick Compact or Verbose and Generate. Both use the same evidence; Verbose adds context
+			from it, never new facts.
 		</p>
 	{/if}
 

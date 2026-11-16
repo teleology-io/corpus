@@ -14,6 +14,8 @@ export interface WindowBounds {
 	from: Date;
 	to: Date;
 	todayEnd: Date;
+	/** Today's local date, YYYY-MM-DD. */
+	today: string;
 }
 export interface ThreadActivity {
 	id: string;
@@ -49,6 +51,8 @@ export interface IntegrationRow {
 	state: string | null;
 	payload: Record<string, unknown> | null;
 	resolvedAt: string | null;
+	/** The connected account (GitHub login), for ownership checks. */
+	accountLogin: string | null;
 }
 export interface ReviewRow {
 	id: string;
@@ -145,6 +149,26 @@ function timeLabel(iso: string, tz: string) {
 	}).format(new Date(iso));
 }
 
+/**
+ * Planner tasks the worker mirrors from GitHub/Linear (review requests, assigned issues). Their
+ * completion only means "left the feed", and their existence only means "assigned", so the
+ * standup uses the integration items themselves instead.
+ */
+const MIRRORED_SOURCES = new Set(['github', 'linear']);
+
+const REVIEW_STATE: Record<string, string> = {
+	APPROVED: 'approved',
+	CHANGES_REQUESTED: 'changes requested',
+	COMMENTED: 'commented'
+};
+
+function viewerReview(p: Record<string, unknown>) {
+	const r = p.viewerReview as { url?: unknown; state?: unknown; at?: unknown } | null | undefined;
+	return r && typeof r.url === 'string' && typeof r.at === 'string'
+		? { url: r.url, state: String(r.state ?? ''), at: r.at }
+		: null;
+}
+
 export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: Coverage[] } {
 	const { from, to, todayEnd } = raw.window;
 	const past: Draft[] = [];
@@ -164,6 +188,10 @@ export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: 
 		const outcome = str(p.outcome);
 		const outcomeAt = str(p.outcomeAt);
 		if (i.kind === 'pull_request') {
+			// The feed only holds PRs authored by the account; this is a second, explicit check.
+			const author = str(p.author);
+			if (author && i.accountLogin && author.toLowerCase() !== i.accountLogin.toLowerCase())
+				continue;
 			if (i.resolvedAt) {
 				const ref = i.subtitle ? [{ key: 'ref', text: i.subtitle }] : [];
 				if (outcome === 'merged' && within(outcomeAt, from, to))
@@ -191,12 +219,38 @@ export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: 
 				opened.push(
 					draft('past', 'opened_pr', i.title, i.url, source, { at: createdAt, statements })
 				);
-			else prsOpen.push(draft('today', 'pr_open', i.title, i.url, source, { statements }));
+			else
+				prsOpen.push(
+					draft('today', 'pr_open', i.title, i.url, source, { statements, plan: 'on', group: 'pr' })
+				);
 		} else if (i.kind === 'review_request') {
-			if (i.resolvedAt) continue;
+			if (i.resolvedAt) {
+				// Someone else's PR: only ever "Reviewed", and only from GitHub's record of a review
+				// authored by this account. Its merge/close is never the user's outcome.
+				const r = viewerReview(p);
+				const covered = raw.reviews.some(
+					(x) => x.itemId === i.id && x.postedUrl && within(x.updatedAt, from, to)
+				);
+				if (r && within(r.at, from, to) && !covered) {
+					const statements: Statement[] = [];
+					if (REVIEW_STATE[r.state])
+						statements.push({ key: 'verdict', text: REVIEW_STATE[r.state]! });
+					if (i.subtitle) statements.push({ key: 'ref', text: i.subtitle });
+					reviews.push(
+						draft('past', 'reviewed_pr', i.title, r.url, source, {
+							at: r.at,
+							statements,
+							related: [{ label: 'PR', url: i.url }]
+						})
+					);
+				}
+				continue;
+			}
 			reviewRequests.push(
 				draft('today', 'review_requested', i.title, i.url, source, {
 					statements: prStatements(i.state, i.subtitle),
+					plan: 'off',
+					group: 'review',
 					actions: [{ type: 'start_review', itemId: i.id }]
 				})
 			);
@@ -217,13 +271,29 @@ export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: 
 					);
 				continue;
 			}
-			const statements = [...ref];
-			if (i.state) statements.push({ key: 'state', text: i.state });
+			// Assignment alone isn't a plan for today: every assigned ticket is a checklist
+			// candidate, unchecked until the user picks it.
 			const due = str(p.dueDate);
-			if (due) statements.push({ key: 'due', text: `due ${due}` });
-			issuesOpen.push(draft('today', 'issue_assigned', i.title, i.url, source, { statements }));
+			const statements = [...ref];
+			if (due && due <= raw.window.today)
+				statements.push({
+					key: 'due',
+					text: due === raw.window.today ? 'due today' : `overdue (due ${due})`
+				});
+			else if (due) statements.push({ key: 'due', text: `due ${due}` });
+			if (i.state) statements.push({ key: 'state', text: i.state });
+			issuesOpen.push(
+				draft('today', 'issue_assigned', i.title, i.url, source, {
+					statements,
+					at: due,
+					plan: 'off',
+					group: 'ticket'
+				})
+			);
 		}
 	}
+	// Due today / overdue tickets first, then by due date, then undated.
+	issuesOpen.sort((a, b) => (a.at ?? '9999').localeCompare(b.at ?? '9999'));
 	// Changes requested / failing first: that's what needs action today.
 	const urgency = (d: Draft) =>
 		d.statements.some((s) => s.text === 'changes requested' || s.text === 'checks failing') ? 0 : 1;
@@ -269,7 +339,7 @@ export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: 
 	// ----- tasks -----
 	const tasksDone: Draft[] = [];
 	for (const t of raw.tasksDone)
-		if (within(t.completedAt, from, to))
+		if (!MIRRORED_SOURCES.has(t.source) && within(t.completedAt, from, to))
 			tasksDone.push(
 				draft(
 					'past',
@@ -282,7 +352,7 @@ export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: 
 			);
 	const tasksToday: Draft[] = [];
 	for (const t of raw.tasksOpen) {
-		if (t.completedAt) continue;
+		if (t.completedAt || MIRRORED_SOURCES.has(t.source)) continue;
 		const overdue = !!t.dueAt && Date.parse(t.dueAt) < to.getTime();
 		const statements: Statement[] = [];
 		if (t.dueAt && !overdue && !t.dueAllDay)
@@ -296,7 +366,10 @@ export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: 
 				t.externalUrl,
 				{ type: 'task', id: t.id },
 				{
-					statements
+					statements,
+					// Dated (due today / overdue) is the user's own plan; undated waits to be picked.
+					plan: t.dueAt ? 'on' : 'off',
+					group: 'task'
 				}
 			)
 		);
@@ -335,6 +408,8 @@ export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: 
 				{
 					project: t.project,
 					statements,
+					plan: t.status === 'doing' ? 'on' : 'off',
+					group: 'task',
 					actions: [{ type: 'start_thread', workspaceId: t.workspaceId, prompt: t.title }]
 				}
 			)
@@ -423,7 +498,13 @@ export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: 
 				e.title,
 				`/calendar?${new URLSearchParams({ date, event: e.eventId })}`,
 				{ type: 'event', id: e.key },
-				{ lead: e.allDay ? 'All day' : timeLabel(e.start, raw.tz), at: e.start, statements }
+				{
+					lead: e.allDay ? 'All day' : timeLabel(e.start, raw.tz),
+					at: e.start,
+					statements,
+					plan: 'auto',
+					group: 'meeting'
+				}
 			);
 		});
 
@@ -437,11 +518,13 @@ export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: 
 		...issuesOpen
 	);
 
-	// Exact same URL twice in a section (e.g. two review runs of one PR): keep the first.
+	// Exact same PR/review URL twice in a section (e.g. two review runs of one PR): keep the first.
+	// Only provider evidence: Workbench tasks share their workspace's link and must stay distinct.
 	const dedupe = (list: Draft[]) => {
 		const seen = new Set<string>();
 		return list.filter((d) => {
-			if (!d.url) return true;
+			const provider = d.source.type === 'pr_review' || d.source.type.includes(':');
+			if (!d.url || !provider) return true;
 			if (seen.has(d.url)) return false;
 			seen.add(d.url);
 			return true;

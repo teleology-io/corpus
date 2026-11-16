@@ -52,21 +52,34 @@ const snapshot: StandupSnapshot = {
 	expiresAt: '2099-01-01T00:00:00Z',
 	timezone: 'UTC',
 	window: { label: 'Yesterday', from: '', to: '' },
-	items: [item],
+	items: [
+		item,
+		{
+			...item,
+			id: 'e2',
+			section: 'today',
+			verb: 'issue_assigned',
+			title: 'ENG-7',
+			plan: 'off',
+			group: 'ticket'
+		}
+	],
 	coverage: []
 };
-const run = (pref: 'auto' | 'liquid' | 'hosted', hosted = true) =>
+const run = (pref: 'auto' | 'liquid' | 'hosted', hosted = true, selected: string[] = []) =>
 	generateStandup({
 		snapshot,
 		signed: { payload: '{}', signature: 'sig', hosted: hosted ? { label: 'Hosted' } : null },
 		detail: 'compact',
 		pref,
+		selected,
 		onstatus: () => {}
 	});
 
 describe('generateStandup', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.stubGlobal('isSecureContext', true);
 		rw.rewriteSupported.mockResolvedValue(true);
 		rw.rewriteModelComplete.mockResolvedValue(true);
 	});
@@ -77,7 +90,12 @@ describe('generateStandup', () => {
 		const r = await run('liquid');
 		expect(rw.startRewrite).not.toHaveBeenCalled();
 		expect(r.by).toBe('template');
-		expect(r.note).toContain('isn’t downloaded');
+		expect(r.note).toContain('only partly downloaded');
+		expect(r.attempts[0]).toMatchObject({
+			provider: 'liquid',
+			outcome: 'unavailable',
+			checks: { modelCacheExists: true, modelComplete: false }
+		});
 	});
 
 	it('uses a valid Liquid plan', async () => {
@@ -100,10 +118,16 @@ describe('generateStandup', () => {
 		api.mockResolvedValue({ ok: true, plan: { past: [{ id: 'e1', statements: [] }], today: [] } });
 		const r = await run('auto');
 		expect(api).toHaveBeenCalledWith('/api/standup', {
-			body: { payload: '{}', signature: 'sig', detail: 'compact' }
+			body: { payload: '{}', signature: 'sig', detail: 'compact', selected: [] }
 		});
 		expect(r.by).toBe('hosted');
 		expect(r.note).toContain('failed validation');
+		expect(r.attempts.map((a) => `${a.provider}:${a.outcome}`)).toEqual([
+			'liquid:invalid',
+			'hosted:used'
+		]);
+		expect(r.attempts[0]!.output).toBe('Here is your standup!');
+		expect(r.attempts[0]!.errors).toEqual(['Output is not valid JSON']);
 	});
 
 	it('treats a Liquid exception as a fallback, not a crash', async () => {
@@ -121,6 +145,45 @@ describe('generateStandup', () => {
 		expect((await run('auto', false)).by).toBe('template');
 		expect((await run('hosted', false)).by).toBe('template');
 		expect(api).not.toHaveBeenCalled();
+	});
+
+	it('reports a non-HTTPS page as the reason Liquid is off', async () => {
+		vi.stubGlobal('isSecureContext', false);
+		rw.rewriteSupported.mockResolvedValue(false);
+		const r = await run('liquid');
+		expect(r.attempts[0]!.reason).toContain('HTTPS or localhost');
+		expect(r.attempts[0]!.checks).toMatchObject({ secureContext: false });
+	});
+
+	it('labels a failed hosted request as an error, not a validation failure', async () => {
+		rw.rewriteSupported.mockResolvedValue(false);
+		api.mockRejectedValue(new Error('Hosted generation needs Workbench access'));
+		const r = await run('auto');
+		expect(r.attempts.map((a) => `${a.provider}:${a.outcome}`)).toEqual([
+			'liquid:unavailable',
+			'hosted:error',
+			'template:used'
+		]);
+		expect(r.note).toContain('hosted request failed');
+	});
+
+	it('writes Today only from picked items, for Liquid and for the hosted request', async () => {
+		let prompt = '';
+		rw.startRewrite.mockImplementation((m, _n, h) => {
+			prompt = m[1].content;
+			h.ontoken('nope');
+			h.ondone();
+			return { cancel() {} };
+		});
+		api.mockResolvedValue({ ok: false, errors: ['x'] });
+		const unpicked = await run('auto', true, []);
+		expect(prompt).not.toContain('ENG-7');
+		expect(unpicked.markdown).not.toContain('ENG-7');
+		expect(api.mock.calls[0]![1].body.selected).toEqual([]);
+		const picked = await run('auto', true, ['e2']);
+		expect(prompt).toContain('ENG-7');
+		expect(picked.markdown).toContain('Issue due: ENG-7');
+		expect(api.mock.calls[1]![1].body.selected).toEqual(['e2']);
 	});
 
 	it('falls back to the template when hosted output fails validation', async () => {

@@ -25,9 +25,14 @@ const PREVIEW = `query($id: ID!) {
 	}
 }`;
 
-const OUTCOMES = `query($ids: [ID!]!) {
+const outcomesQuery = (
+	withReviews: boolean
+) => `query($ids: [ID!]!${withReviews ? ', $login: String!' : ''}) {
 	nodes(ids: $ids) {
-		... on PullRequest { id state mergedAt closedAt }
+		... on PullRequest {
+			id state mergedAt closedAt
+			${withReviews ? 'viewerReviews: reviews(last: 1, author: $login, states: [APPROVED, CHANGES_REQUESTED, COMMENTED]) { nodes { url state submittedAt } }' : ''}
+		}
 		... on Issue { id state closedAt stateReason }
 	}
 }`;
@@ -38,10 +43,20 @@ export interface GithubOutcomeNode {
 	mergedAt?: string | null;
 	closedAt?: string | null;
 	stateReason?: string | null;
+	viewerReviews?: { nodes: ({ url: string; state: string; submittedAt: string | null } | null)[] };
 }
 
 /** MERGED / CLOSED / OPEN (PR) and CLOSED+reason / OPEN (issue) → an outcome. */
 export function githubOutcome(n: GithubOutcomeNode): ItemOutcome | null {
+	const base = githubState(n);
+	if (!base) return null;
+	const r = n.viewerReviews?.nodes.at(-1);
+	return r?.submittedAt
+		? { ...base, viewerReview: { url: r.url, state: r.state, at: r.submittedAt } }
+		: base;
+}
+
+function githubState(n: GithubOutcomeNode): ItemOutcome | null {
 	if (n.state === 'MERGED') return { outcome: 'merged', at: n.mergedAt ?? null };
 	if (n.state === 'OPEN') return { outcome: 'open', at: null };
 	if (n.state === 'CLOSED') {
@@ -217,14 +232,18 @@ export const github: Provider = {
 		const data = await gql<{ node: { bodyHTML?: string } | null }>(token, PREVIEW, { id });
 		return { format: 'html', body: data.node?.bodyHTML?.trim() || null };
 	},
-	async outcomes(token, externalIds) {
+	async outcomes(token, externalIds, context) {
+		// No login → no review lookup: an unfiltered query would match anyone's review.
+		const login = context?.login ?? null;
 		const byNode = new Map(externalIds.map((e) => [e.slice(e.indexOf(':') + 1), e]));
 		const out: Record<string, ItemOutcome> = {};
 		const ids = [...byNode.keys()];
 		for (let i = 0; i < ids.length; i += 100) {
-			const data = await gql<{ nodes: (GithubOutcomeNode | null)[] }>(token, OUTCOMES, {
-				ids: ids.slice(i, i + 100)
-			});
+			const data = await gql<{ nodes: (GithubOutcomeNode | null)[] }>(
+				token,
+				outcomesQuery(!!login),
+				login ? { ids: ids.slice(i, i + 100), login } : { ids: ids.slice(i, i + 100) }
+			);
 			for (const n of data.nodes) {
 				const o = n?.id ? githubOutcome(n) : null;
 				const ext = n?.id ? byNode.get(n.id) : undefined;

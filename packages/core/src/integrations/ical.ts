@@ -88,7 +88,10 @@ export async function fetchIcal(url: string, timeoutMs = 30_000): Promise<string
 		signal: AbortSignal.timeout(timeoutMs)
 	});
 	if (res.status === 404 || res.status === 403)
-		throw new IcalFetchError(res.status, 'Feed not found — the address may have been reset or the calendar made private');
+		throw new IcalFetchError(
+			res.status,
+			'Feed not found — the address may have been reset or the calendar made private'
+		);
 	if (!res.ok) throw new IcalFetchError(res.status, `Google returned ${res.status}`);
 	const length = Number(res.headers.get('content-length') ?? 0);
 	if (length > MAX_BYTES) throw new IcalFetchError(413, 'Feed is too large');

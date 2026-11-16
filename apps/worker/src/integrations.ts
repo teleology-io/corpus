@@ -119,7 +119,8 @@ async function pollFeed(c: Conn, provider: Provider, token: string): Promise<Syn
 				try {
 					const outcomes = await provider.outcomes(
 						token,
-						diff.resolved.map((r) => r.externalId)
+						diff.resolved.map((r) => r.externalId),
+						{ login: c.accountLogin }
 					);
 					for (const r of diff.resolved) {
 						const o = outcomes[r.externalId];
@@ -127,7 +128,7 @@ async function pollFeed(c: Conn, provider: Provider, token: string): Promise<Syn
 						await db
 							.update(item)
 							.set({
-								payload: dsql`coalesce(${item.payload}, '{}'::jsonb) || ${JSON.stringify({ outcome: o.outcome, outcomeAt: o.at })}::jsonb`
+								payload: dsql`coalesce(${item.payload}, '{}'::jsonb) || ${JSON.stringify({ outcome: o.outcome, outcomeAt: o.at, viewerReview: o.viewerReview ?? null })}::jsonb`
 							})
 							.where(eq(item.id, r.id));
 					}

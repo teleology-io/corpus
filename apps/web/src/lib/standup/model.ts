@@ -21,7 +21,7 @@ export const VERBS = {
 	issue_completed: 'Issue completed',
 	issue_closed: 'Issue closed',
 	issue_canceled: 'Issue canceled',
-	issue_assigned: 'Assigned issue',
+	issue_assigned: 'Issue due',
 	thread_activity: 'Worked in thread',
 	task_todo: 'To do',
 	task_overdue: 'Overdue',
@@ -62,6 +62,45 @@ export interface StandupItem {
 	related: StandupLink[];
 	statements: Statement[];
 	actions: StandupAction[];
+	/**
+	 * Today only. `auto` is always included (meetings); otherwise it's a checklist candidate the
+	 * user picks before generating, checked (`on`) or unchecked (`off`) by default.
+	 */
+	plan?: 'auto' | 'on' | 'off';
+	/** Today only: checklist grouping. Reviews of others' work stay apart from the user's own. */
+	group?: PlanGroup;
+}
+
+export type PlanGroup = 'meeting' | 'pr' | 'review' | 'ticket' | 'task';
+export const PLAN_GROUPS: { key: PlanGroup; label: string }[] = [
+	{ key: 'meeting', label: 'Meetings (always included)' },
+	{ key: 'pr', label: 'Your open PRs' },
+	{ key: 'review', label: 'Reviews requested from you' },
+	{ key: 'ticket', label: 'Assigned tickets' },
+	{ key: 'task', label: 'Tasks' }
+];
+
+/** Ids checked by default: every `on` candidate. */
+export function defaultSelection(snapshot: StandupSnapshot): string[] {
+	return snapshot.items.filter((i) => i.section === 'today' && i.plan === 'on').map((i) => i.id);
+}
+
+/**
+ * The snapshot the standup is written from: past items as collected, Today limited to automatic
+ * items plus the user's picks. Runs identically in the browser and on the server (hosted), so
+ * both validate against the same item set. Unknown ids are ignored.
+ */
+export function selectToday(
+	snapshot: StandupSnapshot,
+	selected: readonly string[]
+): StandupSnapshot {
+	const picked = new Set(selected);
+	return {
+		...snapshot,
+		items: snapshot.items.filter(
+			(i) => i.section !== 'today' || i.plan === 'auto' || i.plan === undefined || picked.has(i.id)
+		)
+	};
 }
 
 export interface Coverage {
@@ -138,6 +177,28 @@ export function renderLine(item: StandupItem, statementKeys: string[]): string {
 		.map(escapeText);
 	if (notes.length) line += ` — ${notes.join('; ')}`;
 	return line;
+}
+
+/** Work on someone else's PR (reviewing it, or being asked to). Never mixed into the user's own. */
+export const REVIEW_VERBS: ReadonlySet<Verb> = new Set([
+	'reviewed_pr',
+	'review_unverified',
+	'review_ran',
+	'review_requested'
+]);
+
+/**
+ * Stable split: the user's own work first, then reviews of others' work, in each section. Keeps
+ * the model's order within each group, so a model can't interleave the two.
+ */
+export function separateReviews(snapshot: StandupSnapshot, plan: StandupPlan): StandupPlan {
+	const byId = new Map(snapshot.items.map((i) => [i.id, i]));
+	const isReview = (e: PlanEntry) => REVIEW_VERBS.has(byId.get(e.id)!.verb);
+	const split = (list: PlanEntry[]) => [
+		...list.filter((e) => !isReview(e)),
+		...list.filter(isReview)
+	];
+	return { past: split(plan.past), today: split(plan.today) };
 }
 
 export interface RenderedSection {
@@ -281,6 +342,21 @@ export interface StandupResult {
 	by: GeneratedBy;
 	/** Shown in the footer: which provider, and why any fallback happened. */
 	note: string;
+	/** Every provider tried, in order, with the exact reason. Shown under "Details". */
+	attempts: GenerationAttempt[];
+}
+
+export interface GenerationAttempt {
+	provider: 'liquid' | 'hosted' | 'template';
+	outcome: 'used' | 'unavailable' | 'invalid' | 'error' | 'skipped';
+	reason: string;
+	/** All validation errors, not just the first. */
+	errors?: string[];
+	ms?: number;
+	/** The start of what the model returned, when it failed validation. */
+	output?: string;
+	/** Device facts behind a Liquid decision. */
+	checks?: Record<string, boolean | string>;
 }
 
 /**

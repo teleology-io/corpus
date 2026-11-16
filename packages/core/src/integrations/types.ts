@@ -23,6 +23,11 @@ export interface ItemOutcome {
 	outcome: 'merged' | 'closed' | 'completed' | 'canceled' | 'open';
 	/** Provider timestamp of the outcome; null for `open`. */
 	at: string | null;
+	/**
+	 * The connected account's latest submitted review on this PR, filtered by author on the
+	 * provider side. Lets a resolved review request say "reviewed" without inferring it.
+	 */
+	viewerReview?: { url: string; state: string; at: string } | null;
 }
 
 /** Full description of one item, fetched when the user opens a preview. */
@@ -92,7 +97,11 @@ export interface Provider {
 	 * Why items dropped out of the open feed, keyed by externalId. Missing entries mean the
 	 * provider couldn't tell (deleted, no access). Called once per poll with the resolved items.
 	 */
-	outcomes?(token: string, externalIds: string[]): Promise<Record<string, ItemOutcome>>;
+	outcomes?(
+		token: string,
+		externalIds: string[],
+		context?: { login?: string | null }
+	): Promise<Record<string, ItemOutcome>>;
 }
 
 export class ProviderAuthError extends Error {}

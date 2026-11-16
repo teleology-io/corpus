@@ -7,7 +7,7 @@ import { collectStandup } from '#lib/server/standup/collect.js';
 import { generateHosted, HOSTED_LABEL } from '#lib/server/standup/hosted.js';
 import { MAX_SNAPSHOT_BYTES, signSnapshot, verifySnapshot } from '#lib/server/standup/sign.js';
 import { workbenchAllowed } from '#lib/server/wrx/access.js';
-import { validatePlan } from '#lib/standup/model.js';
+import { selectToday, validatePlan } from '#lib/standup/model.js';
 
 /** Collects a fresh evidence snapshot (read-only) and signs it for later generation calls. */
 export const GET: RequestHandler = async ({ locals }) => {
@@ -25,7 +25,9 @@ export const GET: RequestHandler = async ({ locals }) => {
 const generateInput = z.object({
 	payload: z.string().max(MAX_SNAPSHOT_BYTES + 1),
 	signature: z.string().max(200),
-	detail: z.enum(['compact', 'verbose'])
+	detail: z.enum(['compact', 'verbose']),
+	/** Today checklist picks; applied to the verified snapshot exactly as the client does. */
+	selected: z.array(z.string().max(20)).max(500).default([])
 });
 
 /**
@@ -39,8 +41,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	if (!verified.ok) error(verified.status, verified.message);
 	// Access is rechecked now, not trusted from when the snapshot was made.
 	if (!workbenchAllowed(ctx.user.email)) error(403, 'Hosted generation needs Workbench access');
-	const run = await generateHosted(verified.snapshot, input.detail);
+	const snapshot = selectToday(verified.snapshot, input.selected);
+	const run = await generateHosted(snapshot, input.detail);
 	if (run.error) return Response.json({ ok: false, errors: [run.error], label: HOSTED_LABEL });
-	const result = validatePlan(verified.snapshot, run.text, input.detail);
+	const result = validatePlan(snapshot, run.text, input.detail);
 	return Response.json({ ...result, label: HOSTED_LABEL });
 };

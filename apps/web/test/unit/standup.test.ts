@@ -10,9 +10,13 @@ import {
 	type ThreadActivity
 } from '../../src/lib/server/standup/build';
 import { standupWindow } from '../../src/lib/server/standup/window';
+import type { OccurrenceDTO, TaskDTO } from '../../src/lib/types';
 import {
 	defaultPlan,
+	defaultSelection,
 	nextAfterLiquid,
+	selectToday,
+	separateReviews,
 	renderMarkdown,
 	standupMessages,
 	validatePlan,
@@ -36,7 +40,7 @@ const before = '2026-11-10T18:00:00Z';
 function raw(over: Partial<RawEvidence> = {}): RawEvidence {
 	return {
 		tz,
-		window: { label: 'Yesterday', from, to, todayEnd },
+		window: { label: 'Yesterday', from, to, todayEnd, today: '2026-11-17' },
 		tasksDone: [],
 		tasksOpen: [],
 		events: [],
@@ -57,6 +61,7 @@ const pr = (over: Partial<IntegrationRow> = {}): IntegrationRow => ({
 	state: 'review_required · success',
 	payload: {},
 	resolvedAt: null,
+	accountLogin: 'me',
 	...over
 });
 const review = (over: Partial<ReviewRow> = {}): ReviewRow => ({
@@ -111,6 +116,230 @@ describe('standup window', () => {
 	it('uses the local date, not UTC', () => {
 		// 02:00 UTC Tuesday is still Monday evening in New York → a Monday standup.
 		expect(standupWindow(tz, new Date('2026-11-17T02:00:00Z')).label).toBe('Last week');
+	});
+});
+
+const task = (over: Partial<TaskDTO> = {}): TaskDTO => ({
+	id: 't',
+	title: 'Task',
+	notes: null,
+	dueAt: null,
+	dueAllDay: true,
+	priority: 0,
+	completedAt: null,
+	source: 'manual',
+	externalUrl: null,
+	assignee: null,
+	...over
+});
+
+describe('ownership and planning (regressions from manual testing)', () => {
+	const issue = (id: string, dueDate: string | null) =>
+		pr({
+			id,
+			kind: 'issue',
+			provider: 'linear',
+			url: `u/${id}`,
+			title: id,
+			subtitle: 'ENG-1',
+			state: 'Todo',
+			payload: { dueDate }
+		});
+
+	it('offers every assigned ticket as an unchecked Today candidate, due work first', () => {
+		const { items } = buildItems(
+			raw({
+				items: [
+					issue('no-due', null),
+					issue('due-tomorrow', '2026-11-18'),
+					issue('due-today', '2026-11-17'),
+					issue('overdue', '2026-11-10')
+				]
+			})
+		);
+		expect(items.map((i) => i.title)).toEqual(['overdue', 'due-today', 'due-tomorrow', 'no-due']);
+		expect(
+			items.every((i) => i.section === 'today' && i.plan === 'off' && i.group === 'ticket')
+		).toBe(true);
+		expect(items.map((i) => i.statements.find((s) => s.key === 'due')?.text)).toEqual([
+			'overdue (due 2026-11-10)',
+			'due today',
+			'due 2026-11-18',
+			undefined
+		]);
+	});
+
+	it('keeps unchecked tickets out of Today and includes picked ones; meetings are automatic', () => {
+		const { items } = buildItems(
+			raw({
+				items: [issue('ENG-1 picked', null), issue('ENG-2 not picked', '2026-11-17')],
+				events: [
+					{
+						key: 'ev1',
+						eventId: 'ev',
+						title: 'Gym',
+						start: '2026-11-17T21:30:00Z',
+						end: '2026-11-17T22:30:00Z',
+						allDay: false,
+						location: null
+					} as unknown as OccurrenceDTO
+				]
+			})
+		);
+		const snap = snapshot(items);
+		const picked = items.find((i) => i.title === 'ENG-1 picked')!.id;
+		const md = renderMarkdown(
+			selectToday(snap, [picked]),
+			defaultPlan(selectToday(snap, [picked]), 'compact')
+		);
+		expect(md).toContain('ENG-1 picked');
+		expect(md).not.toContain('ENG-2 not picked');
+		expect(md).toContain('Gym');
+		// Nothing picked: still the meeting, no tickets.
+		const none = selectToday(snap, defaultSelection(snap));
+		expect(none.items.map((i) => i.title)).toEqual(['Gym']);
+	});
+
+	it('checks the user’s own planned work by default and leaves assigned work unchecked', () => {
+		const { items } = buildItems(
+			raw({
+				items: [
+					pr({ id: 'mine', url: 'u/mine' }),
+					pr({ id: 'rq', kind: 'review_request', url: 'u/rq' })
+				],
+				tasksOpen: [
+					task({ id: 'dated', title: 'Dated', dueAt: '2026-11-17T17:00:00Z' }),
+					task({ id: 'undated', title: 'Undated' })
+				],
+				workbench: wb({
+					tasks: [
+						{
+							id: 'w1',
+							title: 'Doing',
+							status: 'doing',
+							createdAt: before,
+							completedAt: null,
+							workspaceId: 'w',
+							workspace: null,
+							project: null
+						},
+						{
+							id: 'w2',
+							title: 'Todo',
+							status: 'todo',
+							createdAt: before,
+							completedAt: null,
+							workspaceId: 'w',
+							workspace: null,
+							project: null
+						}
+					]
+				})
+			})
+		);
+		expect(
+			Object.fromEntries(items.map((i) => [i.title === 'Add standup' ? i.verb : i.title, i.plan]))
+		).toEqual({
+			pr_open: 'on',
+			review_requested: 'off',
+			Dated: 'on',
+			Undated: 'off',
+			Doing: 'on',
+			Todo: 'off'
+		});
+		expect(items.find((i) => i.verb === 'review_requested')!.group).toBe('review');
+		expect(items.find((i) => i.verb === 'pr_open')!.group).toBe('pr');
+	});
+
+	it('ignores planner tasks mirrored from GitHub/Linear, keeps manual ones', () => {
+		const { items } = buildItems(
+			raw({
+				tasksDone: [
+					task({ id: 'm', title: 'Mine', completedAt: inWindow }),
+					task({ id: 'g', title: 'Review: Their PR', source: 'github', completedAt: inWindow }),
+					task({ id: 'l', title: 'ENG-1 ticket', source: 'linear', completedAt: inWindow })
+				],
+				tasksOpen: [
+					task({ id: 'o', title: 'Write notes' }),
+					task({ id: 'lo', title: 'Assigned ticket', source: 'linear' })
+				]
+			})
+		);
+		expect(items.map((i) => `${i.verb}:${i.title}`)).toEqual([
+			'completed_task:Mine',
+			'task_todo:Write notes'
+		]);
+	});
+
+	it('says only "Reviewed" for another author’s PR the user approved, never merged/completed', () => {
+		const theirs = pr({
+			id: 'rr',
+			kind: 'review_request',
+			title: 'Their feature',
+			url: 'https://github.com/acme/app/pull/99',
+			resolvedAt: inWindow,
+			payload: {
+				author: 'teammate',
+				outcome: 'merged',
+				outcomeAt: inWindow,
+				viewerReview: {
+					url: 'https://github.com/acme/app/pull/99#pullrequestreview-5',
+					state: 'APPROVED',
+					at: inWindow
+				}
+			}
+		});
+		const { items } = buildItems(
+			raw({
+				items: [theirs],
+				tasksDone: [
+					task({ title: 'Review: Their feature', source: 'github', completedAt: inWindow })
+				]
+			})
+		);
+		expect(items).toHaveLength(1);
+		expect(items[0]).toMatchObject({
+			section: 'past',
+			verb: 'reviewed_pr',
+			url: 'https://github.com/acme/app/pull/99#pullrequestreview-5',
+			related: [{ label: 'PR', url: 'https://github.com/acme/app/pull/99' }]
+		});
+		expect(items[0]!.statements[0]!.text).toBe('approved');
+	});
+
+	it('says nothing for a resolved review request without the user’s own GitHub review', () => {
+		const { items } = buildItems(
+			raw({
+				items: [
+					pr({
+						kind: 'review_request',
+						resolvedAt: inWindow,
+						payload: { outcome: 'merged', outcomeAt: inWindow }
+					})
+				]
+			})
+		);
+		expect(items).toEqual([]);
+	});
+
+	it('keeps one line when an Integration Review was posted for the same request', () => {
+		const rr = pr({
+			id: 'rr',
+			kind: 'review_request',
+			resolvedAt: inWindow,
+			payload: { viewerReview: { url: 'p/1', state: 'COMMENTED', at: inWindow } }
+		});
+		const { items } = buildItems(
+			raw({ items: [rr], reviews: [review({ itemId: 'rr', postedUrl: 'p/1' })] })
+		);
+		expect(items.map((i) => i.source.type)).toEqual(['pr_review']);
+	});
+
+	it('never attributes a PR authored by someone else, even if it reached the authored feed', () => {
+		const { items } = buildItems(
+			raw({ items: [pr({ payload: { author: 'teammate', createdAt: inWindow } })] })
+		);
+		expect(items).toEqual([]);
 	});
 });
 
@@ -511,6 +740,18 @@ describe('provider outcomes', () => {
 		).toEqual({ outcome: 'completed', at: 't' });
 		expect(githubOutcome({ id: '1', state: 'OPEN' })).toEqual({ outcome: 'open', at: null });
 		expect(githubOutcome({ id: '1' })).toBeNull();
+		expect(
+			githubOutcome({
+				id: '1',
+				state: 'MERGED',
+				mergedAt: 't',
+				viewerReviews: { nodes: [{ url: 'r', state: 'APPROVED', submittedAt: 's' }] }
+			})
+		).toEqual({
+			outcome: 'merged',
+			at: 't',
+			viewerReview: { url: 'r', state: 'APPROVED', at: 's' }
+		});
 		expect(linearOutcome({ id: '1', completedAt: 't', state: { type: 'completed' } })).toEqual({
 			outcome: 'completed',
 			at: 't'
@@ -523,5 +764,45 @@ describe('provider outcomes', () => {
 			outcome: 'open',
 			at: null
 		});
+	});
+});
+
+describe('dedupe', () => {
+	it('keeps separate Workbench tasks that share a workspace link', () => {
+		const t = (id: string) => ({
+			id,
+			title: id,
+			status: 'todo' as const,
+			createdAt: '2026-01-01T00:00:00Z',
+			completedAt: null,
+			workspaceId: 'w',
+			workspace: null,
+			project: null
+		});
+		const { items } = buildItems(raw({ workbench: wb({ tasks: [t('a'), t('b')] }) }));
+		expect(items.map((i) => i.title)).toEqual(['a', 'b']);
+	});
+});
+
+describe('separateReviews', () => {
+	it('puts reviews of others’ PRs after the user’s own work, even if a model interleaves them', () => {
+		const s = snapshot([
+			item('e1', 'past', { verb: 'reviewed_pr', title: 'Their PR' }),
+			item('e2', 'past', { verb: 'opened_pr', title: 'My PR' }),
+			item('e3', 'past', { verb: 'completed_task', title: 'My task' })
+		]);
+		const plan = separateReviews(s, {
+			past: [
+				{ id: 'e1', statements: [] },
+				{ id: 'e2', statements: [] },
+				{ id: 'e3', statements: [] }
+			],
+			today: []
+		});
+		expect(plan.past.map((e) => e.id)).toEqual(['e2', 'e3', 'e1']);
+		const lines = renderMarkdown(s, plan).split('\n');
+		expect(lines.findIndex((l) => l.includes('Reviewed PR: [Their PR]'))).toBeGreaterThan(
+			lines.findIndex((l) => l.includes('Completed task: [My task]'))
+		);
 	});
 });

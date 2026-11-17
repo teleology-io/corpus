@@ -1840,7 +1840,7 @@ export function mountWrx(root) {
 				const body = expanded
 					? `<div class="review-card-body"><div class="tabs review-tabs">${tabs}</div><div class="review-tab-content">${content}</div>${r ? reviewFooter(r, headMoved) : ''}</div>`
 					: '';
-				return `<section class="panel review-card ${expanded ? 'open' : ''}"><div class="review-card-head" data-review-head="${esc(itemId)}"><button class="square review-toggle" data-review-toggle="${esc(itemId)}" aria-expanded="${expanded}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${esc(title)}">${icon('chevron', 'twisty')}</button><div><a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(title)}</a><small>${esc(subtitle || '')}${author ? ` · ${esc(author)}` : ''}${requestCleared ? ' · review request cleared' : ''}</small></div><div class="review-card-actions">${badge(label, color)}${start}</div></div>${body}</section>`;
+				return `<section class="panel review-card ${expanded ? 'open' : ''}"><div class="review-card-head" data-review-head="${esc(itemId)}" tabindex="0" aria-expanded="${expanded}"><div><a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(title)}</a><small>${esc(subtitle || '')}${author ? ` · ${esc(author)}` : ''}${requestCleared ? ' · review request cleared' : ''}</small></div><div class="review-card-actions">${badge(label, color)}${start}</div></div>${body}</section>`;
 			})
 			.join('');
 		return `<div class="section-title"><div><h2>External reviews</h2><p>A first pass on other people's pull requests, private until you post it. It doesn't replace your review.</p></div><button data-action="review-settings">Reviewers</button></div>${externalReviewsError ? `<p class="review-warning">${esc(externalReviewsError)}</p>` : ''}${cards || `<div class="empty">${icon('branch')}<h3>Nothing waiting on you.</h3><p>Open pull requests that request your review appear here. Connect GitHub under Integrations if you haven't.</p></div>`}`;
@@ -2729,6 +2729,13 @@ export function mountWrx(root) {
 		const d = $('#files-drawer');
 		if (event.target === d || event.target.closest('[data-action], [data-file]')) d.close();
 	});
+	// Keyboard twin of clicking a review card's header, which has no toggle button of its own.
+	on(root, 'keydown', (event) => {
+		const head = event.target.closest?.('[data-review-head]');
+		if (!head || event.target !== head || (event.key !== 'Enter' && event.key !== ' ')) return;
+		event.preventDefault();
+		toggleReviewCard(head.dataset.reviewHead);
+	});
 	on(root, 'click', async (event) => {
 		const target = event.target.closest('button');
 		// The empty part of a review card's header toggles it too; its link and buttons keep their jobs.
@@ -2804,7 +2811,6 @@ export function mountWrx(root) {
 				render();
 			}
 			if (target.dataset.reviewApprove) reviewApproveDialog(target.dataset.reviewApprove);
-			if (target.dataset.reviewToggle) toggleReviewCard(target.dataset.reviewToggle);
 			if (target.dataset.reviewTab) {
 				reviewTab.set(target.dataset.item, target.dataset.reviewTab);
 				render();

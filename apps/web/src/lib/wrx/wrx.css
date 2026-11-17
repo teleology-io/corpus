@@ -3858,25 +3858,11 @@ body:has(.recording-bar) .wrx.files-fullscreen {
 .wrx .review-card-head {
 	cursor: pointer;
 }
-.wrx .review-card-head > .review-toggle {
-	flex: none;
-	width: 26px;
-	height: 26px;
-	padding: 0;
-	margin-right: -6px;
-	border: 0;
-	background: none;
-	color: var(--muted);
+.wrx .review-card-head:focus-visible {
+	outline: 2px solid var(--border-focused);
+	outline-offset: -2px;
 }
-.wrx .review-toggle .twisty {
-	width: 11px;
-	height: 11px;
-	transition: transform 0.12s;
-}
-.wrx .review-card.open .review-toggle .twisty {
-	transform: rotate(90deg);
-}
-.wrx .review-card-head > div:nth-child(2) {
+.wrx .review-card-head > div:first-child {
 	flex: 1;
 	min-width: 0;
 }
@@ -4169,8 +4155,5 @@ body:has(.recording-bar) .wrx.files-fullscreen {
 	.wrx .review-card-head {
 		align-items: flex-start;
 		flex-wrap: wrap;
-	}
-	.wrx .review-card-actions {
-		margin-left: 26px;
 	}
 }

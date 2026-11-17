@@ -3,6 +3,7 @@ import type { RequestEvent, RequestHandler } from './$types';
 import { requireCtx } from '#lib/server/ctx.js';
 import { workbenchAllowed } from '#lib/server/wrx/access.js';
 import {
+	approveGithubReview,
 	dismissFinding,
 	getReviewerSettings,
 	listExternalReviews,
@@ -38,6 +39,8 @@ export const POST: RequestHandler = async (event) => {
 			return json(await previewGithubReview(userId, body.reviewId));
 		case 'post':
 			return json(await postGithubReview(userId, body.reviewId));
+		case 'approve':
+			return json(await approveGithubReview(userId, body.reviewId));
 		case 'settings':
 			return json(getReviewerSettings(userId));
 		case 'save-settings':

@@ -143,7 +143,16 @@ export const prReview = pgTable(
 			.notNull()
 			.default([]),
 		error: text('error'),
+		/** What the change does, in the reviewers' words. Plain text from untrusted output. */
+		summary: text('summary'),
+		/** Findings from the previous review of this PR and whether this review found them fixed. */
+		previous: jsonb('previous')
+			.$type<{ id: string; severity: string; title: string; status: string }[]>()
+			.notNull()
+			.default([]),
 		postedUrl: text('posted_url'),
+		/** The approving review, when the user approved from here. */
+		approvedUrl: text('approved_url'),
 		/** GitHub login that authored the posted review, as returned by the review API. */
 		postedBy: text('posted_by'),
 		createdAt: createdAt(),

@@ -6,7 +6,9 @@ import {
 	parseCrosscheck,
 	parseReview,
 	parseVoice,
+	resolvePrevious,
 	type Finding,
+	type PreviousFinding,
 	type ReviewStatus,
 	type ReviewerResult,
 	type ReviewerRole
@@ -71,7 +73,10 @@ export interface ReviewDeps {
 
 export interface ReviewOutcome {
 	status: ReviewStatus;
+	/** What the change does. The Integrator's, since it reads outward from the diff. */
+	summary: string;
 	findings: Finding[];
+	previous: PreviousFinding[];
 	questions: string[];
 	notReviewed: { path: string; reason: string }[];
 	notices: string[];
@@ -85,6 +90,8 @@ export async function reviewPullRequest(input: {
 	personas?: Partial<Record<ReviewerRole, string | null>>;
 	/** Rewords the finished findings in this voice. */
 	voice?: { slot: ReviewSlot; text: string } | null;
+	/** Live findings from the review of an earlier commit, for the reviewers to recheck. */
+	previous?: Finding[];
 	bundleDir: string;
 	treeState: string;
 	partial: boolean;
@@ -103,7 +110,13 @@ export async function reviewPullRequest(input: {
 
 	// One retry on unusable output. A reviewer that still fails makes the whole review failed.
 	const firstPass = async (i: number): Promise<ReviewerResult | null> => {
-		const prompt = reviewPrompt(ROLES[i], bundleDir, treeState, personas?.[ROLES[i]]);
+		const prompt = reviewPrompt(
+			ROLES[i],
+			bundleDir,
+			treeState,
+			personas?.[ROLES[i]],
+			input.previous
+		);
 		for (let attempt = 0; attempt < 2; attempt++) {
 			deps.progress?.reviewer(ROLES[i], attempt ? 'retrying' : 'working');
 			const run = await call(slots[i], prompt, ROLES[i]);
@@ -153,7 +166,9 @@ export async function reviewPullRequest(input: {
 	}
 
 	const base = {
+		summary: results.map((r) => r?.summary).find(Boolean) ?? '',
 		findings,
+		previous: resolvePrevious(input.previous ?? [], results),
 		questions: results.flatMap((r) => r?.questions ?? []),
 		notReviewed: results.flatMap((r) => r?.notReviewed ?? []),
 		notices: [] as string[],

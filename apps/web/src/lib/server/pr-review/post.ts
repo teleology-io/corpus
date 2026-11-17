@@ -24,12 +24,14 @@ function renderFinding(f: Finding) {
 }
 
 /**
- * Dropped and dismissed findings stay out. Everything else is posted: findings GitHub can't anchor
+ * Dropped, dismissed and already-posted findings stay out. Everything else is posted: findings GitHub can't anchor
  * to a diff line go in the review body, because a rejected or skipped comment would lose them.
  */
 export function buildGithubReview(findings: Finding[], patch: string) {
 	const lines = commentableLines(patch);
-	const live = findings.filter((f) => !f.dropped && f.outcome !== 'dismissed');
+	const live = findings.filter(
+		(f) => !f.dropped && f.outcome !== 'dismissed' && f.outcome !== 'posted'
+	);
 	const comments: ReviewComment[] = [];
 	const unanchored: Finding[] = [];
 	for (const f of live) {

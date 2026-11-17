@@ -1526,6 +1526,45 @@ export function mountWrx(root) {
 		stale: ['New commits since review', 'red']
 	};
 	const SEVERITY_ORDER = { blocker: 0, major: 1, minor: 2 };
+	const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+	// Counted, not written by a model, so it can't drift from the findings below it.
+	function reviewVerdict(r, open) {
+		const count = (sev) => open.filter((f) => f.severity === sev).length;
+		const [blockers, majors, minors] = ['blocker', 'major', 'minor'].map(count);
+		const parts = [
+			blockers && plural(blockers, 'blocker'),
+			majors && plural(majors, 'major'),
+			minors && `${minors} minor`
+		].filter(Boolean);
+		const verdict = !open.length
+			? r.status === 'clean'
+				? 'No issues found.'
+				: 'Nothing open.'
+			: `${parts.join(', ')}. ${blockers ? "Don't merge yet." : majors ? 'Fix before or soon after merge.' : 'Fine to merge.'}`;
+		return r.status === 'partial' ? `${verdict} Some files weren't reviewed.` : verdict;
+	}
+	function reviewSummary(r, open) {
+		const prev = r.previous || [];
+		const fixed = prev.filter((p) => p.status === 'fixed').length;
+		const since = prev.length
+			? `<span>${fixed} of ${prev.length} earlier finding${prev.length === 1 ? '' : 's'} fixed.</span>`
+			: '';
+		return `<div class="review-summary">${r.summary ? `<p>${esc(r.summary)}</p>` : ''}<p class="review-verdict"><b>${esc(reviewVerdict(r, open))}</b>${since}</p></div>`;
+	}
+	const PREVIOUS_LABELS = { fixed: 'Fixed', open: 'Still open', unknown: 'Not checked' };
+	function reviewPrevious(r) {
+		const prev = r.previous || [];
+		if (!prev.length) return '';
+		const order = { open: 0, unknown: 1, fixed: 2 };
+		const rows = [...prev]
+			.sort((a, b) => order[a.status] - order[b.status])
+			.map(
+				(p) =>
+					`<li class="${esc(p.status)}"><span>${esc(PREVIOUS_LABELS[p.status] ?? p.status)}</span><span class="severity">${esc(p.severity)}</span>${esc(p.title)}</li>`
+			)
+			.join('');
+		return `<details class="review-previous" ${prev.some((p) => p.status !== 'fixed') ? 'open' : ''}><summary>Since last review</summary><ul>${rows}</ul></details>`;
+	}
 	function reviewFinding(r, f) {
 		const dismissed = f.outcome === 'dismissed';
 		const where = f.file ? `${f.file}${f.line ? `:${f.line}` : ''}` : '';
@@ -1566,7 +1605,7 @@ export function mountWrx(root) {
 	}
 	function reviewPreviewPanel(reviewId) {
 		if (reviewPreview?.reviewId !== reviewId) return '';
-		return `<section class="review-preview"><h4>Preview: this posts to GitHub as your account, comment-only</h4>${reviewPreview.headMoved ? '<p class="review-warning">New commits landed since this review. Re-review before posting.</p>' : ''}<pre>${esc(reviewPreview.body)}</pre>${reviewPreview.comments.map((c) => `<code>${esc(c.path)}:${esc(c.line)}</code><pre>${esc(c.body)}</pre>`).join('')}<div class="actions"><button data-review-preview-close>Cancel</button>${reviewPreview.headMoved ? '' : `<button class="primary" data-review-post="${esc(reviewId)}">Post to GitHub</button>`}</div></section>`;
+		return `<section class="review-preview"><h4>Preview: this posts to GitHub as your account, comment-only</h4>${reviewPreview.headMoved ? '<p class="review-warning">New commits landed since this review. Re-review before posting.</p>' : ''}<pre>${esc(reviewPreview.body)}</pre>${reviewPreview.comments.map((c) => `<code>${esc(c.path)}:${esc(c.line)}</code><pre>${esc(c.body)}</pre>`).join('')}<div class="actions"><button data-review-preview-close>Cancel</button>${reviewPreview.headMoved ? '' : `<button data-review-approve="${esc(reviewId)}">Approve with these comments</button><button class="primary" data-review-post="${esc(reviewId)}">Post to GitHub</button>`}</div></section>`;
 	}
 	const REVIEW_STAGES = [
 		['preparing', 'Get the code'],
@@ -1610,20 +1649,66 @@ export function mountWrx(root) {
 			.join('');
 		return `<div class="review-progress"><div class="review-progress-head"><ol>${steps}</ol><span>${esc(reviewDuration(p.elapsedSeconds))}</span></div>${reviewers}</div>`;
 	}
-	function reviewBody(r) {
+	const APPROVABLE = ['clean', 'findings', 'partial'];
+	function reviewApproveDialog(reviewId) {
+		const r = externalReviews?.find((x) => x.review?.id === reviewId)?.review;
+		if (!r) return;
+		const open = r.findings.filter(
+			(f) => !f.dropped && f.outcome !== 'dismissed' && f.outcome !== 'posted'
+		);
+		const blockers = open.filter((f) => f.severity === 'blocker').length;
+		modal(
+			'Approve on GitHub?',
+			[
+				'Posts an approving review as your account.',
+				open.length ? `${esc(plural(open.length, 'open finding'))} go with it as comments.` : '',
+				blockers ? `<b>${esc(plural(blockers, 'blocker'))} still open.</b>` : ''
+			]
+				.filter(Boolean)
+				.join(' '),
+			'',
+			'Approve',
+			async () => {
+				await api('external-reviews', { action: 'approve', reviewId });
+				reviewPreview = null;
+				await loadExternalReviews();
+				toast('Approved on GitHub');
+			}
+		);
+	}
+	function reviewBody(r, headMoved) {
 		if (r.status === 'running') return reviewProgress(r.progress);
 		const sorted = [...r.findings].sort(
 			(a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
 		);
 		const live = sorted.filter((f) => !f.dropped);
 		const dropped = sorted.filter((f) => f.dropped);
-		const canPost = !r.postedUrl && live.some((f) => f.outcome !== 'dismissed');
+		const open = live.filter((f) => f.outcome !== 'dismissed' && f.outcome !== 'posted');
+		const canPost = !r.postedUrl && !headMoved && open.length > 0;
+		const canApprove = !r.approvedUrl && !headMoved && APPROVABLE.includes(r.status);
+		const links = [
+			r.approvedUrl &&
+				`<a href="${esc(r.approvedUrl)}" target="_blank" rel="noreferrer">Approved on GitHub</a>`,
+			r.postedUrl &&
+				r.postedUrl !== r.approvedUrl &&
+				`<a href="${esc(r.postedUrl)}" target="_blank" rel="noreferrer">Posted to GitHub</a>`,
+			canPost &&
+				`<button class="text-button" data-review-preview="${esc(r.id)}">Preview and post</button>`,
+			canApprove && `<button data-review-approve="${esc(r.id)}">Approve</button>`
+		]
+			.filter(Boolean)
+			.join('');
 		return [
+			APPROVABLE.includes(r.status) || r.status === 'stale' ? reviewSummary(r, open) : '',
+			headMoved
+				? '<p class="review-warning">New commits since this review. Re-review to check the fixes.</p>'
+				: '',
 			r.error ? `<p class="review-warning">${esc(r.error)}</p>` : '',
 			...r.notices.map((n) => `<p class="review-note">${esc(n)}</p>`),
 			r.notReviewed.length
 				? `<p class="review-warning">Not reviewed: ${r.notReviewed.map((n) => `${esc(n.path)}${n.reason ? ` (${esc(n.reason)})` : ''}`).join(', ')}</p>`
 				: '',
+			reviewPrevious(r),
 			live.map((f) => reviewFinding(r, f)).join(''),
 			r.questions.length
 				? `<div class="review-note"><b>Questions</b><ul>${r.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ul></div>`
@@ -1631,7 +1716,7 @@ export function mountWrx(root) {
 			dropped.length
 				? `<details class="review-dropped"><summary>${dropped.length} refuted finding${dropped.length === 1 ? '' : 's'}</summary>${dropped.map((f) => reviewFinding(r, f)).join('')}</details>`
 				: '',
-			`<div class="review-meta"><span>${esc(r.headSha.slice(0, 10))} · $${Number(r.costUsd).toFixed(2)}</span>${r.postedUrl ? `<a href="${esc(r.postedUrl)}" target="_blank" rel="noreferrer">Posted to GitHub</a>` : canPost ? `<button class="text-button" data-review-preview="${esc(r.id)}">Preview and post</button>` : ''}</div>`,
+			`<div class="review-meta"><span>${esc(r.headSha.slice(0, 10))} · $${Number(r.costUsd).toFixed(2)}</span><div class="review-meta-actions">${links}</div></div>`,
 			reviewPreviewPanel(r.id)
 		].join('');
 	}
@@ -1642,15 +1727,26 @@ export function mountWrx(root) {
 		}
 		const running = externalReviews.some((x) => x.review?.status === 'running');
 		const cards = externalReviews
-			.map(({ id: itemId, title, subtitle, url, author, review: r }) => {
-				const [label, color] = r
-					? (REVIEW_STATES[r.status] ?? [r.status, 'red'])
-					: ['Not reviewed', ''];
+			.map(({ id: itemId, title, subtitle, url, author, requestCleared, headSha, review: r }) => {
+				// The PR's live head against the reviewed one: a push means fixes may be waiting.
+				const headMoved = !!(
+					r &&
+					headSha &&
+					[...APPROVABLE, 'stale'].includes(r.status) &&
+					r.headSha !== headSha
+				);
+				const [label, color] = !r
+					? ['Not reviewed', '']
+					: headMoved
+						? ['New commits', 'amber']
+						: r.approvedUrl
+							? ['Approved', 'green']
+							: (REVIEW_STATES[r.status] ?? [r.status, 'red']);
 				const start =
 					r?.status === 'running'
 						? ''
-						: `<button ${running ? 'disabled' : ''} data-review-start="${esc(itemId)}">${r ? 'Re-review' : 'Review'}</button>`;
-				return `<section class="panel review-card"><div class="review-card-head"><div><a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(title)}</a><small>${esc(subtitle || '')}${author ? ` · ${esc(author)}` : ''}</small></div><div class="review-card-actions">${badge(label, color)}${start}</div></div>${r ? `<div class="review-card-body">${reviewBody(r)}</div>` : ''}</section>`;
+						: `<button ${running ? 'disabled' : ''} ${headMoved ? 'class="primary"' : ''} data-review-start="${esc(itemId)}">${r ? 'Re-review' : 'Review'}</button>`;
+				return `<section class="panel review-card"><div class="review-card-head"><div><a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(title)}</a><small>${esc(subtitle || '')}${author ? ` · ${esc(author)}` : ''}${requestCleared ? ' · review request cleared' : ''}</small></div><div class="review-card-actions">${badge(label, color)}${start}</div></div>${r ? `<div class="review-card-body">${reviewBody(r, headMoved)}</div>` : ''}</section>`;
 			})
 			.join('');
 		return `<div class="section-title"><div><h2>External reviews</h2><p>A first pass on other people's pull requests, private until you post it. It doesn't replace your review.</p></div><button data-action="review-settings">Reviewers</button></div>${externalReviewsError ? `<p class="review-warning">${esc(externalReviewsError)}</p>` : ''}${cards || `<div class="empty">${icon('branch')}<h3>Nothing waiting on you.</h3><p>Open pull requests that request your review appear here. Connect GitHub under Integrations if you haven't.</p></div>`}`;
@@ -2607,6 +2703,7 @@ export function mountWrx(root) {
 				reviewPreview = null;
 				render();
 			}
+			if (target.dataset.reviewApprove) reviewApproveDialog(target.dataset.reviewApprove);
 			if (target.dataset.reviewPost) {
 				const posted = await api('external-reviews', {
 					action: 'post',

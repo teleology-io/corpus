@@ -173,18 +173,26 @@ export async function pullTarball(token: string, ref: PullRef, sha: string) {
 	return res.body;
 }
 
-/** Posts as the connected user. Comment-only by construction: it can't approve or block a PR. */
+/**
+ * Posts as the connected user. Comments, or approves when the user explicitly asks. It never requests
+ * changes: blocking someone's PR stays a decision made on GitHub.
+ */
 export async function postPullReview(
 	token: string,
 	ref: PullRef,
-	review: { commitSha: string; body: string; comments: ReviewComment[] }
+	review: {
+		commitSha: string;
+		body: string;
+		comments: ReviewComment[];
+		event?: 'COMMENT' | 'APPROVE';
+	}
 ): Promise<{ url: string; author: string | null }> {
 	const path = `${base(ref)}/pulls/${ref.number}/reviews`;
 	const res = await request(token, path, {
 		method: 'POST',
 		body: JSON.stringify({
 			commit_id: review.commitSha,
-			event: 'COMMENT',
+			event: review.event ?? 'COMMENT',
 			body: review.body,
 			comments: review.comments.map((c) => ({
 				path: c.path,

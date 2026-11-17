@@ -137,6 +137,34 @@ function toItem(n: Node, kind: ExternalItem['kind']): ExternalItem {
 	};
 }
 
+export interface PullHead {
+	/** OPEN | CLOSED | MERGED */
+	state: string;
+	headSha: string;
+}
+
+/** Current state and head commit for PR node ids, in one call. Unknown or inaccessible ids are left out. */
+export async function pullHeads(
+	token: string,
+	nodeIds: string[]
+): Promise<Record<string, PullHead>> {
+	const out: Record<string, PullHead> = {};
+	for (let i = 0; i < nodeIds.length; i += 100) {
+		const data = await gql<{
+			nodes: ({ id?: string; state?: string; headRefOid?: string } | null)[];
+		}>(
+			token,
+			'query($ids: [ID!]!) { nodes(ids: $ids) { ... on PullRequest { id state headRefOid } } }',
+			{
+				ids: nodeIds.slice(i, i + 100)
+			}
+		);
+		for (const n of data.nodes)
+			if (n?.id && n.state && n.headRefOid) out[n.id] = { state: n.state, headSha: n.headRefOid };
+	}
+	return out;
+}
+
 export const github: Provider = {
 	id: 'github',
 	name: 'GitHub',

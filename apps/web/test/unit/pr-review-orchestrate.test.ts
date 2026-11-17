@@ -123,6 +123,33 @@ describe('reviewPullRequest', () => {
 	});
 });
 
+describe('summary and re-review', () => {
+	it("uses the integrator's summary and rechecks previous findings", async () => {
+		const prompts: string[] = [];
+		const withSummary = (summary: string, previous = {}) =>
+			fenced('review-findings', {
+				verdict: 'clean',
+				summary,
+				findings: [],
+				previous: Object.entries(previous).map(([id, status]) => ({ id, status }))
+			});
+		const run = async (_slot: unknown, prompt: string) => {
+			prompts.push(prompt);
+			return prompt.startsWith('You are the Integrator')
+				? ok(withSummary('Adds retries.', { 'breaker:race': 'fixed' }))
+				: ok(withSummary('Breaker view.'));
+		};
+		const out = await review(run as never, {
+			previous: [{ id: 'breaker:race', severity: 'blocker', title: 'Race' }]
+		});
+		expect(out.summary).toBe('Adds retries.');
+		expect(out.previous).toEqual([
+			{ id: 'breaker:race', severity: 'blocker', title: 'Race', status: 'fixed' }
+		]);
+		expect(prompts.every((p) => p.includes('PREVIOUS REVIEW'))).toBe(true);
+	});
+});
+
 describe('voice pass', () => {
 	const voice = {
 		slot: { provider: 'claude' as const, model: 'haiku', tools: false },

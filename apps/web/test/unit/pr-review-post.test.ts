@@ -92,4 +92,9 @@ describe('buildGithubReview', () => {
 		const out = buildGithubReview([finding({ title: 'cc @octocat and @org/team' })], patch);
 		expect(out.comments[0].body).not.toMatch(/@[\w-]/);
 	});
+
+	it('leaves out findings already posted', () => {
+		const out = buildGithubReview([finding({ outcome: 'posted' }), finding({ id: 'b' })], patch);
+		expect(out.ids).toEqual(['b']);
+	});
 });

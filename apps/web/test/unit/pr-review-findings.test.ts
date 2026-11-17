@@ -5,6 +5,7 @@ import {
 	liveBlockers,
 	parseCrosscheck,
 	parseReview,
+	resolvePrevious,
 	uniqueIds,
 	type Finding,
 	type ReviewerResult
@@ -35,7 +36,14 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
 	...over
 });
 
-const clean: ReviewerResult = { verdict: 'clean', notReviewed: [], findings: [], questions: [] };
+const clean: ReviewerResult = {
+	verdict: 'clean',
+	summary: '',
+	notReviewed: [],
+	findings: [],
+	questions: [],
+	previous: {}
+};
 
 describe('parseReview', () => {
 	it('reads the last block, so quoted examples earlier do not win', () => {
@@ -168,6 +176,48 @@ describe('uniqueIds', () => {
 		expect(parseReview(text, 'breaker')?.findings.map((f) => f.id)).toEqual([
 			'breaker:race',
 			'breaker:race#2'
+		]);
+	});
+});
+
+describe('summary and previous findings', () => {
+	it('reads the summary and previous statuses, ignoring unknown statuses', () => {
+		const parsed = parseReview(
+			fenced('review-findings', {
+				verdict: 'clean',
+				summary: '  Adds retries to the charge call. ',
+				findings: [],
+				previous: [
+					{ id: 'breaker:race', status: 'fixed' },
+					{ id: 'integrator:x', status: 'maybe' },
+					{ status: 'open' }
+				]
+			}),
+			'breaker'
+		);
+		expect(parsed?.summary).toBe('Adds retries to the charge call.');
+		expect(parsed?.previous).toEqual({ 'breaker:race': 'fixed' });
+	});
+
+	it('defaults to no summary and no previous', () => {
+		const parsed = parseReview(
+			fenced('review-findings', { verdict: 'clean', findings: [] }),
+			'x' as never
+		);
+		expect(parsed?.summary).toBe('');
+		expect(parsed?.previous).toEqual({});
+	});
+
+	it('only calls a finding fixed when no reviewer still sees it', () => {
+		const prev = [finding({ id: 'a' }), finding({ id: 'b' }), finding({ id: 'c' })];
+		const out = resolvePrevious(prev, [
+			{ ...clean, previous: { a: 'fixed', b: 'fixed' } },
+			{ ...clean, previous: { b: 'open' } }
+		]);
+		expect(out.map((p) => [p.id, p.status])).toEqual([
+			['a', 'fixed'],
+			['b', 'open'],
+			['c', 'unknown']
 		]);
 	});
 });

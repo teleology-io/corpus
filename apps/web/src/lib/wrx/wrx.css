@@ -3934,6 +3934,71 @@ body:has(.recording-bar) .wrx.files-fullscreen {
 	color: var(--muted);
 	font-size: 12px;
 }
+.wrx .review-meta-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 10px;
+}
+.wrx .review-summary {
+	margin: 0 0 12px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--border);
+	overflow-wrap: anywhere;
+}
+.wrx .review-summary p {
+	margin: 0 0 4px;
+}
+.wrx .review-verdict {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.wrx .review-verdict span {
+	color: var(--text-secondary);
+}
+.wrx .review-previous {
+	margin-bottom: 10px;
+}
+.wrx .review-previous summary {
+	cursor: pointer;
+	color: var(--text-secondary);
+	margin-bottom: 6px;
+}
+.wrx .review-previous ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.wrx .review-previous li {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 3px 0;
+	overflow-wrap: anywhere;
+}
+.wrx .review-previous li > span:first-child {
+	flex-shrink: 0;
+	min-width: 72px;
+	font-size: 12px;
+	font-weight: 600;
+}
+.wrx .review-previous li.fixed {
+	color: var(--text-secondary);
+}
+.wrx .review-previous li.fixed > span:first-child {
+	color: var(--success);
+}
+.wrx .review-previous li.open > span:first-child {
+	color: var(--error);
+}
+.wrx .review-previous .severity {
+	flex-shrink: 0;
+	color: var(--muted);
+	font-size: 11px;
+	text-transform: uppercase;
+}
 .wrx .reviewer-settings {
 	display: grid;
 	gap: 10px;

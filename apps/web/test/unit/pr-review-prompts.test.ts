@@ -18,4 +18,14 @@ describe('review prompts', () => {
 		expect(prompt).toContain('breaker:race');
 		expect(prompt).not.toContain('review-findings');
 	});
+
+	it('asks for a recheck of previous findings only when there are some', () => {
+		expect(reviewPrompt('breaker', '/b', 'at head')).not.toContain('PREVIOUS REVIEW');
+		const prompt = reviewPrompt('breaker', '/b', 'at head', null, [
+			{ id: 'integrator:race', severity: 'major', title: 'Race' } as never
+		]);
+		expect(prompt.startsWith('You are the Breaker')).toBe(true);
+		expect(prompt).toContain('PREVIOUS REVIEW');
+		expect(prompt).toContain('integrator:race');
+	});
 });

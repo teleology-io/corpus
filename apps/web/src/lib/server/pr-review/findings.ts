@@ -42,9 +42,22 @@ export function uniqueIds<T extends { id: string }>(findings: T[]): T[] {
 
 export interface ReviewerResult {
 	verdict: 'clean' | 'findings';
+	/** What the change does, in the reviewer's words. Empty when it gave none. */
+	summary: string;
 	notReviewed: { path: string; reason: string }[];
 	findings: Finding[];
 	questions: string[];
+	/** Previous-review finding id to whether this reviewer found it fixed in the new code. */
+	previous: Record<string, 'fixed' | 'open'>;
+}
+
+/** A finding from the previous review, with what this review made of it. */
+export interface PreviousFinding {
+	id: string;
+	severity: Severity;
+	title: string;
+	/** fixed: no reviewer still sees it. open: one does. unknown: neither said. */
+	status: 'fixed' | 'open' | 'unknown';
 }
 
 export interface CrosscheckResult {
@@ -71,6 +84,8 @@ function lastBlock(text: string, tag: string): unknown {
 		return null;
 	}
 }
+
+const MAX_SUMMARY_LENGTH = 600;
 
 /** Reviewer output, or null when it can't be trusted. A null must not become a clean review. */
 export function parseReview(text: string, reviewer: ReviewerRole): ReviewerResult | null {
@@ -108,12 +123,32 @@ export function parseReview(text: string, reviewer: ReviewerRole): ReviewerResul
 	const notReviewed = Array.isArray(coverage?.not_reviewed)
 		? coverage.not_reviewed.map((n) => ({ path: asText(n?.path), reason: asText(n?.reason) }))
 		: [];
+	const previous: Record<string, 'fixed' | 'open'> = {};
+	if (Array.isArray(raw.previous))
+		for (const p of raw.previous as Record<string, unknown>[]) {
+			const id = asText(p?.id);
+			if (id && (p.status === 'fixed' || p.status === 'open')) previous[id] = p.status;
+		}
 	return {
 		verdict: raw.verdict,
+		summary: asText(raw.summary).slice(0, MAX_SUMMARY_LENGTH),
 		notReviewed,
 		findings: uniqueIds(findings),
-		questions: asTexts(raw.questions)
+		questions: asTexts(raw.questions),
+		previous
 	};
+}
+
+/** Fixed only when a reviewer says so and neither still sees it: a wrong "fixed" hides a live bug. */
+export function resolvePrevious(
+	previous: Finding[],
+	results: (ReviewerResult | null)[]
+): PreviousFinding[] {
+	return previous.map(({ id, severity, title }) => {
+		const said = results.map((r) => r?.previous[id]);
+		const status = said.includes('open') ? 'open' : said.includes('fixed') ? 'fixed' : 'unknown';
+		return { id, severity, title, status };
+	});
 }
 
 export function parseCrosscheck(text: string): CrosscheckResult[] | null {

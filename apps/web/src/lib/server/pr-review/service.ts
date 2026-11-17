@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { error } from '@sveltejs/kit';
-import { and, desc, eq, isNull, notInArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, ne, notInArray, or } from 'drizzle-orm';
 import { db, schema } from '@corpus/db';
 import { accessToken } from '@corpus/db/connections';
 import {
@@ -11,12 +11,14 @@ import {
 	postPullReview,
 	pullDetails,
 	pullDiff,
+	pullHeads,
 	pullTarball,
+	type PullHead,
 	type PullRef
 } from '@corpus/core/integrations';
 import { agentEnv, command } from '../wrx/core.js';
 import { buildBundle, removeTree } from './bundle';
-import { uniqueIds, type Finding } from './findings';
+import { liveFindings, uniqueIds, type Finding } from './findings';
 import { DEFAULT_SLOTS, resolveSlots, reviewPullRequest, ROLES } from './orchestrate';
 import { buildGithubReview } from './post';
 import { PERSONAS } from './prompts';
@@ -94,18 +96,79 @@ async function markInterrupted(userId: string) {
 		);
 }
 
-/** Open PRs that asked for your review, each with its newest review. */
+// Posting a review clears the request on GitHub, which resolves the item. A PR you reviewed stays
+// listed this long after that, while it's open, so you can re-review the author's fixes.
+const FOLLOW_DAYS = 30;
+const HEADS_TTL_MS = 60_000;
+
+type HeadsEntry = { key: string; at: number; heads: Record<string, PullHead> };
+// userId -> the last live lookup, so the 5s poll during a run doesn't call GitHub each time.
+const headsCache: Map<string, HeadsEntry> = ((
+	globalThis as { __prReviewHeads?: Map<string, HeadsEntry> }
+).__prReviewHeads ??= new Map());
+
+const nodeId = (externalId: string) => externalId.slice(externalId.indexOf(':') + 1);
+
+/** Current state and head by external id. Best effort: a failed lookup just shows no live state. */
+async function liveHeads(
+	userId: string,
+	rows: { externalId: string; connection: typeof conn.$inferSelect }[]
+) {
+	const key = rows
+		.map((r) => r.externalId)
+		.sort()
+		.join(',');
+	const cached = headsCache.get(userId);
+	if (cached && cached.key === key && Date.now() - cached.at < HEADS_TTL_MS) return cached.heads;
+	const byConnection = new Map<string, typeof rows>();
+	for (const r of rows)
+		byConnection.set(r.connection.id, [...(byConnection.get(r.connection.id) ?? []), r]);
+	const heads: Record<string, PullHead> = {};
+	await Promise.all(
+		[...byConnection.values()].map(async (group) => {
+			try {
+				const found = await pullHeads(
+					await accessToken(group[0].connection),
+					group.map((r) => nodeId(r.externalId))
+				);
+				for (const r of group) {
+					const h = found[nodeId(r.externalId)];
+					if (h) heads[r.externalId] = h;
+				}
+			} catch (e) {
+				console.warn('[pr-review] live PR lookup failed:', (e as Error).message);
+			}
+		})
+	);
+	headsCache.set(userId, { key, at: Date.now(), heads });
+	return heads;
+}
+
+/**
+ * Open PRs that asked for your review, plus open ones you reviewed after GitHub cleared the request,
+ * each with its newest review and the PR's current head.
+ */
 export async function listExternalReviews(userId: string) {
 	await markInterrupted(userId);
-	const items = await db
+	const reviews = await db
+		.select()
+		.from(review)
+		.where(eq(review.userId, userId))
+		.orderBy(desc(review.createdAt));
+	const reviewed = [...new Set(reviews.map((r) => r.itemId))];
+	const cutoff = new Date(Date.now() - FOLLOW_DAYS * 86_400_000);
+	const rows = await db
 		.select({
 			id: item.id,
+			externalId: item.externalId,
 			title: item.title,
 			subtitle: item.subtitle,
 			url: item.url,
 			state: item.state,
 			updatedAt: item.externalUpdatedAt,
-			payload: item.payload
+			resolvedAt: item.resolvedAt,
+			payload: item.payload,
+			connection: conn
 		})
 		.from(item)
 		.innerJoin(conn, eq(item.connectionId, conn.id))
@@ -114,15 +177,21 @@ export async function listExternalReviews(userId: string) {
 				eq(conn.userId, userId),
 				eq(conn.provider, 'github'),
 				eq(item.kind, 'review_request'),
-				isNull(item.resolvedAt)
+				reviewed.length
+					? or(
+							isNull(item.resolvedAt),
+							and(inArray(item.id, reviewed), gte(item.resolvedAt, cutoff))
+						)
+					: isNull(item.resolvedAt)
 			)
 		)
 		.orderBy(desc(item.externalUpdatedAt));
-	const reviews = await db
-		.select()
-		.from(review)
-		.where(eq(review.userId, userId))
-		.orderBy(desc(review.createdAt));
+	// The worker records why an item left the feed; a merged or closed PR has nothing left to review.
+	const items = rows.filter((i) => {
+		const outcome = (i.payload as { outcome?: string } | null)?.outcome;
+		return !i.resolvedAt || (outcome !== 'merged' && outcome !== 'closed');
+	});
+	const heads = await liveHeads(userId, items);
 	const withProgress = (r: (typeof reviews)[number]) => {
 		const progress = liveProgress.get(r.id);
 		return {
@@ -131,15 +200,23 @@ export async function listExternalReviews(userId: string) {
 			progress: progress ? progressView(progress) : null
 		};
 	};
-	return items.map((i) => {
-		const latest = reviews.find((r) => r.itemId === i.id);
-		return {
-			...i,
-			author: (i.payload as { author?: string } | null)?.author ?? null,
-			payload: undefined,
-			review: latest ? withProgress(latest) : null
-		};
-	});
+	return (
+		items
+			// Merged or closed after the request cleared, which the worker no longer sees.
+			.filter((i) => !i.resolvedAt || (heads[i.externalId]?.state ?? 'OPEN') === 'OPEN')
+			.map(({ connection: _, externalId, payload, resolvedAt, ...i }) => {
+				const latest = reviews.find((r) => r.itemId === i.id);
+				return {
+					...i,
+					author: (payload as { author?: string } | null)?.author ?? null,
+					/** GitHub no longer lists you as a requested reviewer, usually because you reviewed it. */
+					requestCleared: !!resolvedAt,
+					/** The PR's head now, when GitHub answered. Differs from the review's after a push. */
+					headSha: heads[externalId]?.headSha ?? null,
+					review: latest ? withProgress(latest) : null
+				};
+			})
+	);
 }
 
 async function ownItem(userId: string, itemId: string) {
@@ -177,6 +254,7 @@ export async function startExternalReview(userId: string, itemId: string) {
 		const { connection, ref } = await ownItem(userId, itemId);
 		const token = await accessToken(connection);
 		const pr = await pullDetails(token, ref);
+		const previous = await previousFindings(userId, itemId, pr.headSha);
 		const [row] = await db
 			.insert(review)
 			.values({ itemId, userId, headSha: pr.headSha, status: 'running' })
@@ -190,14 +268,18 @@ export async function startExternalReview(userId: string, itemId: string) {
 					notReviewed: [],
 					notices: [],
 					costUsd: 0,
-					postedUrl: null
+					summary: null,
+					previous: [],
+					postedUrl: null,
+					postedBy: null,
+					approvedUrl: null
 				}
 			})
 			.returning();
 		active.set(userId, row.id);
 		const progress = createProgress(ROLES);
 		liveProgress.set(row.id, progress);
-		void execute(userId, row.id, token, ref, pr, progress).finally(() => {
+		void execute(userId, row.id, token, ref, pr, progress, previous).finally(() => {
 			active.delete(userId);
 			liveProgress.delete(row.id);
 		});
@@ -208,13 +290,38 @@ export async function startExternalReview(userId: string, itemId: string) {
 	}
 }
 
+/**
+ * What the newest review of an earlier commit left standing, for the reviewers to recheck. Dismissed
+ * findings stay out: you already decided they don't matter.
+ */
+async function previousFindings(userId: string, itemId: string, headSha: string) {
+	const [row] = await db
+		.select({ findings: review.findings })
+		.from(review)
+		.where(
+			and(
+				eq(review.userId, userId),
+				eq(review.itemId, itemId),
+				ne(review.headSha, headSha),
+				inArray(review.status, ['findings', 'partial', 'stale'])
+			)
+		)
+		.orderBy(desc(review.createdAt))
+		.limit(1);
+	if (!row) return [];
+	return liveFindings(withUniqueIds(row.findings) as unknown as Finding[]).filter(
+		(f) => f.outcome !== 'dismissed'
+	);
+}
+
 async function execute(
 	userId: string,
 	id: string,
 	token: string,
 	ref: PullRef,
 	pr: Awaited<ReturnType<typeof pullDetails>>,
-	progress: ReviewProgress
+	progress: ReviewProgress,
+	previous: Finding[]
 ) {
 	const dir = bundleDir(userId, id);
 	try {
@@ -248,6 +355,7 @@ async function execute(
 						text: settings.voice.persona
 					}
 				: null,
+			previous,
 			bundleDir: dir,
 			treeState: bundle.treeState,
 			partial: bundle.partial,
@@ -264,6 +372,8 @@ async function execute(
 			.update(review)
 			.set({
 				status: outcome.status,
+				summary: outcome.summary || null,
+				previous: outcome.previous,
 				findings: outcome.findings as unknown as Record<string, unknown>[],
 				questions: outcome.questions,
 				notReviewed: outcome.notReviewed,
@@ -325,6 +435,38 @@ async function prepareGithubReview(userId: string, reviewId: string) {
 export async function previewGithubReview(userId: string, reviewId: string) {
 	const { built, headMoved } = await prepareGithubReview(userId, reviewId);
 	return { body: built.body, comments: built.comments, headMoved };
+}
+
+const APPROVABLE = ['clean', 'findings', 'partial'];
+
+/**
+ * Approves on GitHub as you. Findings not yet posted or dismissed go with it as comments, so an
+ * approval never silently drops something you meant to say.
+ */
+export async function approveGithubReview(userId: string, reviewId: string) {
+	const { row, ref, token, built, headMoved } = await prepareGithubReview(userId, reviewId);
+	if (headMoved) error(409, 'New commits landed since this review. Re-review before approving.');
+	if (row.approvedUrl) error(409, 'You already approved this commit.');
+	if (!APPROVABLE.includes(row.status)) error(409, 'Only a finished review can be approved.');
+	const { url, author } = await postPullReview(token, ref, {
+		commitSha: row.headSha,
+		event: 'APPROVE',
+		body: built.ids.length ? built.body : '',
+		comments: built.comments
+	});
+	const posted = new Set(built.ids);
+	await db
+		.update(review)
+		.set({
+			approvedUrl: url,
+			postedUrl: row.postedUrl ?? url,
+			postedBy: row.postedBy ?? author,
+			findings: row.findings.map((f) =>
+				posted.has(f.id as string) ? { ...f, outcome: 'posted' } : f
+			)
+		})
+		.where(eq(review.id, reviewId));
+	return { url };
 }
 
 export async function postGithubReview(userId: string, reviewId: string) {

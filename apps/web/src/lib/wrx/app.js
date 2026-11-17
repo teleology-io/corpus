@@ -1751,7 +1751,8 @@ export function mountWrx(root) {
 		const sorted = [...r.findings].sort(
 			(a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
 		);
-		const live = sorted.filter((f) => !f.dropped);
+		// Dismissed means gone: it never posts, so it has no reason to stay on screen.
+		const live = sorted.filter((f) => !f.dropped && f.outcome !== 'dismissed');
 		const dropped = sorted.filter((f) => f.dropped);
 		const open = openFindings(r);
 		return [
@@ -1782,7 +1783,7 @@ export function mountWrx(root) {
 		const marks = new Map();
 		if (r && r.headSha === d.headSha)
 			for (const f of r.findings)
-				if (!f.dropped && f.file && f.line) {
+				if (!f.dropped && f.outcome !== 'dismissed' && f.file && f.line) {
 					const key = `${f.file}:${f.line}`;
 					marks.set(key, [...(marks.get(key) ?? []), `${f.severity}: ${f.title}`]);
 				}

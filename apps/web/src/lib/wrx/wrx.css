@@ -3839,9 +3839,6 @@ body:has(.recording-bar) .wrx.files-fullscreen {
 	gap: 16px;
 	padding: 14px 19px;
 }
-.wrx .review-card-head > div:first-child {
-	min-width: 0;
-}
 .wrx .review-card-head a {
 	display: block;
 	color: var(--foreground);
@@ -3858,9 +3855,63 @@ body:has(.recording-bar) .wrx.files-fullscreen {
 	align-items: center;
 	gap: 10px;
 }
+.wrx .review-card-head {
+	cursor: pointer;
+}
+.wrx .review-card-head > .review-toggle {
+	flex: none;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	margin-right: -6px;
+	border: 0;
+	background: none;
+	color: var(--muted);
+}
+.wrx .review-toggle .twisty {
+	width: 11px;
+	height: 11px;
+	transition: transform 0.12s;
+}
+.wrx .review-card.open .review-toggle .twisty {
+	transform: rotate(90deg);
+}
+.wrx .review-card-head > div:nth-child(2) {
+	flex: 1;
+	min-width: 0;
+}
 .wrx .review-card-body {
 	border-top: 1px solid var(--border);
-	padding: 14px 19px;
+	padding: 0 19px 14px;
+}
+.wrx .review-tabs {
+	padding: 0;
+	margin: 0 -19px 14px;
+	padding-left: 19px;
+}
+.wrx .review-tab-content {
+	min-width: 0;
+}
+.wrx .review-diff {
+	max-height: 60vh;
+	border: 1px solid var(--border);
+	border-radius: 5px;
+}
+.wrx .review-diff .finding {
+	display: inline-block;
+	min-width: 100%;
+	background: color-mix(in srgb, var(--warning) 14%, transparent);
+	box-shadow: inset 3px 0 var(--warning);
+	cursor: help;
+}
+.wrx .review-footer {
+	margin-top: 14px;
+	padding: 12px 14px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+}
+.wrx .review-footer .review-preview {
+	margin-bottom: 12px;
 }
 .wrx .review-finding {
 	border: 1px solid var(--border);
@@ -4117,6 +4168,9 @@ body:has(.recording-bar) .wrx.files-fullscreen {
 @media (max-width: 640px) {
 	.wrx .review-card-head {
 		align-items: flex-start;
-		flex-direction: column;
+		flex-wrap: wrap;
+	}
+	.wrx .review-card-actions {
+		margin-left: 26px;
 	}
 }

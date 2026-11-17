@@ -245,6 +245,12 @@ async function ownReview(userId: string, reviewId: string) {
 	return { ...row, findings: withUniqueIds(row.findings) };
 }
 
+/** The PR's current diff, for reading next to the findings. */
+export async function externalReviewDiff(userId: string, itemId: string) {
+	const { connection, ref } = await ownItem(userId, itemId);
+	return pullDiff(await accessToken(connection), ref);
+}
+
 /** Starts in the background and returns the running row. Failures end up on the row, not lost. */
 export async function startExternalReview(userId: string, itemId: string) {
 	if (active.has(userId)) error(409, 'A review is already running. Try again when it finishes.');

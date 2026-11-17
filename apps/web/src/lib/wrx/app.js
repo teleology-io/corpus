@@ -1441,20 +1441,47 @@ export function mountWrx(root) {
 			}
 		}, 120);
 	}
+	const DIFF_LINE_LIMIT = 5000;
+	/**
+	 * A unified diff as coloured lines. `marks` maps "path:line" (new side) to notes shown on that
+	 * line, so review findings can be found in the diff.
+	 */
+	function diffLines(text, marks = null) {
+		const rows = text.split('\n');
+		let file = null;
+		let next = 0;
+		const out = rows.slice(0, DIFF_LINE_LIMIT).map((line) => {
+			const kind = line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : '';
+			let mark = null;
+			if (marks) {
+				const target = /^\+\+\+ b\/(.+)$/.exec(line);
+				const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+				if (line.startsWith('diff --git ')) {
+					file = null;
+					next = 0;
+				} else if (target) file = target[1];
+				else if (hunk) next = Number(hunk[1]);
+				else if (
+					file &&
+					next &&
+					!line.startsWith('---') &&
+					(kind === 'added' || line.startsWith(' '))
+				)
+					mark = marks.get(`${file}:${next++}`) ?? null;
+			}
+			const cls = [kind, mark && 'finding'].filter(Boolean).join(' ');
+			return `<span class="${cls}"${mark ? ` title="${esc(mark.join('\n'))}"` : ''}>${esc(line)}</span>`;
+		});
+		if (rows.length > DIFF_LINE_LIMIT)
+			out.push(
+				`<span class="removed">… ${rows.length - DIFF_LINE_LIMIT} more lines not shown</span>`
+			);
+		return out.join('\n');
+	}
 	function changes() {
 		return `<div class="section-title"><div><h2>Working changes</h2><p>Tracked changes against HEAD, with untracked paths in the status list.</p></div><div class="actions">${btn('Refresh changes', 'diff', 'code')}${diff?.status?.trim() ? `<button class="primary" data-action="commit" ${committing ? 'disabled' : ''}>${icon('check')}${committing ? 'Checking…' : 'Commit & push'}</button>` : ''}</div></div>${
 			diff
-				? `<div class="two-columns diff-columns"><section class="panel"><div class="panel-heading"><h3>Git status</h3></div><pre class="code-block">${esc(diff.status || 'Working tree is clean.')}</pre><div class="panel-heading"><h3>Recent commits</h3></div><pre class="code-block">${esc(diff.log || 'No commits yet.')}</pre></section><section class="panel"><div class="panel-heading"><h3>Diff / HEAD</h3></div><pre class="diff code-block">${
-						diff.diff
-							? diff.diff
-									.split('\n')
-									.map(
-										(line) =>
-											`<span class="${line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : ''}">${esc(line)}</span>`
-									)
-									.join('\n')
-							: 'No tracked changes.'
-					}</pre></section></div>`
+				? `<div class="two-columns diff-columns"><section class="panel"><div class="panel-heading"><h3>Git status</h3></div><pre class="code-block">${esc(diff.status || 'Working tree is clean.')}</pre><div class="panel-heading"><h3>Recent commits</h3></div><pre class="code-block">${esc(diff.log || 'No commits yet.')}</pre></section><section class="panel"><div class="panel-heading"><h3>Diff / HEAD</h3></div><pre class="diff code-block">${diff.diff ? diffLines(diff.diff) : 'No tracked changes.'}</pre></section></div>`
 				: '<div class="empty">Loading working tree…</div>'
 		}`;
 	}
@@ -1495,6 +1522,27 @@ export function mountWrx(root) {
 	let externalReviewsLoading = false;
 	let externalReviewsTimer = null;
 	let reviewPreview = null;
+	// Cards start collapsed so the list stays scannable; these survive re-renders and polls.
+	const reviewOpen = new Set();
+	const reviewTab = new Map();
+	// itemId -> { headSha, patch, partial } | { headSha, loading } | { headSha, error }
+	const reviewDiffs = new Map();
+	async function loadReviewDiff(itemId, headSha) {
+		const have = reviewDiffs.get(itemId);
+		if (have && have.headSha === headSha && !have.error) return;
+		reviewDiffs.set(itemId, { headSha, loading: true });
+		try {
+			const d = await api('external-reviews', { action: 'diff', itemId });
+			reviewDiffs.set(itemId, { headSha, ...d });
+		} catch (e) {
+			reviewDiffs.set(itemId, { headSha, error: e.message });
+		}
+		if (tab === 'reviews') render();
+	}
+	function toggleReviewCard(itemId) {
+		reviewOpen.has(itemId) ? reviewOpen.delete(itemId) : reviewOpen.add(itemId);
+		render();
+	}
 	async function loadExternalReviews() {
 		if (externalReviewsLoading) return;
 		externalReviewsLoading = true;
@@ -1676,14 +1724,12 @@ export function mountWrx(root) {
 			}
 		);
 	}
-	function reviewBody(r, headMoved) {
-		if (r.status === 'running') return reviewProgress(r.progress);
-		const sorted = [...r.findings].sort(
-			(a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
-		);
-		const live = sorted.filter((f) => !f.dropped);
-		const dropped = sorted.filter((f) => f.dropped);
-		const open = live.filter((f) => f.outcome !== 'dismissed' && f.outcome !== 'posted');
+	const openFindings = (r) =>
+		r.findings.filter((f) => !f.dropped && f.outcome !== 'dismissed' && f.outcome !== 'posted');
+	/** Approve, post and where it went: the same whichever tab is showing. */
+	function reviewFooter(r, headMoved) {
+		if (r.status === 'running') return '';
+		const open = openFindings(r);
 		const canPost = !r.postedUrl && !headMoved && open.length > 0;
 		const canApprove = !r.approvedUrl && !headMoved && APPROVABLE.includes(r.status);
 		const links = [
@@ -1698,6 +1744,16 @@ export function mountWrx(root) {
 		]
 			.filter(Boolean)
 			.join('');
+		return `<footer class="review-footer">${reviewPreviewPanel(r.id)}<div class="review-meta"><span>${esc(r.headSha.slice(0, 10))} · $${Number(r.costUsd).toFixed(2)}</span><div class="review-meta-actions">${links}</div></div></footer>`;
+	}
+	function reviewBody(r, headMoved) {
+		if (r.status === 'running') return reviewProgress(r.progress);
+		const sorted = [...r.findings].sort(
+			(a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
+		);
+		const live = sorted.filter((f) => !f.dropped);
+		const dropped = sorted.filter((f) => f.dropped);
+		const open = openFindings(r);
 		return [
 			APPROVABLE.includes(r.status) || r.status === 'stale' ? reviewSummary(r, open) : '',
 			headMoved
@@ -1715,10 +1771,22 @@ export function mountWrx(root) {
 				: '',
 			dropped.length
 				? `<details class="review-dropped"><summary>${dropped.length} refuted finding${dropped.length === 1 ? '' : 's'}</summary>${dropped.map((f) => reviewFinding(r, f)).join('')}</details>`
-				: '',
-			`<div class="review-meta"><span>${esc(r.headSha.slice(0, 10))} · $${Number(r.costUsd).toFixed(2)}</span><div class="review-meta-actions">${links}</div></div>`,
-			reviewPreviewPanel(r.id)
+				: ''
 		].join('');
+	}
+	function reviewDiffView(itemId, r) {
+		const d = reviewDiffs.get(itemId);
+		if (!d || d.loading) return '<p class="review-note">Loading the diff…</p>';
+		if (d.error) return `<p class="review-warning">${esc(d.error)}</p>`;
+		// Findings on the live head only: after a push their line numbers point at old code.
+		const marks = new Map();
+		if (r && r.headSha === d.headSha)
+			for (const f of r.findings)
+				if (!f.dropped && f.file && f.line) {
+					const key = `${f.file}:${f.line}`;
+					marks.set(key, [...(marks.get(key) ?? []), `${f.severity}: ${f.title}`]);
+				}
+		return `${d.partial ? '<p class="review-warning">GitHub only gave per-file patches, so parts of this diff may be cut.</p>' : ''}${marks.size ? '<p class="review-note">Lines with findings are marked. Hover one to see it.</p>' : ''}<pre class="diff code-block review-diff">${d.patch ? diffLines(d.patch, marks) : 'No changes.'}</pre>`;
 	}
 	function reviewsView() {
 		if (externalReviews === null) {
@@ -1746,7 +1814,33 @@ export function mountWrx(root) {
 					r?.status === 'running'
 						? ''
 						: `<button ${running ? 'disabled' : ''} ${headMoved ? 'class="primary"' : ''} data-review-start="${esc(itemId)}">${r ? 'Re-review' : 'Review'}</button>`;
-				return `<section class="panel review-card"><div class="review-card-head"><div><a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(title)}</a><small>${esc(subtitle || '')}${author ? ` · ${esc(author)}` : ''}${requestCleared ? ' · review request cleared' : ''}</small></div><div class="review-card-actions">${badge(label, color)}${start}</div></div>${r ? `<div class="review-card-body">${reviewBody(r, headMoved)}</div>` : ''}</section>`;
+				const expanded = reviewOpen.has(itemId);
+				const current = reviewTab.get(itemId) ?? 'reviews';
+				if (expanded && current === 'changes') {
+					const want = headSha ?? r?.headSha ?? '';
+					const have = reviewDiffs.get(itemId);
+					if (!have || (have.headSha !== want && !have.loading))
+						queueMicrotask(() => loadReviewDiff(itemId, want));
+				}
+				const tabs = [
+					['reviews', 'Reviews'],
+					['changes', 'Changes']
+				]
+					.map(
+						([id, name]) =>
+							`<button class="${current === id ? 'active' : ''}" data-review-tab="${id}" data-item="${esc(itemId)}">${name}</button>`
+					)
+					.join('');
+				const content =
+					current === 'changes'
+						? reviewDiffView(itemId, r)
+						: r
+							? reviewBody(r, headMoved)
+							: '<p class="review-note">Not reviewed yet. Hit Review to start one.</p>';
+				const body = expanded
+					? `<div class="review-card-body"><div class="tabs review-tabs">${tabs}</div><div class="review-tab-content">${content}</div>${r ? reviewFooter(r, headMoved) : ''}</div>`
+					: '';
+				return `<section class="panel review-card ${expanded ? 'open' : ''}"><div class="review-card-head" data-review-head="${esc(itemId)}"><button class="square review-toggle" data-review-toggle="${esc(itemId)}" aria-expanded="${expanded}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${esc(title)}">${icon('chevron', 'twisty')}</button><div><a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(title)}</a><small>${esc(subtitle || '')}${author ? ` · ${esc(author)}` : ''}${requestCleared ? ' · review request cleared' : ''}</small></div><div class="review-card-actions">${badge(label, color)}${start}</div></div>${body}</section>`;
 			})
 			.join('');
 		return `<div class="section-title"><div><h2>External reviews</h2><p>A first pass on other people's pull requests, private until you post it. It doesn't replace your review.</p></div><button data-action="review-settings">Reviewers</button></div>${externalReviewsError ? `<p class="review-warning">${esc(externalReviewsError)}</p>` : ''}${cards || `<div class="empty">${icon('branch')}<h3>Nothing waiting on you.</h3><p>Open pull requests that request your review appear here. Connect GitHub under Integrations if you haven't.</p></div>`}`;
@@ -2637,6 +2731,10 @@ export function mountWrx(root) {
 	});
 	on(root, 'click', async (event) => {
 		const target = event.target.closest('button');
+		// The empty part of a review card's header toggles it too; its link and buttons keep their jobs.
+		const head = event.target.closest('[data-review-head]');
+		if (!target && head && !event.target.closest('a'))
+			return toggleReviewCard(head.dataset.reviewHead);
 		if (!target) return;
 		try {
 			if (target.dataset.action) await actions[target.dataset.action]?.();
@@ -2680,6 +2778,8 @@ export function mountWrx(root) {
 				if (tab === 'reviews') await loadExternalReviews();
 			}
 			if (target.dataset.reviewStart) {
+				// Collapse it: progress shows in the badge, and the list stays short enough to scan.
+				reviewOpen.delete(target.dataset.reviewStart);
 				await reviewAction({ action: 'start', itemId: target.dataset.reviewStart });
 				toast('Review started');
 			}
@@ -2704,6 +2804,11 @@ export function mountWrx(root) {
 				render();
 			}
 			if (target.dataset.reviewApprove) reviewApproveDialog(target.dataset.reviewApprove);
+			if (target.dataset.reviewToggle) toggleReviewCard(target.dataset.reviewToggle);
+			if (target.dataset.reviewTab) {
+				reviewTab.set(target.dataset.item, target.dataset.reviewTab);
+				render();
+			}
 			if (target.dataset.reviewPost) {
 				const posted = await api('external-reviews', {
 					action: 'post',

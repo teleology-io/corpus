@@ -5,6 +5,7 @@ import { workbenchAllowed } from '#lib/server/wrx/access.js';
 import {
 	approveGithubReview,
 	dismissFinding,
+	externalReviewDiff,
 	getReviewerSettings,
 	listExternalReviews,
 	postGithubReview,
@@ -27,6 +28,8 @@ export const POST: RequestHandler = async (event) => {
 	const userId = allowed(event);
 	const body = (await event.request.json()) as Record<string, string>;
 	switch (body.action) {
+		case 'diff':
+			return json(await externalReviewDiff(userId, body.itemId));
 		case 'start':
 			return json(await startExternalReview(userId, body.itemId));
 		case 'dismiss':

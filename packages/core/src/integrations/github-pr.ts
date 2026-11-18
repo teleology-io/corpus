@@ -233,3 +233,45 @@ export function commentableLines(patch: string): Map<string, Set<number>> {
 	}
 	return out;
 }
+
+/** Opens a pull request from `head` into `base`. `draft` falls back to a normal PR where drafts aren't allowed. */
+export async function createPull(
+	token: string,
+	repo: { owner: string; repo: string },
+	input: { title: string; head: string; base: string; body: string; draft: boolean }
+): Promise<{ url: string; number: number; draft: boolean }> {
+	const open = async (draft: boolean) =>
+		fetch(`${API}/repos/${repo.owner}/${repo.repo}/pulls`, {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${token}`,
+				Accept: 'application/vnd.github+json',
+				'Content-Type': 'application/json',
+				'X-GitHub-Api-Version': '2022-11-28'
+			},
+			body: JSON.stringify({ ...input, draft })
+		});
+	let res = await open(input.draft);
+	let draft = input.draft;
+	// Plans without draft PRs answer 422 with a message about drafts.
+	if (res.status === 422 && input.draft) {
+		const text = await res.clone().text();
+		if (/draft/i.test(text)) {
+			res = await open(false);
+			draft = false;
+		}
+	}
+	if (!res.ok) {
+		const data = (await res.json().catch(() => null)) as {
+			message?: string;
+			errors?: { message?: string }[];
+		} | null;
+		const detail = data?.errors
+			?.map((e) => e.message)
+			.filter(Boolean)
+			.join('; ');
+		throw new Error(`GitHub ${res.status}: ${detail || data?.message || res.statusText}`);
+	}
+	const pr = (await res.json()) as { html_url: string; number: number; draft: boolean };
+	return { url: pr.html_url, number: pr.number, draft: pr.draft ?? draft };
+}

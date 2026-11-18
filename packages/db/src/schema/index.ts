@@ -7,3 +7,4 @@ export * from './integrations';
 export * from './telescope';
 export * from './admin';
 export * from './settings';
+export * from './conductor';

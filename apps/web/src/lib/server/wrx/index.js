@@ -8,7 +8,17 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { chooseDirectory, listDirectories } from './directories.js';
 import { listDirectory, readFilePreview, searchFiles, serveRaw } from './files.js';
-import { Store, Engine, command, agentEnv, id, now, requireText, clientChats } from './core.js';
+import {
+	Store,
+	Engine,
+	command,
+	agentEnv,
+	id,
+	now,
+	requireText,
+	clientChats,
+	repositoryRoot
+} from './core.js';
 import { searchRank } from '../search-matching.js';
 import { Terminals } from './terminal.js';
 
@@ -763,4 +773,97 @@ async function probeRuntimes() {
 if (!globalThis.__wrxProbe) {
 	globalThis.__wrxProbe = setInterval(probeRuntimes, 15000);
 	globalThis.__wrxProbe.unref();
+}
+
+// ----- Conductor bridge -----
+// Conductor (lib/server/conductor.ts) hands tickets to Workbench: one worktree + one agent thread per
+// ticket, then reads the thread back to see whether the agent finished. Same per-user host as the UI.
+
+/** Finds or registers the repository at `repoPath`, gives the ticket its own worktree, and starts a thread. */
+export async function conductorStart(userId, { repoPath, branch, title, prompt, agent }) {
+	const { engine, store } = host(userId);
+	const expanded = path.resolve(String(repoPath).replace(/^~(?=\/|$)/, os.homedir()));
+	fs.mkdirSync(expanded, { recursive: true });
+	const directory = fs.realpathSync(expanded);
+	const root = (await repositoryRoot(directory).catch(() => null)) ?? directory;
+	let project = store.state.projects.find((p) => p.path === root);
+	if (!project) project = await engine.project({ path: root });
+	let workspace;
+	let base = null;
+	if (project.folder) {
+		workspace = store.state.workspaces.find((w) => w.projectId === project.id && w.path === root);
+	} else {
+		base = (await command('git', ['-C', root, 'branch', '--show-current']).catch(() => '')) || null;
+		workspace = await engine.workspace({
+			projectId: project.id,
+			name: title.slice(0, 60),
+			branch,
+			base: base ?? 'HEAD'
+		});
+	}
+	const chat = engine.chat({
+		workspaceId: workspace.id,
+		title: title.slice(0, 200),
+		provider: agent.provider,
+		mode: 'implement',
+		name: agent.name,
+		role: agent.role
+	});
+	engine.turn(chat.id, prompt);
+	return {
+		chatId: chat.id,
+		workspaceId: workspace.id,
+		branch: project.folder ? null : branch,
+		base
+	};
+}
+
+/** Where a Conductor thread stands, or null when it no longer exists. Never changes state. */
+export function conductorChat(userId, chatId) {
+	if (!hosts.has(userId) && !fs.existsSync(path.join(userDirectory(userId), 'state.json')))
+		return null;
+	const { engine, store } = host(userId);
+	const chat = store.state.chats.find((c) => c.id === chatId);
+	if (!chat) return null;
+	const last = [...chat.messages]
+		.reverse()
+		.find((m) => m.role === 'agent' && m.status !== 'running');
+	const agents = chat.messages.filter((m) => m.role === 'agent').length;
+	return {
+		status: chat.status,
+		running: engine.chatRunning(chatId) || engine.queue.some((j) => j.chatId === chatId),
+		error: chat.error ?? null,
+		workspaceId: chat.workspaceId,
+		lastAgentText: last?.text ?? null,
+		lastAgentAt: last?.at ?? null,
+		lastAgentName: chat.members.find((m) => m.id === last?.memberId)?.name ?? null,
+		agentMessages: agents
+	};
+}
+
+/** Posts the user's note into the thread, which wakes its lead agent. */
+export function conductorSend(userId, chatId, text) {
+	host(userId).engine.turn(chatId, text);
+}
+
+/** Commits and pushes whatever the agent left in the worktree. Returns the GitHub repo it pushed to. */
+export async function conductorPush(userId, workspaceId, message) {
+	const { engine, store } = host(userId);
+	const w = store.get('workspaces', workspaceId);
+	const dirty = await command('git', ['status', '--porcelain'], { cwd: w.path }).catch(() => '');
+	if (dirty) {
+		const result = await engine.commit(workspaceId, message);
+		if (!result.pushed) throw new Error(result.reason || 'Push failed');
+	} else {
+		// The agent may have committed itself; make sure the branch is on the remote.
+		await command('git', ['push', '-u', 'origin', 'HEAD'], {
+			cwd: w.path,
+			timeout: 180000,
+			env: { ...agentEnv(), GIT_TERMINAL_PROMPT: '0' }
+		});
+	}
+	const remote = await command('git', ['remote', 'get-url', 'origin'], { cwd: w.path }).catch(
+		() => ''
+	);
+	return { repo: githubRepo(remote), branch: w.branch };
 }

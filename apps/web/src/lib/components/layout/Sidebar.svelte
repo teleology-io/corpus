@@ -12,7 +12,8 @@
 		CircleHelp,
 		Telescope,
 		SquareTerminal,
-		MessagesSquare
+		MessagesSquare,
+		Workflow
 	} from '@lucide/svelte';
 	import Logo from '../ui/Logo.svelte';
 	import WorkspaceCard from './WorkspaceCard.svelte';
@@ -30,7 +31,8 @@
 		{ href: '/teams', label: 'Teams', icon: Users },
 		// Only once Slack is connected.
 		...(page.data.slackConnected ? [{ href: SLACK, label: 'Slack', icon: MessagesSquare }] : []),
-		{ href: '/integrations', label: 'Integrations', icon: Puzzle }
+		{ href: '/integrations', label: 'Integrations', icon: Puzzle },
+		...(page.data.conductor ? [{ href: '/conductor', label: 'Conductor', icon: Workflow }] : [])
 	]);
 	const others = [
 		{ href: '/settings', label: 'Settings', icon: Settings },

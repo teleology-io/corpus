@@ -5,6 +5,7 @@ import { listWorkspaces, workspaceMembers } from '#lib/server/workspaces.js';
 import { unreadCount } from '#lib/server/notifications.js';
 import { collabUrl } from '#lib/server/collab.js';
 import { slackConnection, slackUnread } from '#lib/server/slack.js';
+import { conductorAllowed } from '#lib/server/conductor.js';
 
 export const load: LayoutServerLoad = async ({ locals, url, depends }) => {
 	depends('app:slack-connected', 'app:slack-unread');
@@ -38,6 +39,8 @@ export const load: LayoutServerLoad = async ({ locals, url, depends }) => {
 		/** Slack nav entry only shows once Slack is connected */
 		slackConnected: !!slack,
 		slackUnread: slack ? await slackUnread(ctx.userId) : false,
+		/** Conductor is a hidden feature: its nav entry only shows behind CONDUCTOR_ALLOWED_EMAILS */
+		conductor: conductorAllowed(ctx.user.email),
 		config: {
 			vapidKey: optionalEnv('PUBLIC_VAPID_KEY') ?? null,
 			collabUrl: collabUrl(url)

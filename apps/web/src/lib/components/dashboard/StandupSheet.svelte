@@ -50,6 +50,29 @@
 	// The user's picks, keyed by source (not item id) so they survive Refresh evidence; they also
 	// survive Compact/Verbose switches and Regenerate because nothing here resets them.
 	let picks = $state<Record<string, boolean>>({});
+	// Picks are remembered for the rest of the day on this device, so meetings you dropped this
+	// morning stay dropped when you reopen the sheet; tomorrow starts fresh.
+	const PICKS_KEY = 'corpus-standup-picks';
+	const dayKey = () => new Date().toLocaleDateString('en-CA');
+	function loadPicks() {
+		try {
+			const saved = JSON.parse(localStorage.getItem(PICKS_KEY) ?? 'null');
+			if (saved?.day === dayKey() && saved.picks && typeof saved.picks === 'object')
+				picks = { ...saved.picks, ...picks };
+		} catch {
+			/* unreadable: start fresh */
+		}
+	}
+	$effect(() => {
+		const day = dayKey();
+		const saved = $state.snapshot(picks);
+		try {
+			localStorage.setItem(PICKS_KEY, JSON.stringify({ day, picks: saved }));
+		} catch {
+			/* storage unavailable: picks last until reload */
+		}
+	});
+	loadPicks();
 	let resultSelection = $state('');
 	const GROUP_PREVIEW = 8;
 	const sourceKey = (i: StandupItem) => `${i.source.type}:${i.source.id}`;
@@ -186,7 +209,7 @@
 		{@const shown = expanded[`g:${g.key}`] ? g.items : g.items.slice(0, GROUP_PREVIEW)}
 		<div class="mt-3 flex items-center justify-between gap-2">
 			<p class="text-[11px] font-semibold tracking-wide text-muted uppercase">{g.label}</p>
-			{#if g.key !== 'meeting' && g.items.length > 1}
+			{#if g.items.length > 1}
 				<span class="flex gap-2 text-xs">
 					<button class="text-primary-600 hover:underline" onclick={() => setGroup(g.items, true)}
 						>All</button
@@ -215,7 +238,8 @@
 								onchange={(e) => (picks[sourceKey(i)] = e.currentTarget.checked)}
 							/>
 							<span class="min-w-0">
-								<span class="font-medium break-words">{i.title}</span>
+								{#if i.group === 'meeting' && i.lead}<span class="text-muted">{i.lead}</span>
+								{/if}<span class="font-medium break-words">{i.title}</span>
 								{#if i.statements.length}
 									<span class="block text-xs text-muted"
 										>{i.statements.map((s) => s.text).join(' · ')}</span

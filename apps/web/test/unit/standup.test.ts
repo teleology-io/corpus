@@ -169,7 +169,7 @@ describe('ownership and planning (regressions from manual testing)', () => {
 		]);
 	});
 
-	it('keeps unchecked tickets out of Today and includes picked ones; meetings are automatic', () => {
+	it('keeps unchecked tickets out of Today and includes picked ones; meetings are checked by default', () => {
 		const { items } = buildItems(
 			raw({
 				items: [issue('ENG-1 picked', null), issue('ENG-2 not picked', '2026-11-17')],
@@ -188,16 +188,19 @@ describe('ownership and planning (regressions from manual testing)', () => {
 		);
 		const snap = snapshot(items);
 		const picked = items.find((i) => i.title === 'ENG-1 picked')!.id;
+		const gym = items.find((i) => i.title === 'Gym')!.id;
 		const md = renderMarkdown(
-			selectToday(snap, [picked]),
-			defaultPlan(selectToday(snap, [picked]), 'compact')
+			selectToday(snap, [picked, gym]),
+			defaultPlan(selectToday(snap, [picked, gym]), 'compact')
 		);
 		expect(md).toContain('ENG-1 picked');
 		expect(md).not.toContain('ENG-2 not picked');
 		expect(md).toContain('Gym');
-		// Nothing picked: still the meeting, no tickets.
+		// Default selection: the meeting, no tickets.
 		const none = selectToday(snap, defaultSelection(snap));
 		expect(none.items.map((i) => i.title)).toEqual(['Gym']);
+		// Unchecking the meeting drops it for the day.
+		expect(selectToday(snap, [picked]).items.map((i) => i.title)).not.toContain('Gym');
 	});
 
 	it('checks the user’s own planned work by default and leaves assigned work unchecked', () => {

@@ -7,7 +7,7 @@ SHELL := /bin/bash
 PACKAGE_JSONS := package.json $(wildcard apps/*/package.json packages/*/package.json)
 INSTALLED := node_modules/.modules.yaml
 
-.PHONY: help dev setup tools install env models services migrate stop down db-reset studio \
+.PHONY: help dev conductor setup tools install env models services migrate stop down db-reset studio \
 	check lint test build format clean \
 	deploy-build deploy-up deploy-logs deploy-down
 
@@ -16,7 +16,12 @@ help: ## Show targets
 		awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
 dev: setup ## Install, configure, start services, migrate, run all apps
-	pnpm dev
+	$(if $(filter conductor,$(MAKECMDGOALS)),CONDUCTOR=1 )pnpm dev
+
+# `make dev conductor`: dev with the hidden Conductor board on. (Make can't take `--conductor`;
+# it reads any --flag as its own option.) `make dev CONDUCTOR=1` does the same.
+conductor: ## Use as `make dev conductor` to turn on the hidden Conductor board
+	@$(if $(filter dev,$(MAKECMDGOALS)),:,$(MAKE) dev conductor)
 
 setup: tools install env models services migrate ## Everything `dev` needs, without starting the apps
 

@@ -63,7 +63,7 @@ export interface StandupItem {
 	statements: Statement[];
 	actions: StandupAction[];
 	/**
-	 * Today only. `auto` is always included (meetings); otherwise it's a checklist candidate the
+	 * Today only. `auto` is always included; otherwise it's a checklist candidate the
 	 * user picks before generating, checked (`on`) or unchecked (`off`) by default.
 	 */
 	plan?: 'auto' | 'on' | 'off';
@@ -73,7 +73,7 @@ export interface StandupItem {
 
 export type PlanGroup = 'meeting' | 'pr' | 'review' | 'ticket' | 'task';
 export const PLAN_GROUPS: { key: PlanGroup; label: string }[] = [
-	{ key: 'meeting', label: 'Meetings (always included)' },
+	{ key: 'meeting', label: 'Meetings' },
 	{ key: 'pr', label: 'Your open PRs' },
 	{ key: 'review', label: 'Reviews requested from you' },
 	{ key: 'ticket', label: 'Assigned tickets' },

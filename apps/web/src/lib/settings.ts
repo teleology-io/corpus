@@ -36,6 +36,27 @@ export const SETTINGS = {
 		],
 		default: 'compact',
 		ui: { section: 'dashboard', order: 2 }
+	},
+	// Conductor (hidden feature). No `ui`: edited from the Conductor page, not Settings.
+	'conductor.repoPath': {
+		key: 'conductor.repoPath',
+		type: 'string',
+		label: 'Repository',
+		description:
+			'Where ticket agents work. Each ticket gets its own worktree. Empty uses ~/.corpus.',
+		default: '',
+		maxLength: 1000
+	},
+	'conductor.readyWhen': {
+		key: 'conductor.readyWhen',
+		type: 'enum',
+		label: 'Ready for you when',
+		description: 'When a ticket moves from Agents working to Ready for you.',
+		options: [
+			{ value: 'draft_pr', label: 'A draft PR is up' },
+			{ value: 'ci_green', label: 'PR is ready for review and CI passes' }
+		],
+		default: 'draft_pr'
 	}
 } as const satisfies Record<string, SettingDef>;
 

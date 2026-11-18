@@ -132,7 +132,7 @@ export async function generateStandup(input: {
 	signed: SignedSnapshot;
 	detail: Detail;
 	pref: ProviderPref;
-	/** Today checklist picks (item ids). Meetings are always included. */
+	/** Today checklist picks (item ids), meetings included. */
 	selected: readonly string[];
 	onstatus: (s: string) => void;
 }): Promise<StandupResult> {

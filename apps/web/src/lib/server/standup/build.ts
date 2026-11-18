@@ -502,7 +502,8 @@ export function buildItems(raw: RawEvidence): { items: StandupItem[]; coverage: 
 					lead: e.allDay ? 'All day' : timeLabel(e.start, raw.tz),
 					at: e.start,
 					statements,
-					plan: 'auto',
+					// Checked by default; uncheck a meeting to leave it out of today's standup.
+					plan: 'on',
 					group: 'meeting'
 				}
 			);

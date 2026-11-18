@@ -366,7 +366,9 @@ export function agentArgs(agent, images = [], dirs = []) {
 							: agent.mode === 'implement'
 								? 'workspace-write'
 								: 'read-only',
-						...(model ? ['-m', model] : [])
+						...(model ? ['-m', model] : []),
+						// Writable like the workspace (Conductor threads spanning several repositories).
+						...dirs.flatMap((d) => ['--add-dir', d])
 					]),
 			...images.flatMap((i) => ['--image', i.path]),
 			'--json',
@@ -1508,7 +1510,7 @@ export class Engine {
 				? 'When a visual would help (mockups, ad creative, social posts, diagrams), create it with your built-in image generation tool. Every image you generate is posted to this thread automatically so teammates and the human can see it; refer to it in words rather than by file path.'
 				: '',
 			first
-				? `${this.worktreesContext(w)}${this.commandsContext(w)}Runtime: ${environment ? `${environment.name} (${environment.profile}); Docker endpoint ${dockerEnv(environment.profile).DOCKER_HOST}. Agents execute on the host; the VM isolates dependencies only.` : 'No managed dependency VM attached.'}`
+				? `${this.worktreesContext(w)}${chat.extraDirs?.length ? `Other repositories in this thread (edit them in place, by absolute path):\n${chat.extraDirs.map((d) => `- ${d}`).join('\n')}\n` : ''}${this.commandsContext(w)}Runtime: ${environment ? `${environment.name} (${environment.profile}); Docker endpoint ${dockerEnv(environment.profile).DOCKER_HOST}. Agents execute on the host; the VM isolates dependencies only.` : 'No managed dependency VM attached.'}`
 				: '',
 			`Thread members:\n${roster}`,
 			first
@@ -1780,7 +1782,7 @@ export class Engine {
 		let stderr = '';
 		let child;
 		try {
-			child = this.spawn(member.provider, agentArgs(member, images), {
+			child = this.spawn(member.provider, agentArgs(member, images, chat.extraDirs || []), {
 				cwd: w.path,
 				env: this.workspaceEnv(w, environment),
 				detached: process.platform !== 'win32',
@@ -1840,12 +1842,16 @@ export class Engine {
 		if (live) return live;
 		const uploads = this.uploads(chat.id);
 		fs.mkdirSync(uploads, { recursive: true, mode: 0o700 });
-		const child = this.spawn(member.provider, agentArgs(member, [], [uploads]), {
-			cwd: w.path,
-			env: this.workspaceEnv(w, environment),
-			detached: process.platform !== 'win32',
-			stdio: ['pipe', 'pipe', 'pipe']
-		});
+		const child = this.spawn(
+			member.provider,
+			agentArgs(member, [], [uploads, ...(chat.extraDirs || [])]),
+			{
+				cwd: w.path,
+				env: this.workspaceEnv(w, environment),
+				detached: process.platform !== 'win32',
+				stdio: ['pipe', 'pipe', 'pipe']
+			}
+		);
 		const s = { key, chat, member, w, child, pending: '', stderr: '', turn: null, dead: false };
 		this.sessions.set(key, s);
 		member.live = true;

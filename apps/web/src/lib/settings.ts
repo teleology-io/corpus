@@ -41,9 +41,9 @@ export const SETTINGS = {
 	'conductor.repoPath': {
 		key: 'conductor.repoPath',
 		type: 'string',
-		label: 'Repository',
+		label: 'Repositories',
 		description:
-			'Where ticket agents work. Each ticket gets its own worktree. Empty uses ~/.corpus.',
+			'A Git repository, or a folder of clones to choose from when you start a ticket. Empty uses ~/.corpus.',
 		default: '',
 		maxLength: 1000
 	},

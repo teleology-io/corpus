@@ -19,6 +19,10 @@ export interface ConductorCard {
 	note: string | null;
 	/** Workbench workspace (worktree) the ticket's agents run in. */
 	workspaceId: string | null;
+	/** Repositories the ticket's agents work in. */
+	repos: string[];
+	/** One PR per repository the agent changed. */
+	prs: { repo: string; number: number; url: string }[];
 	/** Why a working ticket needs you (agent asked, failed, CI red, PR couldn't open). */
 	blocked: string | null;
 	/** The agent's closing summary. */

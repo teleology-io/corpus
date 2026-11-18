@@ -26,7 +26,11 @@ const input = z.discriminatedUnion('action', [
 		cardId: z.string().uuid(),
 		note: z.string().trim().min(1).max(4000)
 	}),
-	z.object({ action: z.literal('start'), cardId: z.string().uuid() }),
+	z.object({
+		action: z.literal('start'),
+		cardId: z.string().uuid(),
+		repoPaths: z.array(z.string().max(4096)).max(20).optional()
+	}),
 	z.object({
 		action: z.literal('settings'),
 		repoPath: z.string().trim().max(1000).optional(),
@@ -49,7 +53,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			await sendBack(ctx.userId, i.cardId, i.note);
 			break;
 		case 'start':
-			await startTicket(ctx.userId, i.cardId);
+			await startTicket(ctx.userId, i.cardId, i.repoPaths);
 			break;
 		case 'settings':
 			if (i.repoPath !== undefined) await setSetting(ctx.userId, 'conductor.repoPath', i.repoPath);

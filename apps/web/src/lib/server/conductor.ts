@@ -9,7 +9,13 @@ import { createPull, pullDetails } from '@corpus/core/integrations';
 import { itemPreview } from './integrations';
 import { listExternalReviews } from './pr-review/service';
 import { getSettings } from './settings';
-import { conductorChat, conductorPush, conductorSend, conductorStart } from './wrx/index.js';
+import {
+	conductorChat,
+	conductorPush,
+	conductorRepos,
+	conductorSend,
+	conductorStart
+} from './wrx/index.js';
 
 const { conductorCard: card, conductorEvent: event, integrationItem: item } = schema;
 const conn = schema.integrationConnection;
@@ -53,9 +59,22 @@ function reviewColumn(r: Review | undefined): Column | null {
 
 const ORDER = Object.fromEntries(COLUMNS.map((c, i) => [c, i])) as Record<Column, number>;
 
+/** One repository a ticket's agents work in: its worktree, branch and (once opened) PR. */
+interface RepoMeta {
+	workspaceId: string;
+	path: string;
+	name: string;
+	branch: string | null;
+	base: string | null;
+	pr?: { owner: string; repo: string; number: number; url: string } | null;
+}
+
 /** What Conductor keeps on a ticket card between loads. */
 interface TicketMeta {
+	/** The thread's own workspace (the first repository). */
 	workspaceId?: string;
+	repos?: RepoMeta[];
+	/** Single-repository cards from before `repos`. */
 	branch?: string | null;
 	base?: string | null;
 	/** Why the ticket needs you while it sits in Agents working. */
@@ -67,6 +86,22 @@ interface TicketMeta {
 	pr?: { owner: string; repo: string; number: number } | null;
 	ciCheckedAt?: number;
 }
+
+/** The card's repositories, reading cards started before multi-repository support too. */
+const reposOf = (m: TicketMeta): RepoMeta[] =>
+	m.repos ??
+	(m.workspaceId
+		? [
+				{
+					workspaceId: m.workspaceId,
+					path: '',
+					name: '',
+					branch: m.branch ?? null,
+					base: m.base ?? null,
+					pr: m.pr ? { ...m.pr, url: '' } : null
+				}
+			]
+		: []);
 
 export type ReadyWhen = 'draft_pr' | 'ci_green';
 const DEFAULT_REPO = '~/.corpus';
@@ -192,6 +227,12 @@ export async function board(userId: string) {
 				prUrl: c.prUrl,
 				note: c.note,
 				workspaceId: meta.workspaceId ?? null,
+				repos: reposOf(meta)
+					.map((r) => r.name)
+					.filter(Boolean),
+				prs: reposOf(meta).flatMap((r) =>
+					r.pr?.url ? [{ repo: r.pr.repo, number: r.pr.number, url: r.pr.url }] : []
+				),
 				blocked: agent?.blocked ?? null,
 				summary: agent?.summary ?? meta.summary ?? null,
 				agentRunning: agent?.running ?? false,
@@ -232,7 +273,8 @@ export async function board(userId: string) {
 		});
 	}
 
-	return { cards, activity: await activity(userId), settings };
+	const repos = await conductorRepos(settings.effectiveRepoPath).catch(() => []);
+	return { cards, activity: await activity(userId), settings, repos };
 }
 
 /**
@@ -305,9 +347,10 @@ function ticketAgent(
 		});
 		return out;
 	}
-	if (readyWhen === 'ci_green' && meta.pr && !meta.blocked && !busy.has(c.id)) {
+	const prs = reposOf(meta).flatMap((r) => (r.pr ? [r.pr] : []));
+	if (readyWhen === 'ci_green' && prs.length && !meta.blocked && !busy.has(c.id)) {
 		if (Date.now() - (meta.ciCheckedAt ?? 0) > 60_000)
-			background(c.id, () => checkCi(userId, c.id, meta.pr!));
+			background(c.id, () => checkCi(userId, c.id, prs));
 	}
 	return out;
 }
@@ -322,7 +365,10 @@ async function githubToken(userId: string) {
 	return accessToken(c);
 }
 
-/** Commits and pushes the agent's work, then opens the PR (or just pushes when it exists). */
+/**
+ * Commits and pushes the agent's work in each repository it changed, then opens a PR there (or just
+ * pushes when one exists). Repositories it didn't touch get no PR.
+ */
 async function openPr(
 	userId: string,
 	cardId: string,
@@ -330,57 +376,90 @@ async function openPr(
 	ticket: { title: string; url: string; ref: string | null },
 	readyWhen: ReadyWhen
 ) {
-	if (!meta.workspaceId || !meta.branch)
+	const repos = reposOf(meta).filter((r) => r.branch);
+	if (!repos.length)
 		throw new Error('The ticket isn’t in a Git worktree, so there is nothing to push');
 	const title = ticket.ref ? `${ticket.ref}: ${ticket.title}` : ticket.title;
-	const { repo } = await conductorPush(userId, meta.workspaceId, title);
-	if (!repo) throw new Error('origin isn’t a GitHub repository');
-	const [owner, name] = repo.split('/') as [string, string];
-	if (meta.pr) {
-		await log(userId, cardId, 'pushed', `Pushed changes to PR #${meta.pr.number}`);
-	} else {
+	const others = (r: RepoMeta) =>
+		repos
+			.filter((x) => x !== r && x.pr)
+			.map((x) => `- ${x.pr!.owner}/${x.pr!.repo}#${x.pr!.number}`);
+	let touched = 0;
+	for (const r of repos) {
+		const pushed = await conductorPush(userId, r.workspaceId, title, r.base);
+		if (!pushed.changed) continue;
+		touched++;
+		if (!pushed.repo) throw new Error(`${r.name || 'origin'} isn’t a GitHub repository`);
+		if (r.pr) {
+			await log(userId, cardId, 'pushed', `Pushed changes to ${r.pr.repo}#${r.pr.number}`);
+			continue;
+		}
+		const [owner, name] = pushed.repo.split('/') as [string, string];
+		const related = others(r);
 		const pr = await createPull(
 			await githubToken(userId),
 			{ owner, repo: name },
 			{
 				title,
-				head: meta.branch,
-				base: meta.base || 'main',
-				body: `${meta.summary ?? ''}\n\nTicket: ${ticket.url}\n\n_Opened by Conductor._`.trim(),
+				head: r.branch!,
+				base: r.base || 'main',
+				body: [
+					meta.summary ?? '',
+					`Ticket: ${ticket.url}`,
+					related.length ? `Related PRs:\n${related.join('\n')}` : '',
+					'_Opened by Conductor._'
+				]
+					.filter(Boolean)
+					.join('\n\n'),
 				draft: readyWhen === 'draft_pr'
 			}
 		);
-		await db.update(card).set({ prUrl: pr.url }).where(eq(card.id, cardId));
-		await patchMeta(cardId, { pr: { owner, repo: name, number: pr.number } });
-		await log(userId, cardId, 'pr_opened', `Opened ${pr.draft ? 'draft ' : ''}PR #${pr.number}`);
+		r.pr = { owner, repo: name, number: pr.number, url: pr.url };
+		await patchMeta(cardId, { repos });
+		await db
+			.update(card)
+			.set({ prUrl: repos.find((x) => x.pr)!.pr!.url })
+			.where(eq(card.id, cardId));
+		await log(
+			userId,
+			cardId,
+			'pr_opened',
+			`Opened ${pr.draft ? 'draft ' : ''}PR ${name}#${pr.number}`
+		);
 	}
+	if (!touched) throw new Error('The agent didn’t change anything');
 	if (readyWhen === 'draft_pr') {
 		await db.update(card).set({ column: 'ready' }).where(eq(card.id, cardId));
 		await log(userId, cardId, 'ready', 'Ready for you');
 	}
 }
 
-/** ci_green: Ready once the PR is out of draft and every check passed; flags failures. */
+/** ci_green: Ready once every PR is out of draft and all their checks passed; flags failures. */
 async function checkCi(
 	userId: string,
 	cardId: string,
-	pr: { owner: string; repo: string; number: number }
+	prs: { owner: string; repo: string; number: number }[]
 ) {
 	await patchMeta(cardId, { ciCheckedAt: Date.now() });
-	const d = await pullDetails(await githubToken(userId), pr);
-	if (d.state !== 'open') return;
-	const failed = d.checks.filter(
-		(c) =>
-			c.status === 'completed' && !['success', 'neutral', 'skipped'].includes(c.conclusion ?? '')
-	);
-	if (failed.length) {
-		const reason = `CI failed: ${failed.map((c) => c.name).join(', ')}`;
-		await patchMeta(cardId, { blocked: reason });
-		await log(userId, cardId, 'blocked', reason);
-		return;
+	const token = await githubToken(userId);
+	let ready = true;
+	for (const pr of prs) {
+		const d = await pullDetails(token, pr);
+		if (d.state !== 'open') continue;
+		const failed = d.checks.filter(
+			(c) =>
+				c.status === 'completed' && !['success', 'neutral', 'skipped'].includes(c.conclusion ?? '')
+		);
+		if (failed.length) {
+			const reason = `CI failed on ${pr.repo}#${pr.number}: ${failed.map((c) => c.name).join(', ')}`;
+			await patchMeta(cardId, { blocked: reason });
+			await log(userId, cardId, 'blocked', reason);
+			return;
+		}
+		const done = d.checks.length > 0 && d.checks.every((c) => c.status === 'completed');
+		if (d.draft || !done) ready = false;
 	}
-	const done = d.checks.length > 0 && d.checks.every((c) => c.status === 'completed');
-	if (!d.draft && done) {
+	if (ready) {
 		await db.update(card).set({ column: 'ready' }).where(eq(card.id, cardId));
 		await log(userId, cardId, 'ready', 'CI passed. Ready for you');
 	}
@@ -394,7 +473,7 @@ const branchSlug = (s: string) =>
 		.slice(0, 40) || 'ticket';
 
 /** Gives a ticket its own worktree and agent thread, seeded with the ticket, and moves it to working. */
-export async function startTicket(userId: string, cardId: string) {
+export async function startTicket(userId: string, cardId: string, repoPaths: string[] = []) {
 	const [row] = await db
 		.select({
 			card,
@@ -414,8 +493,18 @@ export async function startTicket(userId: string, cardId: string) {
 		error(409, 'Agents are already on this ticket');
 	const { effectiveRepoPath, readyWhen } = await conductorSettings(userId);
 	const tref = ref(row.provider, row);
-	// The previous thread was removed: open a new one in the same worktree, keeping branch and PR.
-	const previous = row.card.chatId ? (row.card.meta as TicketMeta) : null;
+	// The previous thread was removed: open a new one in the same worktrees, keeping branches and PRs.
+	const previous = row.card.chatId ? reposOf(row.card.meta as TicketMeta) : [];
+	let chosen: string[] = [];
+	if (!previous.length) {
+		// Only repositories Conductor lists for the configured folder.
+		const available = await conductorRepos(effectiveRepoPath);
+		chosen = repoPaths.length ? repoPaths : available.length === 1 ? [available[0]!.path] : [];
+		const allowed = new Set(available.map((r: { path: string }) => r.path));
+		if (!chosen.length) error(400, 'Choose at least one repository');
+		if (chosen.some((p) => !allowed.has(p))) error(400, 'Unknown repository');
+	}
+	const prs = previous.flatMap((r) => (r.pr ? [`${r.pr.repo}#${r.pr.number}`] : []));
 	const description = await itemPreview(userId, row.card.itemId)
 		.then((p) => p?.body ?? '')
 		.catch(() => '');
@@ -424,14 +513,15 @@ export async function startTicket(userId: string, cardId: string) {
 		row.url,
 		...(description ? ['', 'Description:', description.slice(0, 20000)] : []),
 		'',
-		'Implement it in this workspace. Inspect the code first and keep the change focused.',
+		'Implement it in this workspace (and the other repositories listed above, if any). Inspect the code',
+		'first and keep the change focused.',
 		'You can edit files but cannot run shell commands. Conductor commits, pushes and opens the PR',
 		`(${readyWhen === 'draft_pr' ? 'as a draft' : 'ready for review'}) once you finish.`,
-		...(previous?.workspaceId
+		...(previous.length
 			? [
 					'',
-					'A previous agent thread on this ticket was removed. Its changes may already be in this',
-					`worktree${previous.pr ? ` and in PR #${previous.pr.number}` : ''}. Review what is already changed and continue from there.`
+					'A previous agent thread on this ticket was removed. Its changes may already be in these',
+					`worktrees${prs.length ? ` and in ${prs.join(', ')}` : ''}. Review what is already changed and continue from there.`
 				]
 			: []),
 		'',
@@ -442,23 +532,29 @@ export async function startTicket(userId: string, cardId: string) {
 	let started;
 	try {
 		started = await conductorStart(userId, {
-			repoPath: effectiveRepoPath,
+			repoPaths: chosen,
+			workspaceIds: previous.map((r) => r.workspaceId),
 			branch: `conductor/${branchSlug(tref ?? row.title)}-${cardId.slice(0, 6)}`,
 			title: tref ? `${tref} ${row.title}` : row.title,
 			prompt,
-			agent: { provider: 'claude', name: 'Builder', role: 'Implements the ticket end to end.' },
-			workspaceId: previous?.workspaceId
+			agent: { provider: 'claude', name: 'Builder', role: 'Implements the ticket end to end.' }
 		});
 	} catch (e) {
 		error(400, e instanceof Error ? e.message : 'Couldn’t start agents');
 	}
-	if (started.reused) {
+	if (!started.repos) {
 		await db
 			.update(card)
 			.set({ column: 'working', chatId: started.chatId })
 			.where(eq(card.id, cardId));
 		await patchMeta(cardId, { blocked: null, handledAt: null });
-		await log(userId, cardId, 'started', 'Opened a new agent thread in the same worktree', 'you');
+		await log(
+			userId,
+			cardId,
+			'started',
+			'Relaunched the conversation in the same worktrees',
+			'you'
+		);
 		return;
 	}
 	await db
@@ -468,17 +564,21 @@ export async function startTicket(userId: string, cardId: string) {
 			chatId: started.chatId,
 			prUrl: null,
 			meta: {
-				workspaceId: started.workspaceId,
-				branch: started.branch,
-				base: started.base,
+				workspaceId: started.repos[0].workspaceId,
+				repos: started.repos,
 				blocked: null,
 				summary: null,
-				handledAt: null,
-				pr: null
+				handledAt: null
 			} satisfies TicketMeta
 		})
 		.where(eq(card.id, cardId));
-	await log(userId, cardId, 'started', `Agents started in ${effectiveRepoPath}`, 'you');
+	await log(
+		userId,
+		cardId,
+		'started',
+		`Agents started in ${started.repos.map((r: RepoMeta) => r.name).join(', ')}`,
+		'you'
+	);
 }
 
 /** Sends the note to the ticket's agents (when it has some) and moves it back to Agents working. */

@@ -91,12 +91,27 @@
 	const move = (card: ConductorCard, column: Column) =>
 		post({ action: 'move', cardId: card.id, column });
 
+	// Repositories picked for the ticket about to start, by path.
+	let chosen = $state<Record<string, boolean>>({});
+	const chosenPaths = $derived(data.repos.filter((r) => chosen[r.path]).map((r) => r.path));
+	const canStart = (c: ConductorCard) =>
+		c.kind === 'ticket' && !c.chatId && (c.column === 'inbox' || c.column === 'today');
+
+	function select(card: ConductorCard) {
+		selectedId = card.id;
+		note = '';
+		chosen = data.repos.length === 1 ? { [data.repos[0]!.path]: true } : {};
+	}
+
 	async function start(card: ConductorCard) {
 		const again = card.chatGone;
-		if (await post({ action: 'start', cardId: card.id }))
+		const names = data.repos.filter((r) => chosen[r.path]).map((r) => r.name);
+		if (
+			await post({ action: 'start', cardId: card.id, ...(again ? {} : { repoPaths: chosenPaths }) })
+		)
 			toast(again ? 'Conversation relaunched' : 'Agents started', {
 				tone: 'success',
-				body: again ? 'Same worktree and branch' : data.settings.effectiveRepoPath
+				body: again ? 'Same worktrees and branches' : names.join(', ')
 			});
 	}
 
@@ -244,14 +259,15 @@
 					>
 				</div>
 				<label class="block text-sm font-semibold"
-					>Repository
+					>Repositories
 					<input
 						bind:value={repoPath}
 						placeholder="~/.corpus"
 						class="mt-2 w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-sm font-normal"
 					/>
 					<span class="mt-1 block text-xs font-normal text-muted"
-						>Where ticket agents work. Each ticket gets its own Git worktree and branch. Empty uses
+						>A Git repository, or a folder of clones (e.g. ~/Desktop/repo) to choose from when you
+						start a ticket. Each chosen repository gets its own worktree and branch. Empty uses
 						~/.corpus.</span
 					>
 				</label>
@@ -287,11 +303,7 @@
 							</div>
 							<div class="space-y-1.5">
 								{#each byColumn[column.id] as card (card.id)}
-									<BoardCard
-										{card}
-										active={card.id === selectedId}
-										onopen={() => ((selectedId = card.id), (note = ''))}
-									/>
+									<BoardCard {card} active={card.id === selectedId} onopen={() => select(card)} />
 								{/each}
 							</div>
 						</section>
@@ -456,7 +468,17 @@
 						<h3 class="flex items-center gap-2 font-semibold">
 							<GitPullRequest class="size-4" /> Pull request
 						</h3>
-						{#if selected.prUrl}
+						{#if selected.prs.length}
+							{#each selected.prs as pr (pr.url)}
+								<a
+									href={pr.url}
+									target="_blank"
+									rel="noreferrer"
+									class="mt-2 flex items-center gap-1 text-sm text-primary-600"
+									>{pr.repo}#{pr.number} <ExternalLink class="size-3.5" /></a
+								>
+							{/each}
+						{:else if selected.prUrl}
 							<a
 								href={selected.prUrl}
 								target="_blank"
@@ -486,6 +508,38 @@
 							>
 						{/if}
 					</section>
+					{#if canStart(selected)}
+						<fieldset class="card p-4">
+							<legend class="sr-only">Repositories</legend>
+							<h3 class="font-semibold">Repositories</h3>
+							<p class="mt-1 text-xs text-muted">
+								Where the agents work. Each gets its own worktree and branch, and a PR if it
+								changes.
+							</p>
+							{#if data.repos.length}
+								<div class="mt-3 space-y-2">
+									{#each data.repos as r (r.path)}
+										<label class="flex items-center gap-2 text-sm">
+											<input
+												type="checkbox"
+												bind:checked={chosen[r.path]}
+												class="accent-blue-600"
+											/>
+											<span class="font-medium">{r.name}</span>
+											<span class="truncate font-mono text-xs text-muted">{r.path}</span>
+										</label>
+									{/each}
+								</div>
+							{:else}
+								<p class="mt-3 text-sm text-muted">
+									No Git repositories in {data.settings.effectiveRepoPath}. Set the folder in
+									Settings.
+								</p>
+							{/if}
+						</fieldset>
+					{:else if selected.repos.length}
+						<p class="text-xs text-muted">Working in {selected.repos.join(', ')}</p>
+					{/if}
 					<label class="block text-sm font-semibold"
 						>Add a note<textarea
 							bind:value={note}
@@ -516,12 +570,12 @@
 							onclick={() => reviewAction(selected, 'approve')}>Approve review</button
 						>
 					{/if}
-				{:else if !selected.chatId && (selected.column === 'inbox' || selected.column === 'today')}
-					<p class="mr-auto self-center text-xs text-muted">
-						Runs in {data.settings.effectiveRepoPath}
-					</p>
-					<button class="btn-primary" disabled={busy} onclick={() => start(selected)}
-						><Play class="size-4" /> Start agents</button
+				{:else if canStart(selected)}
+					<button
+						class="btn-primary"
+						disabled={busy || !chosenPaths.length}
+						title={chosenPaths.length ? '' : 'Choose a repository'}
+						onclick={() => start(selected)}><Play class="size-4" /> Start agents</button
 					>
 				{:else}
 					<button

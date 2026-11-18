@@ -780,8 +780,31 @@ if (!globalThis.__wrxProbe) {
 // ticket, then reads the thread back to see whether the agent finished. Same per-user host as the UI.
 
 /** Finds or registers the repository at `repoPath`, gives the ticket its own worktree, and starts a thread. */
-export async function conductorStart(userId, { repoPath, branch, title, prompt, agent }) {
+export async function conductorStart(
+	userId,
+	{ repoPath, branch, title, prompt, agent, workspaceId }
+) {
 	const { engine, store } = host(userId);
+	// A replacement thread for a ticket whose thread was removed: same worktree, so its work carries on.
+	const existing = workspaceId && store.state.workspaces.find((w) => w.id === workspaceId);
+	if (existing) {
+		const chat = engine.chat({
+			workspaceId: existing.id,
+			title: title.slice(0, 200),
+			provider: agent.provider,
+			mode: 'implement',
+			name: agent.name,
+			role: agent.role
+		});
+		engine.turn(chat.id, prompt);
+		return {
+			chatId: chat.id,
+			workspaceId: existing.id,
+			branch: existing.branch ?? null,
+			base: null,
+			reused: true
+		};
+	}
 	const expanded = path.resolve(String(repoPath).replace(/^~(?=\/|$)/, os.homedir()));
 	fs.mkdirSync(expanded, { recursive: true });
 	const directory = fs.realpathSync(expanded);

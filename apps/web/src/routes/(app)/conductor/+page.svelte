@@ -92,8 +92,12 @@
 		post({ action: 'move', cardId: card.id, column });
 
 	async function start(card: ConductorCard) {
+		const again = card.chatGone;
 		if (await post({ action: 'start', cardId: card.id }))
-			toast('Agents started', { tone: 'success', body: data.settings.effectiveRepoPath });
+			toast(again ? 'Conversation relaunched' : 'Agents started', {
+				tone: 'success',
+				body: again ? 'Same worktree and branch' : data.settings.effectiveRepoPath
+			});
 	}
 
 	function openSettings() {
@@ -413,9 +417,19 @@
 							<Bot class="size-4" /> Agent summary
 						</h3>
 						{#if selected.blocked}
-							<p class="mt-2 rounded-lg bg-red-50 p-2.5 text-sm text-red-700">
-								Needs you: {selected.blocked}
-							</p>
+							<div
+								class="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-red-50 p-2.5 text-sm text-red-700"
+							>
+								<span>Needs you: {selected.blocked}</span>
+								{#if selected.chatGone}
+									<button
+										class="btn-outline h-7 bg-surface text-xs"
+										disabled={busy}
+										onclick={() => start(selected)}
+										><RotateCcw class="size-3.5" /> Relaunch conversation</button
+									>
+								{/if}
+							</div>
 						{/if}
 						{#if selected.summary}
 							<p class="mt-2 text-sm whitespace-pre-line text-muted">{selected.summary}</p>
@@ -459,7 +473,7 @@
 						<h3 class="flex items-center gap-2 font-semibold">
 							<MessageSquare class="size-4" /> Agent chat
 						</h3>
-						{#if selected.chatId}
+						{#if selected.chatId && !selected.chatGone}
 							<a
 								href="/workbench?{new URLSearchParams({
 									...(selected.workspaceId ? { workspace: selected.workspaceId } : {}),
@@ -468,7 +482,8 @@
 								class="text-sm text-primary-600">Open conversation</a
 							>
 						{:else}
-							<span class="text-sm text-muted">Not started</span>
+							<span class="text-sm text-muted">{selected.chatGone ? 'Removed' : 'Not started'}</span
+							>
 						{/if}
 					</section>
 					<label class="block text-sm font-semibold"

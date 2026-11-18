@@ -195,6 +195,8 @@ export async function board(userId: string) {
 				blocked: agent?.blocked ?? null,
 				summary: agent?.summary ?? meta.summary ?? null,
 				agentRunning: agent?.running ?? false,
+				/** Its agent thread was removed in Workbench; Start opens a new one. */
+				chatGone: !!agent?.gone,
 				agentName: agent?.name ?? null,
 				opening: busy.has(c.id),
 				updatedAt: (i.updatedAt ?? c.updatedAt).toISOString(),
@@ -249,6 +251,7 @@ function ticketAgent(
 ) {
 	const snap = conductorChat(userId, c.chatId!);
 	const out = {
+		gone: !!c.chatId && !snap,
 		running: !!snap?.running,
 		name: snap?.lastAgentName ?? null,
 		blocked: meta.blocked ?? null,
@@ -411,6 +414,8 @@ export async function startTicket(userId: string, cardId: string) {
 		error(409, 'Agents are already on this ticket');
 	const { effectiveRepoPath, readyWhen } = await conductorSettings(userId);
 	const tref = ref(row.provider, row);
+	// The previous thread was removed: open a new one in the same worktree, keeping branch and PR.
+	const previous = row.card.chatId ? (row.card.meta as TicketMeta) : null;
 	const description = await itemPreview(userId, row.card.itemId)
 		.then((p) => p?.body ?? '')
 		.catch(() => '');
@@ -422,6 +427,13 @@ export async function startTicket(userId: string, cardId: string) {
 		'Implement it in this workspace. Inspect the code first and keep the change focused.',
 		'You can edit files but cannot run shell commands. Conductor commits, pushes and opens the PR',
 		`(${readyWhen === 'draft_pr' ? 'as a draft' : 'ready for review'}) once you finish.`,
+		...(previous?.workspaceId
+			? [
+					'',
+					'A previous agent thread on this ticket was removed. Its changes may already be in this',
+					`worktree${previous.pr ? ` and in PR #${previous.pr.number}` : ''}. Review what is already changed and continue from there.`
+				]
+			: []),
 		'',
 		'End your final reply with a short summary of what changed, then a last line that is exactly',
 		'`CONDUCTOR: DONE`. If you need a decision from the human instead, end with',
@@ -434,10 +446,20 @@ export async function startTicket(userId: string, cardId: string) {
 			branch: `conductor/${branchSlug(tref ?? row.title)}-${cardId.slice(0, 6)}`,
 			title: tref ? `${tref} ${row.title}` : row.title,
 			prompt,
-			agent: { provider: 'claude', name: 'Builder', role: 'Implements the ticket end to end.' }
+			agent: { provider: 'claude', name: 'Builder', role: 'Implements the ticket end to end.' },
+			workspaceId: previous?.workspaceId
 		});
 	} catch (e) {
 		error(400, e instanceof Error ? e.message : 'Couldn’t start agents');
+	}
+	if (started.reused) {
+		await db
+			.update(card)
+			.set({ column: 'working', chatId: started.chatId })
+			.where(eq(card.id, cardId));
+		await patchMeta(cardId, { blocked: null, handledAt: null });
+		await log(userId, cardId, 'started', 'Opened a new agent thread in the same worktree', 'you');
+		return;
 	}
 	await db
 		.update(card)

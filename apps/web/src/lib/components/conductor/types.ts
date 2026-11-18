@@ -24,6 +24,8 @@ export interface ConductorCard {
 	/** The agent's closing summary. */
 	summary: string | null;
 	agentRunning: boolean;
+	/** Its agent thread was removed in Workbench; Start opens a new one. */
+	chatGone: boolean;
 	agentName: string | null;
 	/** Conductor is pushing / opening the PR right now. */
 	opening: boolean;

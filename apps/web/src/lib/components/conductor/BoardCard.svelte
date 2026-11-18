@@ -67,7 +67,7 @@
 		<div
 			class="flex flex-wrap items-center gap-3 border-t border-line pt-2 text-xs font-medium text-primary-600"
 		>
-			{#if card.chatId}<a
+			{#if card.chatId && !card.chatGone}<a
 					href="/workbench?{new URLSearchParams({
 						...(card.workspaceId ? { workspace: card.workspaceId } : {}),
 						chat: card.chatId

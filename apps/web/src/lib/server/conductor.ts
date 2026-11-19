@@ -5,12 +5,17 @@ import { error } from '@sveltejs/kit';
 import { and, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { db, optionalEnv, schema } from '@corpus/db';
 import { accessToken } from '@corpus/db/connections';
-import { createPull, pullDetails } from '@corpus/core/integrations';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import { createPull, pullDetails, updatePullBody } from '@corpus/core/integrations';
+import { reviewEnv, runAgent, type Spawn } from './pr-review/runner';
+import { agentEnv } from './wrx/core.js';
 import { itemPreview } from './integrations';
-import { listExternalReviews } from './pr-review/service';
+import { getReviewerSettings, listExternalReviews } from './pr-review/service';
 import { getSettings } from './settings';
 import {
 	conductorChat,
+	conductorDiff,
 	conductorPush,
 	conductorRepos,
 	conductorSend,
@@ -81,6 +86,8 @@ interface TicketMeta {
 	blocked?: string | null;
 	/** The agent's closing summary. */
 	summary?: string | null;
+	/** The ticket's description when agents started, for the PR's Why. */
+	ticketBody?: string | null;
 	/** The agent message last acted on, so one reply is handled once. */
 	handledAt?: string | null;
 	pr?: { owner: string; repo: string; number: number } | null;
@@ -107,12 +114,78 @@ export type ReadyWhen = 'draft_pr' | 'ci_green';
 const DEFAULT_REPO = '~/.corpus';
 
 export async function conductorSettings(userId: string) {
-	const s = await getSettings(userId, ['conductor.repoPath', 'conductor.readyWhen']);
+	const s = await getSettings(userId, [
+		'conductor.repoPath',
+		'conductor.readyWhen',
+		'conductor.preReview',
+		'conductor.repoNotes'
+	]);
+	const roots = s['conductor.repoPath']
+		.split('\n')
+		.map((l) => l.trim())
+		.filter(Boolean);
 	return {
 		repoPath: s['conductor.repoPath'],
-		effectiveRepoPath: s['conductor.repoPath'].trim() || DEFAULT_REPO,
-		readyWhen: s['conductor.readyWhen'] as ReadyWhen
+		roots: roots.length ? roots : [DEFAULT_REPO],
+		readyWhen: s['conductor.readyWhen'] as ReadyWhen,
+		preReview: s['conductor.preReview'],
+		repoNotes: parseNotes(s['conductor.repoNotes'])
 	};
+}
+
+function parseNotes(raw: string): Record<string, string> {
+	try {
+		const v = JSON.parse(raw) as unknown;
+		if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+		return Object.fromEntries(
+			Object.entries(v).filter((e): e is [string, string] => typeof e[1] === 'string')
+		);
+	} catch {
+		return {};
+	}
+}
+
+export type AvailableRepo = { path: string; name: string; note: string };
+
+/** Every repository the configured lines point at (repos, or the clones inside folders), deduped. */
+export async function availableRepos(settings: {
+	roots: string[];
+	repoNotes: Record<string, string>;
+}): Promise<AvailableRepo[]> {
+	const seen = new Map<string, AvailableRepo>();
+	for (const root of settings.roots) {
+		const found = await conductorRepos(root).catch(() => [] as { path: string; name: string }[]);
+		for (const r of found as { path: string; name: string }[])
+			if (!seen.has(r.path)) seen.set(r.path, { ...r, note: settings.repoNotes[r.path] ?? '' });
+	}
+	return [...seen.values()];
+}
+
+/** The agents on a ticket thread: the Builder leads; your reviewers check its work before the PR. */
+function ticketTeam(userId: string, preReview: boolean) {
+	const builder = {
+		provider: 'claude',
+		mode: 'implement',
+		name: 'Builder',
+		role: 'Implements the ticket end to end and owns the thread: only the Builder ends it.'
+	};
+	if (!preReview) return [builder];
+	const { reviewers } = getReviewerSettings(userId);
+	const brief =
+		'In this thread you review the Builder’s uncommitted changes in its worktree(s) before a PR is opened. ' +
+		'Read the files it lists, and their callers. Reply with concrete findings, most severe first: file:line, ' +
+		'what goes wrong and the fix. Say "No findings" if there are none. Always end by mentioning @builder. ' +
+		'Never write a CONDUCTOR: line.';
+	return [
+		builder,
+		...reviewers.map((r) => ({
+			provider: 'claude',
+			mode: 'review',
+			name: r.role === 'integrator' ? 'Integrator' : 'Breaker',
+			model: r.model,
+			role: `${brief}\n\n${r.persona}`.slice(0, 4000)
+		}))
+	];
 }
 
 const patchMeta = (cardId: string, patch: Partial<TicketMeta>) =>
@@ -273,7 +346,7 @@ export async function board(userId: string) {
 		});
 	}
 
-	const repos = await conductorRepos(settings.effectiveRepoPath).catch(() => []);
+	const repos = await availableRepos(settings);
 	return { cards, activity: await activity(userId), settings, repos };
 }
 
@@ -365,6 +438,82 @@ async function githubToken(userId: string) {
 	return accessToken(c);
 }
 
+const MAX_DIFF = 60_000;
+
+/**
+ * Writes the PR description (What / Why / How) from the ticket and the branch's diff, with a
+ * one-shot, tool-less Claude run. Falls back to a plain template from the agent's summary.
+ */
+async function prDescription(input: {
+	ticket: { title: string; url: string; ref: string | null };
+	ticketBody: string | null;
+	summary: string | null;
+	repo: string;
+	diff: { stat: string; log: string; diff: string };
+	related: string[];
+}) {
+	const footer = [
+		`Ticket: ${input.ticket.url}`,
+		input.related.length ? `Related PRs:\n${input.related.join('\n')}` : '',
+		'_Opened by Conductor._'
+	]
+		.filter(Boolean)
+		.join('\n\n');
+	const prompt = [
+		'Write the description for a GitHub pull request. Output only Markdown with exactly these three',
+		'sections, in this order, and nothing before or after them:',
+		'',
+		'## What',
+		'One or two sentences on what the PR changes, from the reader’s point of view.',
+		'',
+		'## Why',
+		'The problem or goal behind it, taken from the ticket. Do not invent motivation.',
+		'',
+		'## How',
+		'Short bullets on the approach and the notable changes, naming key files or modules. Mention',
+		'anything a reviewer should look at closely or that is left out.',
+		'',
+		'Be concrete and brief. Do not quote the conversation, mention agents, Conductor or tooling, or',
+		'add headings, checklists or a title.',
+		'',
+		`Repository: ${input.repo}`,
+		`Ticket${input.ticket.ref ? ` ${input.ticket.ref}` : ''}: ${input.ticket.title}`,
+		input.ticketBody ? `Ticket description:\n${input.ticketBody.slice(0, 6000)}` : '',
+		input.summary ? `Implementer's notes:\n${input.summary.slice(0, 4000)}` : '',
+		input.diff.log ? `Commits:\n${input.diff.log}` : '',
+		`Diffstat:\n${input.diff.stat}`,
+		`Diff${input.diff.diff.length > MAX_DIFF ? ' (truncated)' : ''}:\n${input.diff.diff.slice(0, MAX_DIFF)}`
+	]
+		.filter(Boolean)
+		.join('\n');
+	const run = await runAgent({
+		slot: { provider: 'claude', model: '', tools: false },
+		prompt,
+		cwd: os.tmpdir(),
+		env: reviewEnv(agentEnv()),
+		spawn: spawn as unknown as Spawn,
+		timeoutMs: 3 * 60_000
+	});
+	let body = run.error ? '' : run.text.trim();
+	// Keep from the first section on; anything else means the run didn't follow the format.
+	const start = body.search(/^## What\b/m);
+	body = start >= 0 ? body.slice(start).trim() : '';
+	if (!/^## Why\b/m.test(body) || !/^## How\b/m.test(body)) {
+		if (run.error) console.error('conductor: PR description', run.error);
+		body = [
+			'## What',
+			input.ticket.title,
+			'',
+			'## Why',
+			input.ticketBody?.trim().slice(0, 2000) || `See ${input.ticket.url}.`,
+			'',
+			'## How',
+			input.diff.stat.trim() ? '```\n' + input.diff.stat.trim() + '\n```' : 'See the diff.'
+		].join('\n');
+	}
+	return `${body}\n\n---\n\n${footer}`;
+}
+
 /**
  * Commits and pushes the agent's work in each repository it changed, then opens a PR there (or just
  * pushes when one exists). Repositories it didn't touch get no PR.
@@ -390,12 +539,24 @@ async function openPr(
 		if (!pushed.changed) continue;
 		touched++;
 		if (!pushed.repo) throw new Error(`${r.name || 'origin'} isn’t a GitHub repository`);
+		const [owner, name] = pushed.repo.split('/') as [string, string];
+		const related = others(r);
+		const body = await prDescription({
+			ticket,
+			ticketBody: meta.ticketBody ?? null,
+			summary: meta.summary ?? null,
+			repo: pushed.repo,
+			diff: await conductorDiff(userId, r.workspaceId, r.base),
+			related
+		});
 		if (r.pr) {
+			// Sent back and finished again: the description follows the new diff.
+			await updatePullBody(await githubToken(userId), r.pr, body).catch((e) =>
+				console.error('conductor: PR body', e)
+			);
 			await log(userId, cardId, 'pushed', `Pushed changes to ${r.pr.repo}#${r.pr.number}`);
 			continue;
 		}
-		const [owner, name] = pushed.repo.split('/') as [string, string];
-		const related = others(r);
 		const pr = await createPull(
 			await githubToken(userId),
 			{ owner, repo: name },
@@ -403,14 +564,7 @@ async function openPr(
 				title,
 				head: r.branch!,
 				base: r.base || 'main',
-				body: [
-					meta.summary ?? '',
-					`Ticket: ${ticket.url}`,
-					related.length ? `Related PRs:\n${related.join('\n')}` : '',
-					'_Opened by Conductor._'
-				]
-					.filter(Boolean)
-					.join('\n\n'),
+				body,
 				draft: readyWhen === 'draft_pr'
 			}
 		);
@@ -491,16 +645,17 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 	if (row.card.kind !== 'ticket') error(400, 'Only tickets start agents');
 	if (row.card.chatId && conductorChat(userId, row.card.chatId))
 		error(409, 'Agents are already on this ticket');
-	const { effectiveRepoPath, readyWhen } = await conductorSettings(userId);
+	const settings = await conductorSettings(userId);
+	const { readyWhen, preReview } = settings;
+	const available = await availableRepos(settings);
 	const tref = ref(row.provider, row);
 	// The previous thread was removed: open a new one in the same worktrees, keeping branches and PRs.
 	const previous = row.card.chatId ? reposOf(row.card.meta as TicketMeta) : [];
 	let chosen: string[] = [];
 	if (!previous.length) {
-		// Only repositories Conductor lists for the configured folder.
-		const available = await conductorRepos(effectiveRepoPath);
+		// Only repositories Conductor lists for the configured folders.
 		chosen = repoPaths.length ? repoPaths : available.length === 1 ? [available[0]!.path] : [];
-		const allowed = new Set(available.map((r: { path: string }) => r.path));
+		const allowed = new Set(available.map((r) => r.path));
 		if (!chosen.length) error(400, 'Choose at least one repository');
 		if (chosen.some((p) => !allowed.has(p))) error(400, 'Unknown repository');
 	}
@@ -508,13 +663,27 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 	const description = await itemPreview(userId, row.card.itemId)
 		.then((p) => p?.body ?? '')
 		.catch(() => '');
+	// What each repository is, so the agent knows where a change belongs.
+	const repoLines = (previous.length ? previous.map((r) => r.path).filter(Boolean) : chosen).map(
+		(p) => {
+			const r = available.find((x) => x.path === p);
+			const name = r?.name ?? p.split('/').pop();
+			return `- ${name}${r?.note ? `: ${r.note}` : ''} (${p})`;
+		}
+	);
 	const prompt = [
 		`Work this ticket${tref ? ` (${tref})` : ''}: ${row.title}`,
 		row.url,
 		...(description ? ['', 'Description:', description.slice(0, 20000)] : []),
+		...(repoLines.length
+			? [
+					'',
+					`Repositories for this ticket (the first is your working directory; edit the others in their worktrees as listed in your context):`,
+					...repoLines
+				]
+			: []),
 		'',
-		'Implement it in this workspace (and the other repositories listed above, if any). Inspect the code',
-		'first and keep the change focused.',
+		'Implement it. Inspect the code first and keep the change focused.',
 		'You can edit files but cannot run shell commands. Conductor commits, pushes and opens the PR',
 		`(${readyWhen === 'draft_pr' ? 'as a draft' : 'ready for review'}) once you finish.`,
 		...(previous.length
@@ -522,6 +691,15 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 					'',
 					'A previous agent thread on this ticket was removed. Its changes may already be in these',
 					`worktrees${prs.length ? ` and in ${prs.join(', ')}` : ''}. Review what is already changed and continue from there.`
+				]
+			: []),
+		...(preReview
+			? [
+					'',
+					'Before you finish, ask @integrator and @breaker to review in one message: list every file you',
+					'changed (absolute paths) and what each change does; they can read files but cannot run git.',
+					'Address what they raise, or say why not. Ask them to look again only after significant changes.',
+					'You have the last word: never end the thread on their reply.'
 				]
 			: []),
 		'',
@@ -537,7 +715,7 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 			branch: `conductor/${branchSlug(tref ?? row.title)}-${cardId.slice(0, 6)}`,
 			title: tref ? `${tref} ${row.title}` : row.title,
 			prompt,
-			agent: { provider: 'claude', name: 'Builder', role: 'Implements the ticket end to end.' }
+			team: ticketTeam(userId, preReview)
 		});
 	} catch (e) {
 		error(400, e instanceof Error ? e.message : 'Couldn’t start agents');
@@ -566,6 +744,7 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 			meta: {
 				workspaceId: started.repos[0].workspaceId,
 				repos: started.repos,
+				ticketBody: description.slice(0, 6000) || null,
 				blocked: null,
 				summary: null,
 				handledAt: null

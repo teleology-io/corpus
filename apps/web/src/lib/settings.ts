@@ -43,9 +43,9 @@ export const SETTINGS = {
 		type: 'string',
 		label: 'Repositories',
 		description:
-			'A Git repository, or a folder of clones to choose from when you start a ticket. Empty uses ~/.corpus.',
+			'Git repositories or folders of clones to choose from when you start a ticket, one per line. Empty uses ~/.corpus.',
 		default: '',
-		maxLength: 1000
+		maxLength: 4000
 	},
 	'conductor.readyWhen': {
 		key: 'conductor.readyWhen',
@@ -57,6 +57,22 @@ export const SETTINGS = {
 			{ value: 'ci_green', label: 'PR is ready for review and CI passes' }
 		],
 		default: 'draft_pr'
+	},
+	'conductor.preReview': {
+		key: 'conductor.preReview',
+		type: 'boolean',
+		label: 'Review before the PR',
+		description:
+			'Add your Integrator and Breaker reviewers to each ticket thread; the Builder addresses their findings before the PR opens.',
+		default: true
+	},
+	'conductor.repoNotes': {
+		key: 'conductor.repoNotes',
+		type: 'string',
+		label: 'Repository notes',
+		description: 'JSON: repository path -> what it is, shown to agents.',
+		default: '{}',
+		maxLength: 20000
 	}
 } as const satisfies Record<string, SettingDef>;
 

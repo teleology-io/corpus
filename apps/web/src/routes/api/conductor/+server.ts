@@ -33,8 +33,10 @@ const input = z.discriminatedUnion('action', [
 	}),
 	z.object({
 		action: z.literal('settings'),
-		repoPath: z.string().trim().max(1000).optional(),
-		readyWhen: z.enum(['draft_pr', 'ci_green']).optional()
+		repoPath: z.string().trim().max(4000).optional(),
+		readyWhen: z.enum(['draft_pr', 'ci_green']).optional(),
+		preReview: z.boolean().optional(),
+		repoNotes: z.record(z.string().max(4096), z.string().trim().max(500)).optional()
 	})
 ]);
 
@@ -58,6 +60,14 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		case 'settings':
 			if (i.repoPath !== undefined) await setSetting(ctx.userId, 'conductor.repoPath', i.repoPath);
 			if (i.readyWhen) await setSetting(ctx.userId, 'conductor.readyWhen', i.readyWhen);
+			if (i.preReview !== undefined)
+				await setSetting(ctx.userId, 'conductor.preReview', i.preReview);
+			if (i.repoNotes)
+				await setSetting(
+					ctx.userId,
+					'conductor.repoNotes',
+					JSON.stringify(Object.fromEntries(Object.entries(i.repoNotes).filter(([, v]) => v)))
+				);
 			break;
 	}
 	return Response.json(await board(ctx.userId));

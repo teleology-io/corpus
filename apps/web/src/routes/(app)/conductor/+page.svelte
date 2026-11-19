@@ -44,6 +44,8 @@
 	let settingsOpen = $state(false);
 	let repoPath = $state('');
 	let readyWhen = $state<'draft_pr' | 'ci_green'>('draft_pr');
+	let preReview = $state(true);
+	let notes = $state<Record<string, string>>({});
 
 	// Agents and CI move cards on their own; keep the board current while it's open.
 	onMount(() => {
@@ -118,11 +120,16 @@
 	function openSettings() {
 		repoPath = data.settings.repoPath;
 		readyWhen = data.settings.readyWhen;
+		preReview = data.settings.preReview;
+		notes = Object.fromEntries(data.repos.map((r) => [r.path, r.note]));
 		settingsOpen = true;
 	}
 
 	async function saveSettings() {
-		if (await post({ action: 'settings', repoPath, readyWhen })) settingsOpen = false;
+		const changedRoots = repoPath.trim() !== data.settings.repoPath.trim();
+		const ok = await post({ action: 'settings', repoPath, readyWhen, preReview, repoNotes: notes });
+		// New folders list new repositories: keep the panel open so they can be described.
+		if (ok && !changedRoots) settingsOpen = false;
 	}
 
 	async function sendBack(card: ConductorCard) {
@@ -260,16 +267,47 @@
 				</div>
 				<label class="block text-sm font-semibold"
 					>Repositories
-					<input
+					<textarea
 						bind:value={repoPath}
-						placeholder="~/.corpus"
+						rows="3"
+						placeholder="~/Desktop/repo"
 						class="mt-2 w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-sm font-normal"
-					/>
+					></textarea>
 					<span class="mt-1 block text-xs font-normal text-muted"
-						>A Git repository, or a folder of clones (e.g. ~/Desktop/repo) to choose from when you
-						start a ticket. Each chosen repository gets its own worktree and branch. Empty uses
-						~/.corpus.</span
+						>One per line: a Git repository, or a folder of clones (e.g. ~/Desktop/repo). You pick
+						from all of them when you start a ticket. Empty uses ~/.corpus.</span
 					>
+				</label>
+				{#if data.repos.length}
+					<div class="text-sm">
+						<p class="font-semibold">What each repository is</p>
+						<p class="mt-1 text-xs text-muted">
+							Shown to the agents so they know where a change belongs.
+						</p>
+						<div class="mt-2 space-y-2">
+							{#each data.repos as r (r.path)}
+								<label class="grid items-center gap-2 sm:grid-cols-[10rem_1fr]">
+									<span class="truncate font-medium" title={r.path}>{r.name}</span>
+									<input
+										bind:value={notes[r.path]}
+										maxlength="500"
+										placeholder="e.g. Customer-facing Rails app"
+										class="w-full rounded-lg border border-line bg-surface px-3 py-1.5 text-sm"
+									/>
+								</label>
+							{/each}
+						</div>
+					</div>
+				{/if}
+				<label class="flex items-start gap-2 text-sm">
+					<input type="checkbox" bind:checked={preReview} class="mt-1 accent-blue-600" />
+					<span>
+						<span class="font-semibold">Review before the PR</span>
+						<span class="block text-xs text-muted"
+							>Your Integrator and Breaker (from Integration Review settings) join each ticket
+							thread. The Builder addresses their findings before Conductor opens the PR.</span
+						>
+					</span>
 				</label>
 				<fieldset class="text-sm">
 					<legend class="font-semibold">Ready for you when</legend>
@@ -519,20 +557,23 @@
 							{#if data.repos.length}
 								<div class="mt-3 space-y-2">
 									{#each data.repos as r (r.path)}
-										<label class="flex items-center gap-2 text-sm">
+										<label class="flex items-start gap-2 text-sm">
 											<input
 												type="checkbox"
 												bind:checked={chosen[r.path]}
 												class="accent-blue-600"
 											/>
-											<span class="font-medium">{r.name}</span>
-											<span class="truncate font-mono text-xs text-muted">{r.path}</span>
+											<span class="min-w-0">
+												<span class="font-medium">{r.name}</span>
+												{#if r.note}<span class="text-muted"> · {r.note}</span>{/if}
+												<span class="block truncate font-mono text-xs text-muted">{r.path}</span>
+											</span>
 										</label>
 									{/each}
 								</div>
 							{:else}
 								<p class="mt-3 text-sm text-muted">
-									No Git repositories in {data.settings.effectiveRepoPath}. Set the folder in
+									No Git repositories in {data.settings.roots.join(', ')}. Set the folders in
 									Settings.
 								</p>
 							{/if}

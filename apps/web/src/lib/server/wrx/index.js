@@ -831,11 +831,11 @@ async function conductorWorkspace(engine, store, repoPath, { branch, title }) {
  * Starts the ticket's thread. `repoPaths` get a worktree each (or `workspaceIds` are reused when the
  * previous thread was removed); the first is the thread's workspace.
  * @param {string} userId
- * @param {{ repoPaths?: string[]; workspaceIds?: string[]; branch: string; title: string; prompt: string; agent: { provider: string; name: string; role: string } }} input
+ * @param {{ repoPaths?: string[]; workspaceIds?: string[]; branch: string; title: string; prompt: string; team: { provider: string; mode: string; name: string; role: string; model?: string }[] }} input
  */
 export async function conductorStart(
 	userId,
-	{ repoPaths = [], workspaceIds = [], branch, title, prompt, agent }
+	{ repoPaths = [], workspaceIds = [], branch, title, prompt, team }
 ) {
 	const { engine, store } = host(userId);
 	let workspaces;
@@ -854,10 +854,7 @@ export async function conductorStart(
 	const chat = engine.chat({
 		workspaceId: workspaces[0].id,
 		title: title.slice(0, 200),
-		provider: agent.provider,
-		mode: 'implement',
-		name: agent.name,
-		role: agent.role
+		members: team
 	});
 	if (workspaces.length > 1) chat.extraDirs = workspaces.slice(1).map((w) => w.path);
 	engine.turn(chat.id, prompt);
@@ -917,4 +914,17 @@ export async function conductorPush(userId, workspaceId, message, base) {
 	// The agent may have committed itself; make sure the branch is on the remote.
 	await git(['push', '-u', 'origin', 'HEAD'], 180000);
 	return result;
+}
+
+/** The branch's changes against its base, for writing the PR description. Read-only. */
+export async function conductorDiff(userId, workspaceId, base) {
+	const w = host(userId).store.get('workspaces', workspaceId);
+	const range = `${base || 'HEAD@{upstream}'}...HEAD`;
+	const git = (args) => command('git', args, { cwd: w.path, timeout: 30000 }).catch(() => '');
+	const [stat, log, diff] = await Promise.all([
+		git(['diff', '--stat', range]),
+		git(['log', '--format=%s', range]),
+		git(['diff', range])
+	]);
+	return { stat, log, diff };
 }

@@ -275,3 +275,18 @@ export async function createPull(
 	const pr = (await res.json()) as { html_url: string; number: number; draft: boolean };
 	return { url: pr.html_url, number: pr.number, draft: pr.draft ?? draft };
 }
+
+/** Replaces a pull request's description. */
+export async function updatePullBody(token: string, ref: PullRef, body: string) {
+	const res = await fetch(`${API}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`, {
+		method: 'PATCH',
+		headers: {
+			Authorization: `Bearer ${token}`,
+			Accept: 'application/vnd.github+json',
+			'Content-Type': 'application/json',
+			'X-GitHub-Api-Version': '2022-11-28'
+		},
+		body: JSON.stringify({ body })
+	});
+	if (!res.ok) throw new Error(`GitHub ${res.status}: ${res.statusText}`);
+}

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	createProgress,
 	progressReporter,
-	progressView
+	progressView,
+	stageTimings
 } from '../../src/lib/server/pr-review/progress';
 import { describeTool, readEvent } from '../../src/lib/server/pr-review/runner';
 import {
@@ -171,5 +172,24 @@ describe('progress tracking', () => {
 			}
 		});
 		expect(stages).toEqual(['reviewing', 'reviewing', 'crosschecking']);
+	});
+});
+
+describe('stageTimings', () => {
+	it('records how long each stage took, the current one running until now', () => {
+		let now = 1_000;
+		const progress = createProgress(ROLES, now);
+		const report = progressReporter(progress, () => now);
+		now = 4_000;
+		report.stage('downloading');
+		report.stage('downloading'); // repeated reports don't add a step
+		now = 10_000;
+		report.stage('reviewing');
+		expect(stageTimings(progress, 70_000)).toEqual([
+			{ stage: 'preparing', seconds: 3 },
+			{ stage: 'downloading', seconds: 6 },
+			{ stage: 'reviewing', seconds: 60 }
+		]);
+		expect(progressView(progress, 70_000).timings).toHaveLength(3);
 	});
 });

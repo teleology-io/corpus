@@ -1,16 +1,20 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 /**
  * Two projects:
  *  - `unit`: pure tests under test/unit — no database, no global setup.
  *  - `db`: server-side integration tests against a disposable Postgres database (no SvelteKit
- *    plugin — the code under test doesn't use `$app/*`). `test/global-setup.ts` creates and
+ *    plugin; the one `$app/*` module server code reads, `$app/env`, is stubbed in test/stubs). `test/global-setup.ts` creates and
  *    migrates the database, then hands its URL to workers via `provide`;
  *    `test/worker-setup.ts` sets DATABASE_URL from it before any test file imports `@corpus/db`.
  *
  * `vitest run --project unit` needs no database.
  */
 export default defineConfig({
+	resolve: {
+		alias: { '$app/env': fileURLToPath(new URL('./test/stubs/app-env.ts', import.meta.url)) }
+	},
 	test: {
 		environment: 'node',
 		projects: [

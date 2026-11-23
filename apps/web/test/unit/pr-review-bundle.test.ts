@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { PullDetails } from '@corpus/core/integrations';
 import {
 	buildBundle,
+	diffFileCount,
 	extractTarball,
 	renderPullMarkdown,
 	stripUnsafeEntries,
@@ -76,14 +77,14 @@ describe('extractTarball', () => {
 });
 
 describe('stripUnsafeEntries', () => {
-	it('does not follow a directory symlink', () => {
+	it('does not follow a directory symlink', async () => {
 		const outside = path.join(temp, 'outside');
 		fs.mkdirSync(outside);
 		fs.symlinkSync('/nonexistent', path.join(outside, 'keep-me'));
 		const tree = path.join(temp, 'tree');
 		fs.mkdirSync(tree);
 		fs.symlinkSync(outside, path.join(tree, 'out'));
-		expect(stripUnsafeEntries(tree)).toBe(1);
+		expect(await stripUnsafeEntries(tree)).toBe(1);
 		expect(fs.lstatSync(path.join(outside, 'keep-me')).isSymbolicLink()).toBe(true);
 	});
 });
@@ -130,6 +131,35 @@ describe('buildBundle', () => {
 		expect(built.partial).toBe(true);
 	});
 
+	it('takes a diff that is still downloading and reports coverage', async () => {
+		const dir = path.join(temp, 'bundle');
+		const built = await buildBundle({
+			dir,
+			pr: pr(),
+			diff: Promise.resolve({
+				patch: 'diff --git a/x b/x\n+1\ndiff --git a/y b/y',
+				partial: false
+			}),
+			tarball: async () => streamOf(hostileTarball())
+		});
+		expect(built).toMatchObject({ files: 2, hasTree: true, diffPartial: false });
+		expect(fs.readFileSync(path.join(dir, 'diff.patch'), 'utf8')).toContain('diff --git a/y');
+	});
+
+	it('stops unpacking when the review is stopped', async () => {
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			buildBundle({
+				dir: path.join(temp, 'bundle'),
+				pr: pr(),
+				diff,
+				tarball: async () => streamOf(hostileTarball()),
+				signal: controller.signal
+			})
+		).rejects.toThrow('Review stopped');
+	});
+
 	it('fails rather than continuing when the download fails', async () => {
 		await expect(
 			buildBundle({
@@ -156,5 +186,13 @@ describe('text helpers', () => {
 		expect(treeStateText(pr(), true)).toContain('after merging');
 		expect(treeStateText(pr({ mergeSha: null, mergeable: null }), true)).toContain('no test merge');
 		expect(treeStateText(pr(), false)).toContain('NOT AVAILABLE');
+	});
+});
+
+describe('diffFileCount', () => {
+	it('counts files in a full diff and in the per-file fallback', () => {
+		expect(diffFileCount('diff --git a/a b/a\n--- a/a\n+++ b/a\ndiff --git a/b b/b')).toBe(2);
+		expect(diffFileCount('--- a/a\n+++ b/a\n@@\n--- a/b\n+++ b/b')).toBe(2);
+		expect(diffFileCount('')).toBe(0);
 	});
 });

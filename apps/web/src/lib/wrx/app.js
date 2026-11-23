@@ -1606,7 +1606,8 @@ export function mountWrx(root, { onSidebar } = {}) {
 		partial: ['Incomplete review', 'red'],
 		failed: ['Review failed', 'red'],
 		interrupted: ['Interrupted', 'red'],
-		stale: ['New commits since review', 'red']
+		stale: ['New commits since review', 'red'],
+		cancelled: ['Stopped', '']
 	};
 	const SEVERITY_ORDER = { blocker: 0, major: 1, minor: 2 };
 	const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -1709,15 +1710,29 @@ export function mountWrx(root, { onSidebar } = {}) {
 		if (seconds < 60) return `${seconds}s`;
 		return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
 	}
-	function reviewProgress(p) {
-		if (!p) return '<p class="review-note">Starting the review…</p>';
-		const current = REVIEW_STAGES.findIndex(([stage]) => stage === p.stage);
+	// Seconds per shown step; downloading is part of "Get the code".
+	const stepOf = (stage) => (stage === 'downloading' ? 'preparing' : stage);
+	function stepSeconds(timings, step) {
+		return (timings || [])
+			.filter((t) => stepOf(t.stage) === step)
+			.reduce((n, t) => n + t.seconds, 0);
+	}
+	function reviewProgress(r) {
+		const p = r.progress;
+		const stop = `<button class="text-button" data-review-cancel="${esc(r.id)}">Stop review</button>`;
+		if (!p) return `<p class="review-note">Starting the review… ${stop}</p>`;
+		const current = REVIEW_STAGES.findIndex(([stage]) => stage === stepOf(p.stage));
 		// Most reviews have no voice pass, so that step only shows while it's happening.
 		const shown = REVIEW_STAGES.filter(([stage]) => stage !== 'voicing' || p.stage === 'voicing');
 		const steps = shown
-			.map(([, label], i) => {
+			.map(([stage, label], i) => {
 				const state = i < current ? 'done' : i === current ? 'current' : '';
-				return `<li class="${state}">${esc(label)}${i === 2 ? ' <small>if any</small>' : ''}</li>`;
+				const took = state
+					? ` <small>${esc(reviewDuration(stepSeconds(p.timings, stage)))}</small>`
+					: '';
+				const detail =
+					stage === 'preparing' && p.stage === 'downloading' ? ' <small>downloading</small>' : '';
+				return `<li class="${state}">${esc(label)}${i === 2 && !state ? ' <small>if any</small>' : ''}${detail}${took}</li>`;
 			})
 			.join('');
 		const reviewers = p.reviewers
@@ -1730,7 +1745,7 @@ export function mountWrx(root, { onSidebar } = {}) {
 				return `<div class="review-reviewer ${esc(r.state)}"><i></i><div><strong>${esc(r.role)}</strong> <span>${esc(REVIEWER_STATES[r.state] ?? r.state)}</span>${detail ? `<small>${esc(detail)}</small>` : ''}${active && r.lastAction ? `<code>${esc(r.lastAction)}</code>` : ''}${quiet ? `<p class="review-warning">Quiet for ${esc(reviewDuration(r.quietSeconds))}. It may just be thinking. Each run stops by itself at 20 minutes.</p>` : ''}</div></div>`;
 			})
 			.join('');
-		return `<div class="review-progress"><div class="review-progress-head"><ol>${steps}</ol><span>${esc(reviewDuration(p.elapsedSeconds))}</span></div>${reviewers}</div>`;
+		return `<div class="review-progress"><div class="review-progress-head"><ol>${steps}</ol><span>${esc(reviewDuration(p.elapsedSeconds))} ${stop}</span></div>${reviewers}</div>`;
 	}
 	const APPROVABLE = ['clean', 'findings', 'partial'];
 	function reviewApproveDialog(reviewId) {
@@ -1781,8 +1796,43 @@ export function mountWrx(root, { onSidebar } = {}) {
 			.join('');
 		return `<footer class="review-footer">${reviewPreviewPanel(r.id)}<div class="review-meta"><span>${esc(r.headSha.slice(0, 10))} · $${Number(r.costUsd).toFixed(2)}</span><div class="review-meta-actions">${links}</div></div></footer>`;
 	}
+	const STEP_NAMES = {
+		preparing: 'setup',
+		downloading: 'download',
+		reviewing: 'review',
+		crosschecking: 'cross-check',
+		voicing: 'rewording'
+	};
+	/** What was reviewed and how much of it: stays with the result so "no issues" is never read alone. */
+	function reviewCoverage(r) {
+		const st = r.stats;
+		const commit = `Reviewed <code>${esc(r.headSha.slice(0, 7))}</code>${r.treeSha && r.treeSha !== r.headSha ? ' as merged into the base branch' : ''}`;
+		const gaps = [
+			st?.diffPartial && 'GitHub cut the diff, so parts of the change were not visible',
+			st && !st.hasTree && 'the repository was too large, so reviewers had the diff only',
+			r.notReviewed.length && `${plural(r.notReviewed.length, 'file')} not reviewed (listed below)`,
+			r.status === 'cancelled' && 'stopped before it finished',
+			['failed', 'interrupted'].includes(r.status) && 'the run did not finish'
+		].filter(Boolean);
+		const files = st?.files ? ` · ${plural(st.files, 'file')} in the diff` : '';
+		const coverage = gaps.length
+			? `<b class="coverage-partial">Partial coverage:</b> ${esc(gaps.join('; '))}.`
+			: st
+				? '<b class="coverage-full">Full coverage.</b>'
+				: '';
+		const total = (st?.timings || []).reduce((n, t) => n + t.seconds, 0);
+		const timings = total
+			? `<small>Took ${esc(reviewDuration(total))}: ${esc(
+					st.timings
+						.filter((t) => t.seconds)
+						.map((t) => `${STEP_NAMES[t.stage] ?? t.stage} ${reviewDuration(t.seconds)}`)
+						.join(' · ')
+				)}</small>`
+			: '';
+		return `<div class="review-coverage"><p>${commit}${files}. ${coverage}</p>${timings}</div>`;
+	}
 	function reviewBody(r, headMoved) {
-		if (r.status === 'running') return reviewProgress(r.progress);
+		if (r.status === 'running') return reviewProgress(r);
 		const sorted = [...r.findings].sort(
 			(a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
 		);
@@ -1792,6 +1842,7 @@ export function mountWrx(root, { onSidebar } = {}) {
 		const open = openFindings(r);
 		return [
 			APPROVABLE.includes(r.status) || r.status === 'stale' ? reviewSummary(r, open) : '',
+			reviewCoverage(r),
 			headMoved
 				? '<p class="review-warning">New commits since this review. Re-review to check the fixes.</p>'
 				: '',
@@ -1810,6 +1861,44 @@ export function mountWrx(root, { onSidebar } = {}) {
 				: ''
 		].join('');
 	}
+	// Keys of diff files already shown once, so auto-opening happens only the first time.
+	const reviewDiffSeen = new Set();
+	// Split once per fetched diff; rendered HTML is cached per file and marks.
+	const diffFileCache = new WeakMap();
+	function diffFiles(d) {
+		const cached = diffFileCache.get(d);
+		if (cached) return cached.list;
+		// A full diff starts each file with "diff --git"; GitHub's per-file fallback with "--- a/".
+		const full = /^diff --git /m.test(d.patch);
+		const list = [];
+		let cur = null;
+		for (const line of d.patch.split('\n')) {
+			if (full ? line.startsWith('diff --git ') : line.startsWith('--- a/')) {
+				cur = {
+					path: full ? line.split(' b/').pop() : line.slice(6),
+					lines: [],
+					added: 0,
+					removed: 0
+				};
+				list.push(cur);
+			}
+			if (!cur) continue;
+			cur.lines.push(line);
+			const target = /^\+\+\+ b\/(.+)$/.exec(line);
+			if (target) cur.path = target[1];
+			else if (line.startsWith('+') && !line.startsWith('+++ ')) cur.added++;
+			else if (line.startsWith('-') && !line.startsWith('--- ')) cur.removed++;
+		}
+		diffFileCache.set(d, { list, html: new Map() });
+		return list;
+	}
+	function diffFileHtml(d, f, marks) {
+		const cache = diffFileCache.get(d).html;
+		const own = [...marks].filter(([k]) => k.startsWith(`${f.path}:`));
+		const key = `${f.path}\u0000${JSON.stringify(own)}`;
+		if (!cache.has(key)) cache.set(key, diffLines(f.lines.join('\n'), new Map(own)));
+		return cache.get(key);
+	}
 	function reviewDiffView(itemId, r) {
 		const d = reviewDiffs.get(itemId);
 		if (!d || d.loading) return '<p class="review-note">Loading the diff…</p>';
@@ -1822,7 +1911,25 @@ export function mountWrx(root, { onSidebar } = {}) {
 					const key = `${f.file}:${f.line}`;
 					marks.set(key, [...(marks.get(key) ?? []), `${f.severity}: ${f.title}`]);
 				}
-		return `${d.partial ? '<p class="review-warning">GitHub only gave per-file patches, so parts of this diff may be cut.</p>' : ''}${marks.size ? '<p class="review-note">Lines with findings are marked. Hover one to see it.</p>' : ''}<pre class="diff code-block review-diff">${d.patch ? diffLines(d.patch, marks) : 'No changes.'}</pre>`;
+		if (!d.patch) return '<p class="review-note">No changes.</p>';
+		// One collapsible block per file, rendered only while open: a large PR stays a short list,
+		// and the 5-second poll during a run doesn't rebuild thousands of diff lines.
+		const files = diffFiles(d);
+		const marked = (f) => [...marks.keys()].filter((k) => k.startsWith(`${f.path}:`)).length;
+		const list = files
+			.map((f, i) => {
+				const key = `rdiff:${itemId}:${d.headSha}:${f.path}`;
+				// Files with findings start open once; after that the user's choice sticks.
+				if (!reviewDiffSeen.has(key)) {
+					reviewDiffSeen.add(key);
+					if (marked(f) && i < 20) openKeys.add(key);
+				}
+				const open = openKeys.has(key);
+				const n = marked(f);
+				return `<details class="review-diff-file" data-open="${esc(key)}" ${open ? 'open' : ''}><summary><code>${esc(f.path)}</code><span class="diff-stat"><span class="added">+${f.added}</span> <span class="removed">−${f.removed}</span></span>${n ? `<span class="badge amber">${n} finding${n === 1 ? '' : 's'}</span>` : ''}</summary>${open ? `<pre class="diff code-block review-diff">${diffFileHtml(d, f, marks)}</pre>` : ''}</details>`;
+			})
+			.join('');
+		return `${d.partial ? '<p class="review-warning">GitHub only gave per-file patches, so parts of this diff may be cut.</p>' : ''}<p class="review-note">${plural(files.length, 'file')} changed.${marks.size ? ' Lines with findings are marked. Hover one to see it.' : ''}</p>${list}`;
 	}
 	function reviewsView() {
 		if (externalReviews === null) {
@@ -1849,7 +1956,7 @@ export function mountWrx(root, { onSidebar } = {}) {
 							: (REVIEW_STATES[r.status] ?? [r.status, 'red']);
 				const start =
 					r?.status === 'running'
-						? ''
+						? `<button data-review-cancel="${esc(r.id)}">Stop</button>`
 						: `<button ${full ? 'disabled title="3 reviews are running. Start another when one finishes."' : ''} ${headMoved ? 'class="primary"' : ''} data-review-start="${esc(itemId)}">${r ? 'Re-review' : 'Review'}</button>`;
 				const expanded = reviewOpen.has(itemId);
 				const current = reviewTab.get(itemId) ?? 'reviews';
@@ -2821,6 +2928,11 @@ export function mountWrx(root, { onSidebar } = {}) {
 				if (tab === 'changes') await actions.diff();
 				if (tab === 'reviews') await loadExternalReviews();
 			}
+			if (target.dataset.reviewCancel) {
+				target.disabled = true;
+				await reviewAction({ action: 'cancel', reviewId: target.dataset.reviewCancel });
+				toast('Review stopped');
+			}
 			if (target.dataset.reviewStart) {
 				// Collapse it: progress shows in the badge, and the list stays short enough to scan.
 				reviewOpen.delete(target.dataset.reviewStart);
@@ -2957,6 +3069,7 @@ export function mountWrx(root, { onSidebar } = {}) {
 		(event) => {
 			const key = event.target.dataset?.open;
 			if (key) event.target.open ? openKeys.add(key) : openKeys.delete(key);
+			if (key?.startsWith('rdiff:')) render();
 		},
 		true
 	);

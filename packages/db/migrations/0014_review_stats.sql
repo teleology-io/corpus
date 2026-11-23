@@ -1,0 +1,1 @@
+ALTER TABLE "pr_review" ADD COLUMN "stats" jsonb;

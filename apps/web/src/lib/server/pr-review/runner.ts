@@ -150,21 +150,46 @@ export function runAgent(input: {
 	spawn: Spawn;
 	timeoutMs?: number;
 	onActivity?: (action: string | null) => void;
+	/** Aborting kills the CLI and its children, and the run settles as failed. */
+	signal?: AbortSignal;
 }): Promise<AgentRun> {
 	return new Promise((resolve) => {
 		const state = { text: '', costUsd: 0, error: null as string | null };
 		let pending = '';
 		let stderr = '';
 		let settled = false;
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		let child: ChildProcess;
+		let child: ChildProcess | undefined;
 
+		const kill = () => {
+			try {
+				if (child?.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL');
+				else child?.kill('SIGKILL');
+			} catch {
+				// Already gone.
+			}
+		};
+		const timer = setTimeout(() => {
+			kill();
+			settle(
+				`Reviewer timed out after ${Math.round((input.timeoutMs ?? AGENT_TIMEOUT_MS) / 60000)} minutes`
+			);
+		}, input.timeoutMs ?? AGENT_TIMEOUT_MS);
+
+		const onAbort = () => {
+			kill();
+			settle('Review stopped');
+		};
 		const settle = (error: string | null) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			input.signal?.removeEventListener('abort', onAbort);
 			resolve({ text: state.text, costUsd: state.costUsd, error: error ?? state.error });
 		};
+		if (input.signal?.aborted) {
+			settle('Review stopped');
+			return;
+		}
 		try {
 			child = input.spawn(input.slot.provider, reviewArgs(input.slot), {
 				cwd: input.cwd,
@@ -176,20 +201,7 @@ export function runAgent(input: {
 			settle((error as Error).message);
 			return;
 		}
-		const kill = () => {
-			try {
-				if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL');
-				else child.kill('SIGKILL');
-			} catch {
-				// Already gone.
-			}
-		};
-		timer = setTimeout(() => {
-			kill();
-			settle(
-				`Reviewer timed out after ${Math.round((input.timeoutMs ?? AGENT_TIMEOUT_MS) / 60000)} minutes`
-			);
-		}, input.timeoutMs ?? AGENT_TIMEOUT_MS);
+		input.signal?.addEventListener('abort', onAbort, { once: true });
 
 		child.stdout?.setEncoding('utf8');
 		child.stderr?.setEncoding('utf8');

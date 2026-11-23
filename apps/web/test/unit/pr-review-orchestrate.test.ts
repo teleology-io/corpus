@@ -395,6 +395,44 @@ describe('runner', () => {
 		expect(out.error).toContain('timed out');
 	});
 
+	it('kills the reviewer when the review is stopped', async () => {
+		const child = fake();
+		let killed = false;
+		child.kill = () => (killed = true);
+		const controller = new AbortController();
+		const done = runAgent({
+			slot: { provider: 'claude', model: '' },
+			prompt: 'p',
+			cwd: '/b',
+			env: {},
+			spawn: () => child,
+			signal: controller.signal
+		});
+		controller.abort();
+		expect((await done).error).toBe('Review stopped');
+		// No pid on the fake, so it falls back to killing the child directly.
+		expect(killed).toBe(true);
+	});
+
+	it('does not start a reviewer for an already stopped review', async () => {
+		let spawned = false;
+		const controller = new AbortController();
+		controller.abort();
+		const out = await runAgent({
+			slot: { provider: 'claude', model: '' },
+			prompt: 'p',
+			cwd: '/b',
+			env: {},
+			spawn: () => {
+				spawned = true;
+				return fake();
+			},
+			signal: controller.signal
+		});
+		expect(out.error).toBe('Review stopped');
+		expect(spawned).toBe(false);
+	});
+
 	it('surfaces a spawn failure', async () => {
 		const out = await runAgent({
 			slot: { provider: 'claude', model: '' },

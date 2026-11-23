@@ -131,7 +131,7 @@ export const prReview = pgTable(
 		headSha: text('head_sha').notNull(),
 		/** The commit reviewers read: GitHub's test merge when available, otherwise the head. */
 		treeSha: text('tree_sha'),
-		/** running | clean | findings | partial | failed | interrupted | stale */
+		/** running | clean | findings | partial | failed | interrupted | stale | cancelled */
 		status: text('status').notNull().default('running'),
 		slots: jsonb('slots').$type<{ provider: string; model: string }[]>().notNull().default([]),
 		notices: jsonb('notices').$type<string[]>().notNull().default([]),
@@ -145,6 +145,16 @@ export const prReview = pgTable(
 		error: text('error'),
 		/** What the change does, in the reviewers' words. Plain text from untrusted output. */
 		summary: text('summary'),
+		/** How much the run covered and where its time went, for the reviewed-commit and coverage line. */
+		stats: jsonb('stats').$type<{
+			/** Files in the diff. */
+			files: number;
+			/** GitHub only gave truncated per-file patches. */
+			diffPartial: boolean;
+			/** False when the repository was too large, so reviewers had the diff alone. */
+			hasTree: boolean;
+			timings: { stage: string; seconds: number }[];
+		}>(),
 		/** Findings from the previous review of this PR and whether this review found them fixed. */
 		previous: jsonb('previous')
 			.$type<{ id: string; severity: string; title: string; status: string }[]>()

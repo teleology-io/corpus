@@ -28,7 +28,13 @@ import {
 	readReviewerSettings,
 	writeReviewerSettings
 } from './reviewers';
-import { createProgress, progressReporter, progressView, type ReviewProgress } from './progress';
+import {
+	createProgress,
+	progressReporter,
+	progressView,
+	stageTimings,
+	type ReviewProgress
+} from './progress';
 import { reviewEnv, runAgent, type ReviewProvider, type Spawn } from './runner';
 
 const { prReview: review, integrationItem: item, integrationConnection: conn } = schema;
@@ -54,6 +60,11 @@ const release = (userId: string, itemId: string) => {
 const liveProgress: Map<string, ReviewProgress> = ((
 	globalThis as { __prReviewProgress?: Map<string, ReviewProgress> }
 ).__prReviewProgress ??= new Map());
+
+// Review id -> its abort switch, so Stop can kill the reviewer processes. Survives HMR too.
+const controllers: Map<string, AbortController> = ((
+	globalThis as { __prReviewAbort?: Map<string, AbortController> }
+).__prReviewAbort ??= new Map());
 
 const userDir = (userId: string) =>
 	path.join(path.resolve(process.env.WRX_DATA || '.wrx'), userId.replace(/[^\w-]/g, '_'));
@@ -83,7 +94,19 @@ export function saveReviewerSettings(userId: string, input: unknown) {
 	}
 }
 
-async function installed(): Promise<Record<ReviewProvider, boolean>> {
+// Which CLIs exist rarely changes; probing both on every run cost a few seconds of setup.
+const INSTALLED_TTL_MS = 5 * 60_000;
+let installedCache: { at: number; value: Promise<Record<ReviewProvider, boolean>> } | null = null;
+function installed(): Promise<Record<ReviewProvider, boolean>> {
+	if (installedCache && Date.now() - installedCache.at < INSTALLED_TTL_MS)
+		return installedCache.value;
+	const value = probeInstalled();
+	installedCache = { at: Date.now(), value };
+	// Only a working setup is remembered, so installing a missing CLI takes effect on the next run.
+	void value.then((v) => !v.claude && (installedCache = null));
+	return value;
+}
+async function probeInstalled(): Promise<Record<ReviewProvider, boolean>> {
 	const probe = (name: string) =>
 		command(name, ['--version'], { timeout: 5000, env: agentEnv() }).then(
 			() => true,
@@ -290,6 +313,7 @@ export async function startExternalReview(userId: string, itemId: string) {
 					notices: [],
 					costUsd: 0,
 					summary: null,
+					stats: null,
 					previous: [],
 					postedUrl: null,
 					postedBy: null,
@@ -300,15 +324,28 @@ export async function startExternalReview(userId: string, itemId: string) {
 		runs.set(itemId, row.id);
 		const progress = createProgress(ROLES);
 		liveProgress.set(row.id, progress);
-		void execute(userId, row.id, token, ref, pr, progress, previous).finally(() => {
-			release(userId, itemId);
-			liveProgress.delete(row.id);
-		});
+		const controller = new AbortController();
+		controllers.set(row.id, controller);
+		void execute(userId, row.id, token, ref, pr, progress, previous, controller.signal).finally(
+			() => {
+				release(userId, itemId);
+				liveProgress.delete(row.id);
+				controllers.delete(row.id);
+			}
+		);
 		return row;
 	} catch (e) {
 		release(userId, itemId);
 		throw e;
 	}
+}
+
+/** Stops a running review: reviewer processes are killed and the run ends as cancelled. */
+export async function cancelExternalReview(userId: string, reviewId: string) {
+	await ownReview(userId, reviewId);
+	const controller = controllers.get(reviewId);
+	if (!controller) error(409, 'This review is not running.');
+	controller.abort();
 }
 
 /**
@@ -342,9 +379,16 @@ async function execute(
 	ref: PullRef,
 	pr: Awaited<ReturnType<typeof pullDetails>>,
 	progress: ReviewProgress,
-	previous: Finding[]
+	previous: Finding[],
+	signal: AbortSignal
 ) {
 	const dir = bundleDir(userId, id);
+	const report = progressReporter(progress);
+	let coverage: { files: number; diffPartial: boolean; hasTree: boolean } | null = null;
+	const stats = () => (coverage ? { ...coverage, timings: stageTimings(progress) } : null);
+	// Started before anything else: the diff and the code download overlap the CLI check.
+	const diff = pullDiff(token, ref);
+	diff.catch(() => {}); // awaited by buildBundle; an early failure elsewhere must not leave it unhandled
 	try {
 		const settings = readReviewerSettings(settingsFile(userId));
 		const { slots, notices } = resolveSlots(
@@ -356,15 +400,19 @@ async function execute(
 		);
 		if (!slots) throw new Error(notices.join(' '));
 		fs.rmSync(dir, { recursive: true, force: true });
+		report.stage('downloading');
 		const bundle = await buildBundle({
 			dir,
 			pr,
-			diff: await pullDiff(token, ref),
-			tarball: (sha) => pullTarball(token, ref, sha)
+			diff,
+			tarball: (sha) => pullTarball(token, ref, sha),
+			signal
 		});
+		coverage = { files: bundle.files, diffPartial: bundle.diffPartial, hasTree: bundle.hasTree };
+		if (signal.aborted) throw new Error('Review stopped');
 		await db
 			.update(review)
-			.set({ treeSha: bundle.treeSha, slots, notices })
+			.set({ treeSha: bundle.treeSha, slots, notices, stats: stats() })
 			.where(eq(review.id, id));
 		const env = reviewEnv(agentEnv());
 		const outcome = await reviewPullRequest({
@@ -384,15 +432,26 @@ async function execute(
 			deps: {
 				// cwd is the bundle root, so the PR's own tree/ isn't loaded as project config.
 				run: (slot, prompt, onActivity) =>
-					runAgent({ slot, prompt, cwd: dir, env, spawn: spawn as unknown as Spawn, onActivity }),
-				currentHead: async () => (await pullDetails(token, ref)).headSha,
-				progress: progressReporter(progress)
+					runAgent({
+						slot,
+						prompt,
+						cwd: dir,
+						env,
+						spawn: spawn as unknown as Spawn,
+						onActivity,
+						signal
+					}),
+				currentHead: async () =>
+					signal.aborted ? pr.headSha : (await pullDetails(token, ref)).headSha,
+				progress: report
 			}
 		});
 		await db
 			.update(review)
 			.set({
-				status: outcome.status,
+				// Whatever the reviewers managed before Stop is kept, but the run reads as stopped.
+				status: signal.aborted ? 'cancelled' : outcome.status,
+				stats: stats(),
 				summary: outcome.summary || null,
 				previous: outcome.previous,
 				findings: outcome.findings as unknown as Record<string, unknown>[],
@@ -400,13 +459,17 @@ async function execute(
 				notReviewed: outcome.notReviewed,
 				notices: [...notices, ...outcome.notices],
 				costUsd: outcome.costUsd,
-				error: outcome.error
+				error: signal.aborted ? null : outcome.error
 			})
 			.where(eq(review.id, id));
 	} catch (e) {
 		await db
 			.update(review)
-			.set({ status: 'failed', error: (e as Error).message.slice(0, 2000) })
+			.set(
+				signal.aborted
+					? { status: 'cancelled', error: null, stats: stats() }
+					: { status: 'failed', error: (e as Error).message.slice(0, 2000), stats: stats() }
+			)
 			.where(eq(review.id, id));
 	} finally {
 		removeTree(dir);

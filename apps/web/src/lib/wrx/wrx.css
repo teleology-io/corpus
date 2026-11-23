@@ -4154,3 +4154,71 @@ body:has(.recording-bar) .wrx.files-fullscreen {
 		flex-wrap: wrap;
 	}
 }
+
+/* What a review covered: commit, coverage and where the time went. Stays with the result. */
+.wrx .review-coverage {
+	margin: 0 0 12px;
+	font-size: 12px;
+	color: var(--text-secondary);
+}
+.wrx .review-coverage p {
+	color: inherit;
+	line-height: 1.6;
+}
+.wrx .review-coverage code {
+	font-size: 11px;
+}
+.wrx .review-coverage small {
+	display: block;
+	margin-top: 2px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+.wrx .review-coverage .coverage-full {
+	color: var(--success);
+}
+.wrx .review-coverage .coverage-partial {
+	color: var(--warning);
+}
+/* Review diff: one collapsible block per file, body rendered only while open. */
+.wrx .review-diff-file {
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	margin-bottom: 6px;
+}
+.wrx .review-diff-file > summary {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 7px 10px;
+	cursor: pointer;
+	font-size: 12px;
+	min-width: 0;
+}
+.wrx .review-diff-file > summary code {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+.wrx .review-diff-file .diff-stat {
+	margin-left: auto;
+	flex: none;
+	font-variant-numeric: tabular-nums;
+}
+.wrx .review-diff-file .diff-stat .added {
+	color: var(--success);
+}
+.wrx .review-diff-file .diff-stat .removed {
+	color: var(--error);
+}
+.wrx .review-diff-file > .review-diff {
+	margin: 0;
+	border: 0;
+	border-top: 1px solid var(--border);
+	border-radius: 0 0 5px 5px;
+}
+.wrx .review-progress-head li small {
+	font-weight: 400;
+	color: var(--muted);
+}

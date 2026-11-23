@@ -14,27 +14,36 @@ export class TreeTooLargeError extends Error {}
 
 /**
  * Keeps only regular files and directories. A PR can commit a symlink to ~/.ssh or similar, and a
- * reader that follows it would read host files, so links and special files are removed. Directories
- * are read with lstat and never followed. Returns how many entries were removed.
+ * reader that follows it would read host files, so links and special files are removed. `find`
+ * never follows links (its default -P), and it runs as a child process so walking a huge tree
+ * doesn't block the server. Returns how many entries were removed.
  */
-export function stripUnsafeEntries(root: string): number {
-	let removed = 0;
-	for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-		const full = path.join(root, entry.name);
-		if (entry.isDirectory()) removed += stripUnsafeEntries(full);
-		else if (!entry.isFile()) {
-			fs.rmSync(full, { force: true });
-			removed++;
-		}
-	}
-	return removed;
+export function stripUnsafeEntries(root: string): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const find = spawn(
+			'find',
+			[root, '-mindepth', '1', '!', '-type', 'f', '!', '-type', 'd', '-print0', '-delete'],
+			{ stdio: ['ignore', 'pipe', 'pipe'] }
+		);
+		let removed = 0;
+		let stderr = '';
+		find.stdout.on('data', (chunk: Buffer) => {
+			for (const byte of chunk) if (byte === 0) removed++;
+		});
+		find.stderr.on('data', (chunk) => (stderr = (stderr + chunk).slice(-2000)));
+		find.on('error', reject);
+		find.on('close', (code) =>
+			code === 0 ? resolve(removed) : reject(new Error(`find exited with ${code}: ${stderr}`))
+		);
+	});
 }
 
 /** Streams a GitHub tarball into `dir`, dropping the top-level folder GitHub wraps it in. */
 export async function extractTarball(
 	stream: WebStream<Uint8Array> | globalThis.ReadableStream<Uint8Array>,
 	dir: string,
-	limit = MAX_TARBALL_BYTES
+	limit = MAX_TARBALL_BYTES,
+	signal?: AbortSignal
 ) {
 	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const source = Readable.fromWeb(stream as WebStream<Uint8Array>);
@@ -55,6 +64,9 @@ export async function extractTarball(
 			() => stop(new Error('Timed out extracting PR code')),
 			EXTRACT_TIMEOUT_MS
 		);
+		const onAbort = () => stop(new Error('Review stopped'));
+		if (signal?.aborted) onAbort();
+		signal?.addEventListener('abort', onAbort, { once: true });
 		source.on('data', (chunk: Buffer) => {
 			bytes += chunk.length;
 			if (bytes > limit) stop(new TreeTooLargeError(`PR code is over ${limit} bytes`));
@@ -65,13 +77,14 @@ export async function extractTarball(
 		tar.on('error', (error) => stop(error));
 		tar.on('close', (code) => {
 			clearTimeout(timer);
+			signal?.removeEventListener('abort', onAbort);
 			if (failure) reject(failure);
 			else if (code === 0) resolve();
 			else reject(new Error(`tar exited with ${code}: ${stderr.slice(0, 500)}`));
 		});
 		source.pipe(tar.stdin);
 	});
-	return stripUnsafeEntries(dir);
+	return await stripUnsafeEntries(dir);
 }
 
 /** The PR's words, which reviewers must read as data. */
@@ -113,35 +126,52 @@ export interface BuiltBundle {
 	treeSha: string;
 	treeState: string;
 	partial: boolean;
+	hasTree: boolean;
+	files: number;
+	diffPartial: boolean;
 }
 
 export async function buildBundle(input: {
 	dir: string;
 	pr: PullDetails;
-	diff: PullDiff;
+	/** May still be downloading: the diff and the code are fetched side by side. */
+	diff: PullDiff | Promise<PullDiff>;
 	tarball: (sha: string) => Promise<globalThis.ReadableStream<Uint8Array>>;
+	signal?: AbortSignal;
 }): Promise<BuiltBundle> {
-	const { dir, pr, diff } = input;
+	const { dir, pr } = input;
 	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-	fs.writeFileSync(path.join(dir, 'diff.patch'), diff.patch, { mode: 0o600 });
 	fs.writeFileSync(path.join(dir, 'pr.md'), renderPullMarkdown(pr), { mode: 0o600 });
 
 	const treeSha = pr.mergeSha ?? pr.headSha;
 	const tree = path.join(dir, 'tree');
-	let hasTree = true;
-	try {
-		await extractTarball(await input.tarball(treeSha), tree);
-	} catch (error) {
-		if (!(error instanceof TreeTooLargeError)) throw error;
-		fs.rmSync(tree, { recursive: true, force: true });
-		hasTree = false;
-	}
+	const code = (async () => {
+		try {
+			await extractTarball(await input.tarball(treeSha), tree, MAX_TARBALL_BYTES, input.signal);
+			return true;
+		} catch (error) {
+			if (!(error instanceof TreeTooLargeError)) throw error;
+			fs.rmSync(tree, { recursive: true, force: true });
+			return false;
+		}
+	})();
+	const [diff, hasTree] = await Promise.all([Promise.resolve(input.diff), code]);
+	fs.writeFileSync(path.join(dir, 'diff.patch'), diff.patch, { mode: 0o600 });
 	return {
 		dir,
 		treeSha,
 		treeState: treeStateText(pr, hasTree),
-		partial: diff.partial || !hasTree
+		partial: diff.partial || !hasTree,
+		hasTree,
+		files: diffFileCount(diff.patch),
+		diffPartial: diff.partial
 	};
+}
+
+/** Files the diff touches, from either GitHub's full diff or the per-file fallback. */
+export function diffFileCount(patch: string) {
+	const full = patch.match(/^diff --git /gm)?.length ?? 0;
+	return full || (patch.match(/^\+\+\+ b\//gm)?.length ?? 0);
 }
 
 /** Code is only needed during the run. pr.md and the diff stay for debugging the result. */

@@ -17,6 +17,7 @@
 		Sparkles,
 		X
 	} from '@lucide/svelte';
+	import Modal from '#lib/components/ui/Modal.svelte';
 	import BoardCard from '#lib/components/conductor/BoardCard.svelte';
 	import StandupSheet from '#lib/components/dashboard/StandupSheet.svelte';
 	import BrandIcon from '#lib/components/ui/BrandIcon.svelte';
@@ -130,6 +131,23 @@
 		const ok = await post({ action: 'settings', repoPath, readyWhen, preReview, repoNotes: notes });
 		// New folders list new repositories: keep the panel open so they can be described.
 		if (ok && !changedRoots) settingsOpen = false;
+	}
+
+	async function clearDone(ids: string[]) {
+		if (!ids.length) return;
+		if (
+			ids.length > 1 &&
+			!confirm(
+				`Clear ${ids.length} done cards from the board? Their tickets and PRs aren't touched.`
+			)
+		)
+			return;
+		if (await post({ action: 'clear_done', cardIds: ids })) {
+			if (selectedId && ids.includes(selectedId)) selectedId = null;
+			toast(ids.length === 1 ? 'Cleared from the board' : `Cleared ${ids.length} cards`, {
+				tone: 'success'
+			});
+		}
 	}
 
 	async function sendBack(card: ConductorCard) {
@@ -256,76 +274,6 @@
 				>
 			</div>
 		</div>
-		{#if settingsOpen}
-			<section class="max-w-2xl space-y-4 card p-5" aria-label="Conductor settings">
-				<div class="flex items-start justify-between">
-					<h3 class="font-semibold">Conductor settings</h3>
-					<button
-						class="btn-icon size-8"
-						aria-label="Close settings"
-						onclick={() => (settingsOpen = false)}><X class="size-4" /></button
-					>
-				</div>
-				<label class="block text-sm font-semibold"
-					>Repositories
-					<textarea
-						bind:value={repoPath}
-						rows="3"
-						placeholder="~/Desktop/repo"
-						class="mt-2 w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-sm font-normal"
-					></textarea>
-					<span class="mt-1 block text-xs font-normal text-muted"
-						>One per line: a Git repository, or a folder of clones (e.g. ~/Desktop/repo). You pick
-						from all of them when you start a ticket. Empty uses ~/.corpus.</span
-					>
-				</label>
-				{#if data.repos.length}
-					<div class="text-sm">
-						<p class="font-semibold">What each repository is</p>
-						<p class="mt-1 text-xs text-muted">
-							Shown to the agents so they know where a change belongs.
-						</p>
-						<div class="mt-2 space-y-2">
-							{#each data.repos as r (r.path)}
-								<label class="grid items-center gap-2 sm:grid-cols-[10rem_1fr]">
-									<span class="truncate font-medium" title={r.path}>{r.name}</span>
-									<input
-										bind:value={notes[r.path]}
-										maxlength="500"
-										placeholder="e.g. Customer-facing Rails app"
-										class="w-full rounded-lg border border-line bg-surface px-3 py-1.5 text-sm"
-									/>
-								</label>
-							{/each}
-						</div>
-					</div>
-				{/if}
-				<label class="flex items-start gap-2 text-sm">
-					<input type="checkbox" bind:checked={preReview} class="mt-1 accent-blue-600" />
-					<span>
-						<span class="font-semibold">Review before the PR</span>
-						<span class="block text-xs text-muted"
-							>Your Integrator and Breaker (from Integration Review settings) join each ticket
-							thread. The Builder addresses their findings before Conductor opens the PR.</span
-						>
-					</span>
-				</label>
-				<fieldset class="text-sm">
-					<legend class="font-semibold">Ready for you when</legend>
-					<label class="mt-2 flex items-center gap-2"
-						><input type="radio" bind:group={readyWhen} value="draft_pr" class="accent-blue-600" /> A
-						draft PR is up</label
-					>
-					<label class="mt-1 flex items-center gap-2"
-						><input type="radio" bind:group={readyWhen} value="ci_green" class="accent-blue-600" /> The
-						PR is ready for review and CI passes</label
-					>
-				</fieldset>
-				<div class="flex justify-end">
-					<button class="btn-primary" disabled={busy} onclick={saveSettings}>Save</button>
-				</div>
-			</section>
-		{/if}
 		<div class="flex flex-col gap-5 2xl:flex-row">
 			<div class="min-w-0 flex-1 overflow-x-auto pb-3">
 				<div class="grid min-w-[1050px] grid-cols-5 gap-1.5">
@@ -339,6 +287,13 @@
 								<span class="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-semibold text-muted"
 									>{byColumn[column.id].length}</span
 								>
+								{#if column.id === 'done' && byColumn.done.length}
+									<button
+										class="ml-auto rounded-md px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-surface hover:text-ink"
+										disabled={busy}
+										onclick={() => clearDone(byColumn.done.map((c) => c.id))}>Clear</button
+									>
+								{/if}
 							</div>
 							<div class="space-y-1.5">
 								{#each byColumn[column.id] as card (card.id)}
@@ -593,6 +548,13 @@
 				{/if}
 			</div>
 			<div class="flex flex-wrap justify-end gap-2 border-t border-line p-5">
+				{#if selected.column === 'done'}
+					<button
+						class="mr-auto btn-outline"
+						disabled={busy}
+						onclick={() => clearDone([selected.id])}>Clear from board</button
+					>
+				{/if}
 				{#if selected.kind === 'review'}
 					{#if !selected.review || selected.review.status === 'failed' || selected.review.status === 'interrupted' || selected.review.status === 'stale'}
 						<button
@@ -638,3 +600,67 @@
 {/if}
 
 <StandupSheet bind:open={standupOpen} />
+
+<Modal bind:open={settingsOpen} title="Conductor settings" size="lg" fullscreenOnMobile>
+	<div class="space-y-4">
+		<label class="block text-sm font-semibold"
+			>Repositories
+			<textarea
+				bind:value={repoPath}
+				rows="3"
+				placeholder="~/Desktop/repo"
+				class="mt-2 w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-sm font-normal"
+			></textarea>
+			<span class="mt-1 block text-xs font-normal text-muted"
+				>One per line: a Git repository, or a folder of clones (e.g. ~/Desktop/repo). You pick from
+				all of them when you start a ticket. Empty uses ~/.corpus.</span
+			>
+		</label>
+		{#if data.repos.length}
+			<div class="text-sm">
+				<p class="font-semibold">What each repository is</p>
+				<p class="mt-1 text-xs text-muted">
+					Shown to the agents so they know where a change belongs.
+				</p>
+				<div class="mt-2 space-y-2">
+					{#each data.repos as r (r.path)}
+						<label class="grid items-center gap-2 sm:grid-cols-[10rem_1fr]">
+							<span class="truncate font-medium" title={r.path}>{r.name}</span>
+							<input
+								bind:value={notes[r.path]}
+								maxlength="500"
+								placeholder="e.g. Customer-facing Rails app"
+								class="w-full rounded-lg border border-line bg-surface px-3 py-1.5 text-sm"
+							/>
+						</label>
+					{/each}
+				</div>
+			</div>
+		{/if}
+		<label class="flex items-start gap-2 text-sm">
+			<input type="checkbox" bind:checked={preReview} class="mt-1 accent-blue-600" />
+			<span>
+				<span class="font-semibold">Review before the PR</span>
+				<span class="block text-xs text-muted"
+					>Your Integrator and Breaker (from Integration Review settings) join each ticket thread.
+					The Builder addresses their findings before Conductor opens the PR.</span
+				>
+			</span>
+		</label>
+		<fieldset class="text-sm">
+			<legend class="font-semibold">Ready for you when</legend>
+			<label class="mt-2 flex items-center gap-2"
+				><input type="radio" bind:group={readyWhen} value="draft_pr" class="accent-blue-600" /> A draft
+				PR is up</label
+			>
+			<label class="mt-1 flex items-center gap-2"
+				><input type="radio" bind:group={readyWhen} value="ci_green" class="accent-blue-600" /> The PR
+				is ready for review and CI passes</label
+			>
+		</fieldset>
+	</div>
+	{#snippet footer()}
+		<button class="ml-auto btn-outline" onclick={() => (settingsOpen = false)}>Cancel</button>
+		<button class="btn-primary" disabled={busy} onclick={saveSettings}>Save</button>
+	{/snippet}
+</Modal>

@@ -409,8 +409,9 @@ export async function board(userId: string) {
 			agent = ticketAgent(userId, c, i, provider, meta, column, settings.readyWhen);
 			if (agent.column && ORDER[agent.column] > ORDER[column]) column = agent.column;
 		}
-		// Done work drops off after a week so the column stays short.
-		if (column === 'done' && Date.now() - c.updatedAt.getTime() > 7 * 86_400_000) return [];
+		// Done work drops off after a week, or when cleared, so the column stays short.
+		if (column === 'done' && (c.clearedAt || Date.now() - c.updatedAt.getTime() > 7 * 86_400_000))
+			return [];
 		return [
 			{
 				id: c.id,
@@ -998,7 +999,7 @@ async function ownCards(userId: string, ids: string[]) {
 export async function moveCard(userId: string, cardId: string, column: Column) {
 	const [c] = await ownCards(userId, [cardId]);
 	if (c!.column === column) return;
-	await db.update(card).set({ column }).where(eq(card.id, cardId));
+	await db.update(card).set({ column, clearedAt: null }).where(eq(card.id, cardId));
 	await log(
 		userId,
 		cardId,
@@ -1006,6 +1007,21 @@ export async function moveCard(userId: string, cardId: string, column: Column) {
 		`Moved to ${LABEL[column]}`,
 		'you'
 	);
+}
+
+/**
+ * Takes Done cards off the board. They stay in the database, so the same ticket or review isn't
+ * seeded back into the Inbox; only cards the board shows as Done are accepted.
+ */
+export async function clearDone(userId: string, cardIds: string[]) {
+	if (!cardIds.length) return 0;
+	await ownCards(userId, cardIds);
+	const { cards } = await board(userId);
+	const done = new Set(cards.filter((c) => c.column === 'done').map((c) => c.id));
+	const ids = cardIds.filter((id) => done.has(id));
+	if (!ids.length) return 0;
+	await db.update(card).set({ clearedAt: new Date() }).where(inArray(card.id, ids));
+	return ids.length;
 }
 
 /**

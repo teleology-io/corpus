@@ -28,6 +28,8 @@ export const conductorCard = pgTable(
 		/** Last thing the user said when sending it back. */
 		note: text('note'),
 		meta: jsonb('meta').$type<Record<string, unknown>>().notNull().default({}),
+		/** Cleared off the board from Done. The row stays so the item isn't seeded again. */
+		clearedAt: tstz('cleared_at'),
 		createdAt: createdAt(),
 		updatedAt: updatedAt()
 	},

@@ -115,7 +115,7 @@
 <Tooltip.Provider delayDuration={150}>
 	<div
 		class="wb-side flex h-full flex-col bg-surface {compact
-			? 'w-16'
+			? 'w-14'
 			: 'w-[243px] @max-[1100px]:w-[205px]'}"
 	>
 		<div

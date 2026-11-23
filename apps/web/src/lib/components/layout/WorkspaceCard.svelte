@@ -73,7 +73,7 @@
 <div class="hidden compact:block">
 	<DropdownMenu.Root>
 		<DropdownMenu.Trigger
-			class="flex size-11 items-center justify-center rounded-xl border border-line bg-canvas transition-colors hover:border-primary-300"
+			class="flex size-10 items-center justify-center rounded-lg border border-line bg-canvas transition-colors hover:border-primary-300"
 			aria-label="Switch workspace ({current?.name ?? 'Workspace'})"
 			title={current?.name ?? 'Workspace'}
 		>

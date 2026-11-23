@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { body, requireCtx } from '#lib/server/ctx.js';
 import {
 	board,
+	clearDone,
 	COLUMNS,
 	confirmPlan,
 	moveCard,
@@ -21,6 +22,10 @@ export const GET: RequestHandler = async ({ locals }) => {
 const input = z.discriminatedUnion('action', [
 	z.object({ action: z.literal('plan'), cardIds: z.array(z.string().uuid()).max(100) }),
 	z.object({ action: z.literal('move'), cardId: z.string().uuid(), column: z.enum(COLUMNS) }),
+	z.object({
+		action: z.literal('clear_done'),
+		cardIds: z.array(z.string().uuid()).min(1).max(500)
+	}),
 	z.object({
 		action: z.literal('send_back'),
 		cardId: z.string().uuid(),
@@ -50,6 +55,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			break;
 		case 'move':
 			await moveCard(ctx.userId, i.cardId, i.column);
+			break;
+		case 'clear_done':
+			await clearDone(ctx.userId, i.cardIds);
 			break;
 		case 'send_back':
 			await sendBack(ctx.userId, i.cardId, i.note);

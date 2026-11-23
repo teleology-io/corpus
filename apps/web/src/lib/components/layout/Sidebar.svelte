@@ -115,14 +115,16 @@
 {/snippet}
 
 <Tooltip.Provider delayDuration={150}>
-	<aside class="flex h-full w-[248px] flex-col border-r border-line bg-surface compact:w-[76px]">
+	<aside class="flex h-full w-[248px] flex-col border-r border-line bg-surface compact:w-14">
 		<div class="flex h-[72px] items-center px-6 compact:justify-center compact:px-0">
 			<a href="/dashboard" onclick={onnavigate} aria-label="Corpus dashboard">
 				<Logo wordmarkClass="compact:hidden" />
 			</a>
 		</div>
 
-		<nav class="flex-1 scrollbar-thin overflow-x-hidden overflow-y-auto px-3 pt-3 pb-2">
+		<nav
+			class="flex-1 scrollbar-thin overflow-x-hidden overflow-y-auto px-3 pt-3 pb-2 compact:px-2"
+		>
 			<ul class="space-y-0.5" aria-label="Main menu">
 				{#each main as item (item.href)}{@render navItem(item)}{/each}
 			</ul>

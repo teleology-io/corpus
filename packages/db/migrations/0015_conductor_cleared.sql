@@ -1,0 +1,1 @@
+ALTER TABLE "conductor_card" ADD COLUMN "cleared_at" timestamp with time zone;

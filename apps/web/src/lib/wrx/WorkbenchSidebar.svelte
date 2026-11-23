@@ -280,7 +280,7 @@
 								{/if}
 							</button>
 						{/snippet}
-						{@render btn({ 'aria-label': compact ? item.label : undefined })}
+						{@render tip(item.label, btn)}
 					</li>
 				{/each}
 				<li>
@@ -301,7 +301,7 @@
 							{/if}
 						</button>
 					{/snippet}
-					{@render toggle({})}
+					{@render tip('Expand sidebar', toggle)}
 				</li>
 			</ul>
 
@@ -310,11 +310,15 @@
 					? 'justify-center'
 					: 'px-1'}"
 			>
-				<span
-					class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-canvas text-gray-500"
-				>
-					<SquareTerminal class="size-4" />
-				</span>
+				{#snippet local(props: Record<string, unknown>)}
+					<span
+						{...props}
+						class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-canvas text-gray-500"
+					>
+						<SquareTerminal class="size-4" />
+					</span>
+				{/snippet}
+				{@render tip('Local workbench · on your machine', local)}
 				{#if !compact}
 					<span class="min-w-0 text-[11px] text-gray-600">
 						Local workbench

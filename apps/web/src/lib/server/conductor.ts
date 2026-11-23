@@ -2,9 +2,10 @@
 // assigned to you, PRs asking for your review); columns are stored, and reviews advance on their own.
 import { dev } from '$app/env';
 import { error } from '@sveltejs/kit';
-import { and, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
 import { db, optionalEnv, schema } from '@corpus/db';
 import { accessToken } from '@corpus/db/connections';
+import { notify } from '@corpus/db/notify';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { createPull, pullDetails, updatePullBody } from '@corpus/core/integrations';
@@ -92,6 +93,8 @@ interface TicketMeta {
 	handledAt?: string | null;
 	pr?: { owner: string; repo: string; number: number } | null;
 	ciCheckedAt?: number;
+	/** Blockers sent back to the agent automatically since you last stepped in. */
+	autoFixes?: number;
 }
 
 /** The card's repositories, reading cards started before multi-repository support too. */
@@ -163,9 +166,11 @@ export async function availableRepos(settings: {
 
 /** The agents on a ticket thread: the Builder leads; your reviewers check its work before the PR. */
 function ticketTeam(userId: string, preReview: boolean) {
+	// Full access: the Builder runs tests, builds and git in its worktrees (bypassPermissions).
 	const builder = {
 		provider: 'claude',
 		mode: 'implement',
+		fullAccess: true,
 		name: 'Builder',
 		role: 'Implements the ticket end to end and owns the thread: only the Builder ends it.'
 	};
@@ -215,9 +220,133 @@ function background(cardId: string, work: () => Promise<void>) {
 
 const MARKER = /^\s*CONDUCTOR:\s*(DONE|BLOCKED)\b[:\s-]*(.*)$/im;
 
+// A blocker the agent can fix (red CI, a failed push, a crashed turn, no closing line) goes back to it
+// this many times before Conductor stops and asks you.
+const MAX_AUTO_FIXES = 2;
+
+type Blocker = {
+	reason: string;
+	/** What to tell the agent so it can fix this itself; null when only you can. */
+	fix: string | null;
+	/** Identifies this occurrence, so one blocker notifies once. */
+	key: string;
+	/** False when you caused it (you stopped the agent): flag the card, don't notify. */
+	alert?: boolean;
+};
+
+/**
+ * Something stopped a working ticket. Sends a fixable blocker back to the agent (up to
+ * MAX_AUTO_FIXES times until you step in); otherwise flags the card and notifies you. Returns what
+ * the card should show, or null when the agent is fixing it. Decides synchronously; writes in the
+ * background.
+ */
+function blocker(
+	userId: string,
+	c: { id: string; chatId: string | null },
+	title: string,
+	autoFixes: number,
+	b: Blocker
+): string | null {
+	if (b.fix && c.chatId && autoFixes < MAX_AUTO_FIXES && conductorChat(userId, c.chatId)) {
+		conductorSend(
+			userId,
+			c.chatId,
+			`${b.fix}\n\nWhen it's fixed, end with \`CONDUCTOR: DONE\` again (or \`CONDUCTOR: BLOCKED <question>\` if you need me).`
+		);
+		void (async () => {
+			await patchMeta(c.id, { blocked: null, autoFixes: autoFixes + 1 });
+			await log(
+				userId,
+				c.id,
+				'auto_fix',
+				`Sent back to the agent automatically (${autoFixes + 1}/${MAX_AUTO_FIXES}): ${b.reason}`
+			);
+		})().catch((e) => console.error('conductor: auto fix', c.id, e));
+		return null;
+	}
+	const blocked =
+		b.fix && autoFixes >= MAX_AUTO_FIXES
+			? `${b.reason} (still blocked after ${MAX_AUTO_FIXES} automatic fixes)`
+			: b.reason;
+	void (async () => {
+		await patchMeta(c.id, { blocked });
+		await log(userId, c.id, 'blocked', `Needs you: ${blocked}`);
+		if (b.alert !== false)
+			await notify({
+				userId,
+				type: 'conductor_blocked',
+				title: `Conductor needs you: ${title}`.slice(0, 200),
+				body: blocked.slice(0, 500),
+				href: '/conductor',
+				sourceType: 'conductor_card',
+				sourceId: c.id,
+				dedupeKey: `conductor_blocked:${c.id}:${b.key}`
+			});
+	})().catch((e) => console.error('conductor: blocked', c.id, e));
+	return blocked;
+}
+
+// Errors from opening the PR that the agent can't fix from its worktree.
+const PR_SETUP = /Connect GitHub|isn’t a GitHub repository|isn’t in a Git worktree/;
+
+// The agent reply each card last acted on, so a board load and the watcher never act on one twice.
+const handling: Map<string, string> = ((
+	globalThis as { __conductorHandling?: Map<string, string> }
+).__conductorHandling ??= new Map());
+
+// Conductor acts on agent replies and CI while the board is closed too: working tickets are checked
+// on this interval until none are left. Restarted on HMR so the newest code runs.
+const WATCH_MS = 30_000;
+const watchers: Map<string, ReturnType<typeof setInterval>> = ((
+	globalThis as { __conductorWatchers?: Map<string, ReturnType<typeof setInterval>> }
+).__conductorWatchers ??= new Map());
+for (const t of watchers.values()) clearInterval(t);
+watchers.clear();
+
+function watch(userId: string) {
+	if (watchers.has(userId)) return;
+	let ticking = false;
+	const t = setInterval(() => {
+		if (ticking) return;
+		ticking = true;
+		syncWorking(userId)
+			.then((n) => {
+				if (n) return;
+				clearInterval(t);
+				watchers.delete(userId);
+			})
+			.catch((e) => console.error('conductor: watch', e))
+			.finally(() => (ticking = false));
+	}, WATCH_MS);
+	t.unref?.();
+	watchers.set(userId, t);
+}
+
+/** Runs the agent step for every working ticket. Returns how many there are. */
+async function syncWorking(userId: string) {
+	const { readyWhen } = await conductorSettings(userId);
+	const rows = await db
+		.select({ card, title: item.title, url: item.url, provider: conn.provider })
+		.from(card)
+		.innerJoin(item, eq(card.itemId, item.id))
+		.innerJoin(conn, eq(item.connectionId, conn.id))
+		.where(
+			and(
+				eq(card.userId, userId),
+				eq(card.kind, 'ticket'),
+				eq(card.column, 'working'),
+				isNotNull(card.chatId)
+			)
+		);
+	for (const r of rows)
+		ticketAgent(userId, r.card, r, r.provider, r.card.meta as TicketMeta, 'working', readyWhen);
+	return rows.length;
+}
+
 /** Seeds cards for new work, moves reviews along, and returns the board with recent activity. */
 export async function board(userId: string) {
 	const settings = await conductorSettings(userId);
+	watch(userId);
 	const [tickets, reviews] = await Promise.all([
 		db
 			.select({ id: item.id })
@@ -374,10 +503,15 @@ function ticketAgent(
 		column: null as Column | null
 	};
 	if (column !== 'working') return out;
+	const fixes = meta.autoFixes ?? 0;
 	if (!snap) {
-		if (meta.blocked !== 'The agent thread was deleted') {
-			out.blocked = 'The agent thread was deleted';
-			void patchMeta(c.id, { blocked: out.blocked });
+		if (meta.blocked !== 'The agent thread was deleted' && handling.get(c.id) !== 'gone') {
+			handling.set(c.id, 'gone');
+			out.blocked = blocker(userId, c, i.title, fixes, {
+				reason: 'The agent thread was deleted',
+				fix: null,
+				key: `gone:${c.chatId}`
+			});
 		}
 		return out;
 	}
@@ -387,43 +521,63 @@ function ticketAgent(
 		return out;
 	}
 	if (snap.lastAgentAt && snap.lastAgentAt !== meta.handledAt) {
+		// Another sync is already acting on this reply; its writes haven't landed yet.
+		if (handling.get(c.id) === snap.lastAgentAt) return out;
+		handling.set(c.id, snap.lastAgentAt);
+		const at = snap.lastAgentAt;
 		const text = snap.lastAgentText ?? '';
 		const m = MARKER.exec(text);
-		const patch: Partial<TicketMeta> = { handledAt: snap.lastAgentAt };
+		const patch: Partial<TicketMeta> = { handledAt: at };
+		void patchMeta(c.id, patch);
 		if (snap.status === 'failed' || snap.status === 'cancelled') {
-			patch.blocked = `Agent ${snap.status}${snap.error ? `: ${snap.error}` : ''}`;
-		} else if (m?.[1]?.toUpperCase() === 'DONE') {
+			const reason = `Agent ${snap.status}${snap.error ? `: ${snap.error}` : ''}`;
+			out.blocked = blocker(userId, c, i.title, fixes, {
+				reason,
+				// You stopped it: that's yours to pick up, not the agent's.
+				fix:
+					snap.status === 'failed'
+						? `Your last turn failed${snap.error ? `: ${snap.error}` : ''}. Pick up where you left off and finish the ticket.`
+						: null,
+				key: `reply:${at}`,
+				alert: snap.status === 'failed'
+			});
+			return out;
+		}
+		if (m?.[1]?.toUpperCase() === 'DONE') {
 			patch.summary = text.replace(MARKER, '').trim().slice(0, 4000) || null;
 			patch.blocked = null;
 			const ticket = { ...i, ref: ref(provider, i) };
+			void patchMeta(c.id, patch);
 			background(c.id, () =>
-				openPr(userId, c.id, { ...meta, ...patch }, ticket, readyWhen).catch(async (e) => {
-					const reason = `Couldn't open the PR: ${e instanceof Error ? e.message : String(e)}`;
-					await patchMeta(c.id, { blocked: reason });
-					await log(userId, c.id, 'blocked', reason);
+				openPr(userId, c.id, { ...meta, ...patch }, ticket, readyWhen).catch((e) => {
+					const message = e instanceof Error ? e.message : String(e);
+					blocker(userId, c, i.title, fixes, {
+						reason: `Couldn't open the PR: ${message}`,
+						fix: PR_SETUP.test(message)
+							? null
+							: `Conductor couldn't push your work or open the PR: ${message}\n\nFix the cause in your worktree(s), for example a failing commit hook, a conflict with the base branch or no changes at all. Don't push or open PRs yourself: Conductor does that when you finish.`,
+						key: `pr:${at}`
+					});
 				})
 			);
-		} else {
-			patch.blocked = m?.[2]?.trim() || 'The agent stopped without finishing. Check the thread.';
-			void log(
-				userId,
-				c.id,
-				'blocked',
-				`Needs you: ${patch.blocked}`,
-				snap.lastAgentName ?? 'agent'
-			);
+			Object.assign(out, { blocked: null, summary: patch.summary ?? out.summary });
+			return out;
 		}
-		void patchMeta(c.id, patch);
-		Object.assign(out, {
-			blocked: patch.blocked ?? out.blocked,
-			summary: patch.summary ?? out.summary
+		const asked = m?.[1]?.toUpperCase() === 'BLOCKED';
+		out.blocked = blocker(userId, c, i.title, fixes, {
+			reason: (asked && m?.[2]?.trim()) || 'The agent stopped without finishing. Check the thread.',
+			// A question is for you. Stopping without a closing line is usually the agent losing track.
+			fix: asked
+				? null
+				: 'You stopped without a closing `CONDUCTOR:` line. If the ticket is done and checked, finish with your summary and `CONDUCTOR: DONE`; if you need a decision from me, end with `CONDUCTOR: BLOCKED <your question>`. Otherwise keep going.',
+			key: `reply:${at}`
 		});
 		return out;
 	}
 	const prs = reposOf(meta).flatMap((r) => (r.pr ? [r.pr] : []));
 	if (readyWhen === 'ci_green' && prs.length && !meta.blocked && !busy.has(c.id)) {
 		if (Date.now() - (meta.ciCheckedAt ?? 0) > 60_000)
-			background(c.id, () => checkCi(userId, c.id, prs));
+			background(c.id, () => checkCi(userId, c, i.title, fixes, prs));
 	}
 	return out;
 }
@@ -439,6 +593,9 @@ async function githubToken(userId: string) {
 }
 
 const MAX_DIFF = 60_000;
+
+/** Breaks @handles (zero-width space) so quoted text can't wake agents in a Workbench thread. */
+const noMentions = (text: string) => text.replace(/@(?=[a-z0-9])/gi, '@\u200b');
 
 /**
  * Writes the PR description (What / Why / How) from the ticket and the branch's diff, with a
@@ -591,9 +748,12 @@ async function openPr(
 /** ci_green: Ready once every PR is out of draft and all their checks passed; flags failures. */
 async function checkCi(
 	userId: string,
-	cardId: string,
+	c: { id: string; chatId: string | null },
+	title: string,
+	fixes: number,
 	prs: { owner: string; repo: string; number: number }[]
 ) {
+	const cardId = c.id;
 	await patchMeta(cardId, { ciCheckedAt: Date.now() });
 	const token = await githubToken(userId);
 	let ready = true;
@@ -605,9 +765,14 @@ async function checkCi(
 				c.status === 'completed' && !['success', 'neutral', 'skipped'].includes(c.conclusion ?? '')
 		);
 		if (failed.length) {
-			const reason = `CI failed on ${pr.repo}#${pr.number}: ${failed.map((c) => c.name).join(', ')}`;
-			await patchMeta(cardId, { blocked: reason });
-			await log(userId, cardId, 'blocked', reason);
+			const names = failed.map((x) => x.name).join(', ');
+			blocker(userId, c, title, fixes, {
+				reason: `CI failed on ${pr.repo}#${pr.number}: ${names}`,
+				fix:
+					`CI failed on ${pr.owner}/${pr.repo}#${pr.number}: ${names}. Find out why (\`gh pr checks ${pr.number} --repo ${pr.owner}/${pr.repo}\` and \`gh run view --log-failed\` if gh is available), ` +
+					'fix it in your worktree and run the matching checks locally. Don’t push: Conductor pushes when you finish.',
+				key: `ci:${pr.repo}#${pr.number}:${d.headSha}`
+			});
 			return;
 		}
 		const done = d.checks.length > 0 && d.checks.every((c) => c.status === 'completed');
@@ -674,7 +839,8 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 	const prompt = [
 		`Work this ticket${tref ? ` (${tref})` : ''}: ${row.title}`,
 		row.url,
-		...(description ? ['', 'Description:', description.slice(0, 20000)] : []),
+		// Workbench wakes every @handle in a message; a ticket mentioning someone must not start an agent.
+		...(description ? ['', 'Description:', noMentions(description.slice(0, 20000))] : []),
 		...(repoLines.length
 			? [
 					'',
@@ -684,8 +850,9 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 			: []),
 		'',
 		'Implement it. Inspect the code first and keep the change focused.',
-		'You can edit files but cannot run shell commands. Conductor commits, pushes and opens the PR',
-		`(${readyWhen === 'draft_pr' ? 'as a draft' : 'ready for review'}) once you finish.`,
+		'You have full shell access: run the tests, type checks and builds that cover your change, and fix',
+		'what fails before you finish. Commit if you like, but stay on your branch and do not push, open',
+		`PRs or touch other branches: Conductor pushes and opens the PR (${readyWhen === 'draft_pr' ? 'as a draft' : 'ready for review'}) once you finish.`,
 		...(previous.length
 			? [
 					'',
@@ -696,7 +863,9 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 		...(preReview
 			? [
 					'',
-					'Before you finish, ask @integrator and @breaker to review in one message: list every file you',
+					// In code spans so this opening message wakes only the Builder, not the reviewers.
+					'Only once your change is done and checked, ask `@integrator` and `@breaker` to review, in one',
+					'message that mentions them (plain @mentions, not in code formatting). List every file you',
 					'changed (absolute paths) and what each change does; they can read files but cannot run git.',
 					'Address what they raise, or say why not. Ask them to look again only after significant changes.',
 					'You have the last word: never end the thread on their reply.'
@@ -725,7 +894,8 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 			.update(card)
 			.set({ column: 'working', chatId: started.chatId })
 			.where(eq(card.id, cardId));
-		await patchMeta(cardId, { blocked: null, handledAt: null });
+		await patchMeta(cardId, { blocked: null, handledAt: null, autoFixes: 0 });
+		watch(userId);
 		await log(
 			userId,
 			cardId,
@@ -758,6 +928,7 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 		`Agents started in ${started.repos.map((r: RepoMeta) => r.name).join(', ')}`,
 		'you'
 	);
+	watch(userId);
 }
 
 /** Sends the note to the ticket's agents (when it has some) and moves it back to Agents working. */
@@ -775,7 +946,7 @@ export async function sendBack(userId: string, cardId: string, note: string) {
 			`${note}\n\nWhen you're done, end with \`CONDUCTOR: DONE\` again (or \`CONDUCTOR: BLOCKED <question>\`).`
 		);
 	await db.update(card).set({ column: 'working', note }).where(eq(card.id, cardId));
-	await patchMeta(cardId, { blocked: null });
+	await patchMeta(cardId, { blocked: null, autoFixes: 0 });
 	await log(userId, cardId, 'sent_back', `Sent back: ${note}`, 'you');
 }
 

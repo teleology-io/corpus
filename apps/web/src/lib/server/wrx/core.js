@@ -442,6 +442,7 @@ function migrateChat(c) {
 	for (const m of c.members) {
 		m.status = 'idle';
 		m.live = false;
+		delete m.waiting;
 	}
 	delete c.summarizing;
 	if (c.status === 'running' || c.status === 'queued') {
@@ -1248,6 +1249,24 @@ export class Engine {
 	writing(workspaceId) {
 		return [...this.running.values()].some((r) => r.workspaceId === workspaceId && r.writer);
 	}
+	// Why a queued member can't start yet, or null. Every gate is per workspace, except a shared
+	// environment, which holds agents in every workspace attached to it.
+	blockedBy(chat, member, w) {
+		if (this.running.has(`${chat.id}:${member.id}`)) return 'its previous turn to finish';
+		if (Engine.writes(member) && this.writing(w.id)) {
+			const holder = [...this.running.values()].find((r) => r.workspaceId === w.id && r.writer);
+			const hc = holder && this.store.state.chats.find((c) => c.id === holder.chatId);
+			const hm = hc?.members.find((m) => m.id === holder.memberId);
+			const where = hc && hc.id !== chat.id ? ` in “${hc.title}”` : '';
+			return `the edit lock${hm ? ` (@${hm.handle}${where} is editing this workspace)` : ''}`;
+		}
+		if (w.provision?.status === 'running') return 'workspace setup to finish';
+		if (w.database?.busy) return 'a database operation to finish';
+		const env = w.environmentId && this.store.get('environments', w.environmentId);
+		if (env?.busy)
+			return `the ${env.scope === 'shared' ? 'shared ' : ''}environment “${env.name}” to finish an operation`;
+		return null;
+	}
 	pump() {
 		for (const job of [...this.queue]) {
 			const chat = this.store.state.chats.find((c) => c.id === job.chatId);
@@ -1257,15 +1276,17 @@ export class Engine {
 				continue;
 			}
 			const w = this.store.get('workspaces', chat.workspaceId);
-			if (
-				this.running.has(`${chat.id}:${member.id}`) ||
-				(Engine.writes(member) && this.writing(w.id)) ||
-				w.provision?.status === 'running' ||
-				w.database?.busy ||
-				(w.environmentId && this.store.get('environments', w.environmentId).busy)
-			)
+			const why = this.blockedBy(chat, member, w);
+			if (why) {
+				// Shown on the queued member so a wait says what it's waiting for.
+				if (member.waiting !== why) {
+					member.waiting = why;
+					this.changed();
+				}
 				continue;
+			}
 			if (chat.summarizing || this.prepareContext(chat, member, w)) continue;
+			delete member.waiting;
 			this.queue.splice(this.queue.indexOf(job), 1);
 			this.run(chat, member, job);
 		}

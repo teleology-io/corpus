@@ -171,6 +171,7 @@
 	const ACTIVITY_ICON: Record<string, string> = {
 		plan_confirmed: 'bg-primary-50 text-primary-600',
 		sent_back: 'bg-amber-50 text-amber-700',
+		auto_fix: 'bg-amber-50 text-amber-700',
 		blocked: 'bg-red-50 text-red-700',
 		started: 'bg-primary-50 text-primary-600',
 		pr_opened: 'bg-violet-50 text-violet-700',
@@ -362,7 +363,7 @@
 									] ?? 'bg-canvas text-muted'}"
 									>{#if a.kind === 'plan_confirmed'}<CalendarDays
 											class="size-3.5"
-										/>{:else if a.kind === 'sent_back'}<RotateCcw
+										/>{:else if a.kind === 'sent_back' || a.kind === 'auto_fix'}<RotateCcw
 											class="size-3.5"
 										/>{:else if a.kind === 'moved'}<ArrowRight class="size-3.5" />{:else}<CircleDot
 											class="size-3.5"

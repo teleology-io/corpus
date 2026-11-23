@@ -52,6 +52,12 @@ export const NOTIFICATION_TYPES = {
 		description: 'A task with a due time is coming up',
 		defaults: on()
 	},
+	conductor_blocked: {
+		label: 'Conductor needs you',
+		group: 'Tasks',
+		description: 'A Conductor ticket is blocked and its agents can’t fix it themselves',
+		defaults: on()
+	},
 	task_assigned: {
 		label: 'Task assigned',
 		group: 'Tasks',

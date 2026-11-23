@@ -33,10 +33,22 @@ import { reviewEnv, runAgent, type ReviewProvider, type Spawn } from './runner';
 
 const { prReview: review, integrationItem: item, integrationConnection: conn } = schema;
 
-// Survives Vite HMR like Workbench's hosts. userId -> review id, so one review runs per user.
-const active: Map<string, string> = ((
-	globalThis as { __prReviewActive?: Map<string, string> }
-).__prReviewActive ??= new Map());
+// Survives Vite HMR like Workbench's hosts. userId -> (PR item id -> review id, '' while starting).
+// Reviews run in parallel up to MAX_CONCURRENT per user, one at a time per PR.
+const MAX_CONCURRENT = 3;
+const active: Map<string, Map<string, string>> = ((
+	globalThis as { __prReviewRuns?: Map<string, Map<string, string>> }
+).__prReviewRuns ??= new Map());
+const runsOf = (userId: string) => {
+	let runs = active.get(userId);
+	if (!runs) active.set(userId, (runs = new Map()));
+	return runs;
+};
+const release = (userId: string, itemId: string) => {
+	const runs = active.get(userId);
+	runs?.delete(itemId);
+	if (runs && !runs.size) active.delete(userId);
+};
 
 // Review id -> what that run is doing. Survives HMR for the same reason.
 const liveProgress: Map<string, ReviewProgress> = ((
@@ -83,7 +95,7 @@ async function installed(): Promise<Record<ReviewProvider, boolean>> {
 
 /** A running row with no live run belongs to a server that restarted. */
 async function markInterrupted(userId: string) {
-	const running = active.get(userId);
+	const running = [...(active.get(userId)?.values() ?? [])].filter(Boolean);
 	await db
 		.update(review)
 		.set({ status: 'interrupted', error: 'The server restarted during this review.' })
@@ -91,7 +103,7 @@ async function markInterrupted(userId: string) {
 			and(
 				eq(review.userId, userId),
 				eq(review.status, 'running'),
-				running ? notInArray(review.id, [running]) : undefined
+				running.length ? notInArray(review.id, running) : undefined
 			)
 		);
 }
@@ -253,9 +265,12 @@ export async function externalReviewDiff(userId: string, itemId: string) {
 
 /** Starts in the background and returns the running row. Failures end up on the row, not lost. */
 export async function startExternalReview(userId: string, itemId: string) {
-	if (active.has(userId)) error(409, 'A review is already running. Try again when it finishes.');
+	const runs = runsOf(userId);
+	if (runs.has(itemId)) error(409, 'This pull request is already being reviewed.');
+	if (runs.size >= MAX_CONCURRENT)
+		error(409, `${MAX_CONCURRENT} reviews are already running. Try again when one finishes.`);
 	// Claimed before the first await, so a double click can't start two runs.
-	active.set(userId, '');
+	runs.set(itemId, '');
 	try {
 		const { connection, ref } = await ownItem(userId, itemId);
 		const token = await accessToken(connection);
@@ -282,16 +297,16 @@ export async function startExternalReview(userId: string, itemId: string) {
 				}
 			})
 			.returning();
-		active.set(userId, row.id);
+		runs.set(itemId, row.id);
 		const progress = createProgress(ROLES);
 		liveProgress.set(row.id, progress);
 		void execute(userId, row.id, token, ref, pr, progress, previous).finally(() => {
-			active.delete(userId);
+			release(userId, itemId);
 			liveProgress.delete(row.id);
 		});
 		return row;
 	} catch (e) {
-		active.delete(userId);
+		release(userId, itemId);
 		throw e;
 	}
 }

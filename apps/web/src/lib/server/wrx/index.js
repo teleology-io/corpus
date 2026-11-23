@@ -831,7 +831,7 @@ async function conductorWorkspace(engine, store, repoPath, { branch, title }) {
  * Starts the ticket's thread. `repoPaths` get a worktree each (or `workspaceIds` are reused when the
  * previous thread was removed); the first is the thread's workspace.
  * @param {string} userId
- * @param {{ repoPaths?: string[]; workspaceIds?: string[]; branch: string; title: string; prompt: string; team: { provider: string; mode: string; name: string; role: string; model?: string }[] }} input
+ * @param {{ repoPaths?: string[]; workspaceIds?: string[]; branch: string; title: string; prompt: string; team: { provider: string; mode: string; name: string; role: string; model?: string; fullAccess?: boolean }[] }} input
  */
 export async function conductorStart(
 	userId,

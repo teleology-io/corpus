@@ -26,6 +26,7 @@
 		saveStandupDevicePrefs
 	} from '#lib/stores/standup-prefs.js';
 	import { SETTINGS, type SettingKey } from '#lib/settings.js';
+	import { sidebar } from '#lib/stores/sidebar.svelte.js';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -189,6 +190,23 @@
 				<div class="sm:col-span-2"><button class="btn-primary">Save profile</button></div>
 			</div>
 		</form>
+	</section>
+
+	<section class="card p-5" id="appearance">
+		<label class="flex items-center justify-between gap-4">
+			<span class="flex min-w-0 flex-col">
+				<span class="font-semibold">Compact sidebar</span>
+				<span class="text-sm text-muted">
+					Show the main menu as icons only on desktop, on this device. You can also toggle it from
+					the button under Help Me.
+				</span>
+			</span>
+			<Switch
+				checked={sidebar.compact}
+				onchange={(v) => sidebar.set(v ? 'compact' : 'full')}
+				label="Compact sidebar"
+			/>
+		</label>
 	</section>
 
 	<section class="card p-5" id="notifications">

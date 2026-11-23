@@ -11,6 +11,8 @@
 				// Light by default; dark only when chosen (or "system" + OS dark).
 				if (t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches))
 					document.documentElement.classList.add('dark');
+				if (localStorage.getItem('corpus-sidebar') === 'compact')
+					document.documentElement.classList.add('sidebar-compact');
 			} catch (e) {}
 		</script>
 		<link rel="manifest" href="/manifest.webmanifest" />

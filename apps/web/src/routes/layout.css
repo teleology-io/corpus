@@ -4,6 +4,15 @@
 /* Class-based dark mode: <html class="dark"> is set before paint by app.html. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Icon-rail sidebar: <html class="sidebar-compact"> (set before paint by app.html). Desktop only. */
+@custom-variant compact {
+	@media (width >= 64rem) {
+		&:where(.sidebar-compact *) {
+			@slot;
+		}
+	}
+}
+
 @theme {
 	--font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
 

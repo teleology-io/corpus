@@ -1,5 +1,9 @@
 <script lang="ts">
-	let { size = 28, wordmark = true }: { size?: number; wordmark?: boolean } = $props();
+	let {
+		size = 28,
+		wordmark = true,
+		wordmarkClass = ''
+	}: { size?: number; wordmark?: boolean; wordmarkClass?: string } = $props();
 </script>
 
 <span class="inline-flex items-center gap-2.5">
@@ -15,6 +19,6 @@
 		<circle cx="22.4" cy="16" r="2.1" fill="white" />
 	</svg>
 	{#if wordmark}
-		<span class="text-[19px] font-bold tracking-tight text-ink">Corpus</span>
+		<span class="text-[19px] font-bold tracking-tight text-ink {wordmarkClass}">Corpus</span>
 	{/if}
 </span>

@@ -10,7 +10,7 @@ import { commitModelReady, generateCommitMessage } from './commit-message.js';
 const drafts = new Map();
 const attachments = new Map(); // chatId → [{ name, type, size, data (base64), url (data: preview, images only) }]
 
-export function mountWrx(root) {
+export function mountWrx(root, { onSidebar } = {}) {
 	root.innerHTML =
 		'<div id="app"></div><dialog id="dialog"></dialog><dialog id="switcher" class="switcher" aria-label="Switch workspace" autofocus></dialog><dialog id="conversations" class="conversations-drawer" aria-label="Conversations" autofocus></dialog><dialog id="files-drawer" class="conversations-drawer files-drawer" aria-label="Files" autofocus></dialog>';
 	let destroyed = false,
@@ -118,7 +118,7 @@ export function mountWrx(root) {
 			render();
 		}
 	});
-	// Project → workspace rows, shared by the sidebar and the mobile "Switch workspace" sheet.
+	// Project → workspace rows for the mobile "Switch workspace" sheet.
 	function projectTree(projects, w, sheet = false) {
 		return projects
 			.map(
@@ -144,6 +144,24 @@ export function mountWrx(root) {
 						.join('')}`
 			)
 			.join('');
+	}
+	// The desktop projects sidebar is a Svelte component (WorkbenchSidebar) mounted into
+	// #wrx-sidebar; render() hands it this snapshot.
+	function sidebarData() {
+		const live = new Set(
+			state.chats.filter((c) => c.status === 'running').map((c) => c.workspaceId)
+		);
+		return {
+			projects: state.projects.map((p) => ({ id: p.id, name: p.name })),
+			workspaces: state.workspaces.map((x) => ({
+				id: x.id,
+				name: x.name,
+				projectId: x.projectId,
+				live: live.has(x.id)
+			})),
+			environments: state.environments.length,
+			workspaceId: current()?.id ?? null
+		};
 	}
 	function switcherHtml() {
 		const tree = projectTree(state.projects, current(), true);
@@ -210,7 +228,6 @@ export function mountWrx(root) {
 		root.classList.toggle('conversation-fullscreen', conversationFullscreen);
 		if (tab !== 'files' || !w) filesFullscreen = false;
 		root.classList.toggle('files-fullscreen', filesFullscreen);
-		const filtered = state.projects;
 		const old = $('#transcript');
 		const stick = !old || old.scrollHeight - old.scrollTop - old.clientHeight < 24;
 		const scrolledRunLogs = new Set();
@@ -218,9 +235,7 @@ export function mountWrx(root) {
 			if (log.scrollHeight - log.scrollTop - log.clientHeight >= 24) scrolledRunLogs.add(log.id);
 		patch(
 			$('#app'),
-			`<aside class="sidebar"><nav><div class="nav-label">PROJECTS <span class="project-controls"><span>${state.projects.length}</span><button class="square" data-action="project" aria-label="Add project" title="Add project">${icon('plus')}</button></span></div>${
-				projectTree(filtered, w) || '<p class="nav-empty">Your projects will appear here.</p>'
-			}</nav><div class="sidebar-bottom"><button data-action="environments">${icon('box')}Environments<span>${state.environments.length}</span></button><button data-action="computers">${icon('terminal')}Computers</button><button data-action="settings">${icon('settings')}Connections<span class="live-dot"></span></button><div class="user"><span class="avatar">${icon('terminal')}</span><div>Local workbench<small>On your machine. In your control.</small></div></div></div></aside><section class="wrx-main">${
+			`<aside id="wrx-sidebar" class="sidebar" data-keep></aside><section class="wrx-main">${
 				!w
 					? welcome()
 					: `<section class="workspace-header"><div><div class="eyebrow">PROJECT WORKSPACE</div><h1><span class="workspace-name">${esc(w.name)}</span><button class="workspace-switch" data-action="switcher" aria-haspopup="dialog" aria-label="${esc(w.name)}, switch workspace"><span>${esc(w.name)}</span>${icon('chevron')}</button><span class="workspace-tag">${icon('branch')}${esc(w.branch)}</span></h1><p>${esc(p.path)}</p></div><div class="actions">${w.path === p.path ? '' : btn('Delete workspace', 'workspace-delete', 'trash')}${p.folder ? '' : btn('New workspace', 'workspace', 'branch')}${btn('New agent', 'chat', 'plus', 'primary')}</div></section>${setupBanner(w)}<div class="tabs">${shownTabs(
@@ -235,6 +250,7 @@ export function mountWrx(root) {
 							)}</div><div class="content">${tab === 'overview' ? overview(chats) : tab === 'agents' ? agentView(chats) : tab === 'changes' ? changes() : tab === 'files' ? filesView() : tab === 'tasks' ? tasksView() : tab === 'reviews' ? reviewsView() : tab === 'run' ? runView() : runtimeView()}</div>`
 			}<footer><span><i class="live-dot"></i> Corpus / developer workbench</span><span>${esc(state.machine?.name || 'LOCAL FIRST')} <span class="footer-divider">/</span> v0.1.0</span></footer></section>`
 		);
+		onSidebar?.($('#wrx-sidebar'), sidebarData());
 		const box = $('#message');
 		if (box && box.value !== (drafts.get(chatId) || '')) box.value = drafts.get(chatId) || '';
 		// Follow new output only when already at the bottom; otherwise leave the reader where they are.
@@ -3291,5 +3307,9 @@ export function mountWrx(root) {
 	};
 	// The page calls this when Corpus navigates to /workbench?… while the workbench is already open.
 	destroy.navigate = applyLink;
+	// Hooks for the Svelte projects sidebar.
+	destroy.chooseWorkspace = chooseWorkspace;
+	destroy.action = (name) => actions[name]?.();
+	destroy.deleteProject = deleteProject;
 	return destroy;
 }

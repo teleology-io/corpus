@@ -2,12 +2,16 @@
 	import './layout.css';
 	import { onMount } from 'svelte';
 	import Toaster from '#lib/components/ui/Toaster.svelte';
+	import { sidebar } from '#lib/stores/sidebar.svelte.js';
 	import { theme } from '#lib/stores/theme.svelte.js';
 	import type { LayoutProps } from './$types';
 
 	let { children }: LayoutProps = $props();
 
-	onMount(() => theme.init());
+	onMount(() => {
+		theme.init();
+		sidebar.init();
+	});
 </script>
 
 <svelte:head>

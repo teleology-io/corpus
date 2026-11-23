@@ -50,7 +50,7 @@
 				onclick={() => (drawer = false)}
 			></button>
 			<div class="relative h-full w-fit shadow-pop">
-				<Sidebar onnavigate={() => (drawer = false)} />
+				<Sidebar drawer onnavigate={() => (drawer = false)} />
 			</div>
 		</div>
 	{/if}

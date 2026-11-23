@@ -63,7 +63,7 @@
 .wrx select {
 	-webkit-tap-highlight-color: transparent;
 }
-.wrx button {
+.wrx button:where(:not(.wb-side *)) {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -79,11 +79,11 @@
 		background 0.15s,
 		border-color 0.15s;
 }
-.wrx button:hover {
+.wrx button:where(:not(.wb-side *)):hover {
 	background: var(--bg-hover);
 	border-color: var(--border);
 }
-.wrx button:disabled {
+.wrx button:where(:not(.wb-side *)):disabled {
 	opacity: 0.45;
 	cursor: wait;
 }
@@ -139,7 +139,7 @@
 	min-height: 0;
 }
 .wrx .sidebar {
-	width: 243px;
+	/* Host for the Svelte WorkbenchSidebar, which sets its own (full / compact) width. */
 	flex-shrink: 0;
 	border-right: 1px solid var(--border);
 	background: var(--background);
@@ -1628,9 +1628,6 @@ html.dark .wrx .terminal-slot {
 	}
 }
 @container wrx (max-width:1100px) {
-	.wrx .sidebar {
-		width: 205px;
-	}
 	.wrx .brand {
 		padding-left: 18px;
 	}
@@ -1982,7 +1979,7 @@ html.dark .wrx .terminal-slot {
 	background: color-mix(in srgb, var(--accent) 82%, #fff 18%);
 	border-color: var(--accent);
 }
-.wrx button:hover {
+.wrx button:where(:not(.wb-side *)):hover {
 	border-color: var(--border-focused);
 }
 .wrx .workspace-link.selected,

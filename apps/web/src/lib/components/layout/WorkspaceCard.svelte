@@ -23,7 +23,28 @@
 	}
 </script>
 
-<div class="rounded-xl border border-line bg-canvas p-3.5">
+{#snippet menu()}
+	<DropdownMenu.Portal>
+		<DropdownMenu.Content class="menu w-56" side="top" sideOffset={8}>
+			{#each workspaces as w (w.id)}
+				<DropdownMenu.Item class="menu-item" onSelect={() => switchTo(w.id)}>
+					<span class="flex-1 truncate">{w.name}</span>
+					<span class="text-[10px] text-muted capitalize">{w.kind}</span>
+					{#if w.id === current?.id}<Check class="size-3.5 text-primary-500" />{/if}
+				</DropdownMenu.Item>
+			{/each}
+			<DropdownMenu.Separator class="my-1 h-px bg-line" />
+			<DropdownMenu.Item
+				class="menu-item text-primary-600"
+				onSelect={() => goto('/teams?create=1')}
+			>
+				<Plus class="size-3.5" /> New team or family
+			</DropdownMenu.Item>
+		</DropdownMenu.Content>
+	</DropdownMenu.Portal>
+{/snippet}
+
+<div class="rounded-xl border border-line bg-canvas p-3.5 compact:hidden">
 	<div class="flex items-start gap-2.5">
 		<span
 			class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-500 text-white"
@@ -44,23 +65,22 @@
 		<DropdownMenu.Trigger class="mt-3 btn-primary h-8 w-full text-xs">
 			Switch workspace <ChevronsUpDown class="size-3.5" />
 		</DropdownMenu.Trigger>
-		<DropdownMenu.Portal>
-			<DropdownMenu.Content class="menu w-56" side="top" sideOffset={8}>
-				{#each workspaces as w (w.id)}
-					<DropdownMenu.Item class="menu-item" onSelect={() => switchTo(w.id)}>
-						<span class="flex-1 truncate">{w.name}</span>
-						<span class="text-[10px] text-muted capitalize">{w.kind}</span>
-						{#if w.id === current?.id}<Check class="size-3.5 text-primary-500" />{/if}
-					</DropdownMenu.Item>
-				{/each}
-				<DropdownMenu.Separator class="my-1 h-px bg-line" />
-				<DropdownMenu.Item
-					class="menu-item text-primary-600"
-					onSelect={() => goto('/teams?create=1')}
-				>
-					<Plus class="size-3.5" /> New team or family
-				</DropdownMenu.Item>
-			</DropdownMenu.Content>
-		</DropdownMenu.Portal>
+		{@render menu()}
+	</DropdownMenu.Root>
+</div>
+
+<!-- Icon rail: the workspace badge itself opens the switcher. -->
+<div class="hidden compact:block">
+	<DropdownMenu.Root>
+		<DropdownMenu.Trigger
+			class="flex size-11 items-center justify-center rounded-xl border border-line bg-canvas transition-colors hover:border-primary-300"
+			aria-label="Switch workspace ({current?.name ?? 'Workspace'})"
+			title={current?.name ?? 'Workspace'}
+		>
+			<span class="flex size-8 items-center justify-center rounded-lg bg-primary-500 text-white">
+				<Gem class="size-4" />
+			</span>
+		</DropdownMenu.Trigger>
+		{@render menu()}
 	</DropdownMenu.Root>
 </div>

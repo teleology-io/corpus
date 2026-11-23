@@ -16,8 +16,8 @@
 		Check,
 		CodeXml,
 		GitBranch,
-		PanelLeftClose,
-		PanelLeftOpen,
+		PanelRightClose,
+		PanelRightOpen,
 		Plug,
 		Plus,
 		SquareTerminal,
@@ -98,7 +98,7 @@
 		</Tooltip.Trigger>
 		<Tooltip.Portal>
 			<Tooltip.Content
-				side="right"
+				side="left"
 				sideOffset={10}
 				class="z-50 rounded-md border border-line bg-surface px-2 py-1 text-xs font-medium text-ink shadow-pop"
 			>
@@ -174,7 +174,7 @@
 								<DropdownMenu.Portal>
 									<DropdownMenu.Content
 										class="menu w-56"
-										side="right"
+										side="left"
 										align="start"
 										sideOffset={10}
 										trapFocus={false}
@@ -294,9 +294,9 @@
 							class={row(false)}
 						>
 							{#if compact}
-								<PanelLeftOpen class="size-[18px] text-gray-400" />
+								<PanelRightOpen class="size-[18px] text-gray-400" />
 							{:else}
-								<PanelLeftClose class="size-[18px] text-gray-400" />
+								<PanelRightClose class="size-[18px] text-gray-400" />
 								<span>Collapse sidebar</span>
 							{/if}
 						</button>

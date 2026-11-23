@@ -141,7 +141,9 @@
 .wrx .sidebar {
 	/* Host for the Svelte WorkbenchSidebar, which sets its own (full / compact) width. */
 	flex-shrink: 0;
-	border-right: 1px solid var(--border);
+	/* Trial: projects panel on the right of the main content. */
+	order: 2;
+	border-left: 1px solid var(--border);
 	background: var(--background);
 	display: flex;
 	flex-direction: column;

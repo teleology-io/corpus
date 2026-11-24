@@ -3,13 +3,16 @@ export type Column = 'inbox' | 'today' | 'working' | 'ready' | 'done';
 /** A board card as `board()` in lib/server/conductor.ts returns it. */
 export interface ConductorCard {
 	id: string;
-	itemId: string;
+	/** Null for a ticket made in Corpus. */
+	itemId: string | null;
 	kind: 'ticket' | 'review';
 	column: Column;
 	provider: string;
 	title: string;
 	subtitle: string | null;
+	/** Empty for a ticket made in Corpus. */
 	url: string;
+	body: string | null;
 	state: string | null;
 	ref: string | null;
 	author: string | null;

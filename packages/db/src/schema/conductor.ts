@@ -12,9 +12,10 @@ export const conductorCard = pgTable(
 	{
 		id: id(),
 		userId: userRef('user_id').notNull(),
-		itemId: uuid('item_id')
-			.notNull()
-			.references(() => integrationItem.id, { onDelete: 'cascade' }),
+		/** Null for a ticket made in Corpus, which has its own title and body instead. */
+		itemId: uuid('item_id').references(() => integrationItem.id, { onDelete: 'cascade' }),
+		title: text('title'),
+		body: text('body'),
 		/** ticket | review */
 		kind: text('kind').notNull(),
 		/** inbox | today | working | ready | done */

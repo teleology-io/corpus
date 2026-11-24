@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { loadedEnvKeys } from '@corpus/db/env';
@@ -139,6 +139,26 @@ export function dockerEnv(profile) {
 	delete env.DOCKER_HOST;
 	env.DOCKER_HOST = `unix://${path.join(os.homedir(), '.colima', profile, 'docker.sock')}`;
 	return env;
+}
+const MCP_TOKEN_ENV = 'CORPUS_MCP_TOKEN';
+// Names safe to put in CLI flags. `corpus` is ours and is never an account server.
+const mcpNameOk = {
+	claude: (n) => /^[\w .:-]{1,100}$/.test(n) && n !== 'corpus',
+	codex: (n) => /^[\w-]{1,100}$/.test(n) && n !== 'corpus'
+};
+// `claude mcp list` prints "name: command or url - status"; `codex mcp list --json` an array.
+export function parseMcpList(provider, out) {
+	const found =
+		provider === 'codex'
+			? JSON.parse(out).map((s) => ({
+					name: String(s.name),
+					status: s.enabled === false ? 'Disabled' : 'Configured'
+				}))
+			: out.split('\n').flatMap((line) => {
+					const m = /^(.+?): .+ - (.+)$/.exec(line.trim());
+					return m ? [{ name: m[1], status: m[2].replace(/^[^\w]+/, '') }] : [];
+				});
+	return found.filter((s) => mcpNameOk[provider](s.name));
 }
 export const MODES = ['assess', 'implement', 'review'];
 const MAX_HOPS = 6;
@@ -350,11 +370,24 @@ export function codexGeneratedImages(sessionId, since, env = process.env) {
 }
 // Images reach Codex as --image files and Claude as image blocks on stream-json input. Claude runs
 // as one long-lived process per thread member that takes each turn as a stream-json line on stdin.
-export function agentArgs(agent, images = [], dirs = []) {
+// `mcpUrl` is Corpus's own MCP endpoint. Its token travels in the environment, never in argv.
+export function agentArgs(agent, images = [], dirs = [], mcpUrl = null) {
 	const model = agent.model?.trim();
+	// Servers from the human's own CLI account, switched on with /mcp. Workbench can't tell their reads
+	// from their writes, so only agents that may write get them.
+	const external = Engine.writes(agent) ? (agent.mcp ?? []).filter(mcpNameOk[agent.provider]) : [];
 	if (agent.provider === 'codex')
 		return [
 			'exec',
+			...(mcpUrl
+				? [
+						`mcp_servers.corpus.url=${JSON.stringify(mcpUrl)}`,
+						`mcp_servers.corpus.bearer_token_env_var="${MCP_TOKEN_ENV}"`,
+						// The endpoint checks this agent's permissions itself on every call.
+						'mcp_servers.corpus.default_tools_approval_mode="approve"'
+					].flatMap((v) => ['-c', v])
+				: []),
+			...external.flatMap((n) => ['-c', `mcp_servers.${n}.default_tools_approval_mode="approve"`]),
 			// Codex otherwise refuses a project folder that isn't a Git repository.
 			'--skip-git-repo-check',
 			...(agent.sessionId
@@ -387,6 +420,28 @@ export function agentArgs(agent, images = [], dirs = []) {
 		agent.fullAccess ? 'bypassPermissions' : agent.mode === 'implement' ? 'acceptEdits' : 'plan',
 		...(model ? ['--model', model] : []),
 		...(agent.sessionId ? ['--resume', agent.sessionId] : []),
+		...(mcpUrl
+			? [
+					'--mcp-config',
+					JSON.stringify({
+						mcpServers: {
+							corpus: {
+								type: 'http',
+								url: mcpUrl,
+								headers: { Authorization: `Bearer \${${MCP_TOKEN_ENV}}` }
+							}
+						}
+					})
+				]
+			: []),
+		...(mcpUrl || external.length
+			? [
+					'--allowedTools',
+					[...(mcpUrl ? ['corpus'] : []), ...external]
+						.map((n) => `mcp__${n.replace(/[^\w-]/g, '_')}`)
+						.join(',')
+				]
+			: []),
 		// Lets Claude read attached files kept outside the workspace.
 		...dirs.flatMap((d) => ['--add-dir', d])
 	];
@@ -514,6 +569,9 @@ export class Engine {
 		// (Monitor, background Bash) keep running and can wake the agent between turns.
 		this.sessions = new Map();
 		this.commandChildren = new Map();
+		// Corpus MCP tokens, in memory only: token -> { chatId, memberId }. One per live agent process.
+		this.mcpTokens = new Map();
+		this.mcpUrl = null;
 		this.queue = [];
 	}
 	// Agent runs call this for every output line. Coalesce into one disk write + one client
@@ -1166,6 +1224,19 @@ export class Engine {
 			m.sessionId = null;
 			m.seen = 0;
 		}
+		if (patch.mcp !== undefined) {
+			const ok = mcpNameOk[m.provider];
+			if (
+				!Array.isArray(patch.mcp) ||
+				patch.mcp.length > 50 ||
+				!patch.mcp.every((n) => typeof n === 'string' && ok(n))
+			)
+				throw new Error('Invalid MCP servers');
+			if (m.status !== 'idle') throw new Error('Stop this agent before changing its MCP servers');
+			m.mcp = [...new Set(patch.mcp)];
+			// Same conversation, new process: the next turn resumes with the new tool rules.
+			this.killSession(`${chat.id}:${m.id}`);
+		}
 		if (typeof patch.role === 'string') m.role = patch.role.trim().slice(0, 4000);
 		if (model !== m.model) {
 			m.model = model;
@@ -1799,17 +1870,23 @@ export class Engine {
 	}
 	// Codex has no streaming input, so each turn is its own `codex exec` process.
 	runCodex(t, chat, member, w, environment, prompt, images) {
+		const mcp = this.mcpAccess(chat, member);
 		let pending = '';
 		let stderr = '';
 		let child;
 		try {
-			child = this.spawn(member.provider, agentArgs(member, images, chat.extraDirs || []), {
-				cwd: w.path,
-				env: this.workspaceEnv(w, environment),
-				detached: process.platform !== 'win32',
-				stdio: ['pipe', 'pipe', 'pipe']
-			});
+			child = this.spawn(
+				member.provider,
+				agentArgs(member, images, chat.extraDirs || [], mcp.url),
+				{
+					cwd: w.path,
+					env: { ...this.workspaceEnv(w, environment), ...mcp.env },
+					detached: process.platform !== 'win32',
+					stdio: ['pipe', 'pipe', 'pipe']
+				}
+			);
 		} catch (error) {
+			this.mcpTokens.delete(mcp.token);
 			t.finish(null, error);
 			return;
 		}
@@ -1833,6 +1910,7 @@ export class Engine {
 			this.changed();
 		});
 		const done = (code, error) => {
+			this.mcpTokens.delete(mcp.token);
 			if (pending) line(pending);
 			pending = '';
 			t.finish(code, error, stderr);
@@ -1863,17 +1941,19 @@ export class Engine {
 		if (live) return live;
 		const uploads = this.uploads(chat.id);
 		fs.mkdirSync(uploads, { recursive: true, mode: 0o700 });
+		const mcp = this.mcpAccess(chat, member);
 		const child = this.spawn(
 			member.provider,
-			agentArgs(member, [], [uploads, ...(chat.extraDirs || [])]),
+			agentArgs(member, [], [uploads, ...(chat.extraDirs || [])], mcp.url),
 			{
 				cwd: w.path,
-				env: this.workspaceEnv(w, environment),
+				env: { ...this.workspaceEnv(w, environment), ...mcp.env },
 				detached: process.platform !== 'win32',
 				stdio: ['pipe', 'pipe', 'pipe']
 			}
 		);
 		const s = { key, chat, member, w, child, pending: '', stderr: '', turn: null, dead: false };
+		s.mcpToken = mcp.token;
 		this.sessions.set(key, s);
 		member.live = true;
 		child.stdout.setEncoding('utf8');
@@ -1924,6 +2004,7 @@ export class Engine {
 	sessionClosed(s, code, error) {
 		if (s.closed) return;
 		s.closed = true;
+		this.mcpTokens.delete(s.mcpToken);
 		if (this.sessions.get(s.key) === s) {
 			this.sessions.delete(s.key);
 			s.member.live = false;
@@ -1941,6 +2022,7 @@ export class Engine {
 		const s = this.sessions.get(key);
 		if (!s) return;
 		this.sessions.delete(key);
+		this.mcpTokens.delete(s.mcpToken);
 		s.dead = true;
 		s.member.live = false;
 		killGroup(s.child, 'SIGTERM');
@@ -1969,6 +2051,33 @@ export class Engine {
 			timer.unref();
 		}
 		this.changed();
+	}
+	// A token for one agent process. It names the agent, not its permissions: those are read from the
+	// thread on every call, so a change in the agent's dialog applies to a token already handed out.
+	mcpAccess(chat, member) {
+		if (!this.mcpUrl || chat.corpusTools === false) return { url: null, token: null, env: {} };
+		const token = randomBytes(32).toString('base64url');
+		this.mcpTokens.set(token, { chatId: chat.id, memberId: member.id });
+		return { url: this.mcpUrl, token, env: { [MCP_TOKEN_ENV]: token } };
+	}
+	// The agent behind a token and whether it may write right now, or null.
+	mcpAgent(token) {
+		const t = this.mcpTokens.get(token);
+		const chat = t && this.store.state.chats.find((c) => c.id === t.chatId);
+		const member = chat?.members.find((m) => m.id === t.memberId);
+		return member ? { chat, member, canWrite: Engine.writes(member) } : null;
+	}
+	// The MCP servers on the thread lead's own CLI account.
+	async mcpServers(chatId) {
+		const chat = this.store.get('chats', chatId);
+		const lead = chat.members.find((m) => m.id === chat.leadId) || chat.members[0];
+		const w = this.store.get('workspaces', chat.workspaceId);
+		const out = await command(
+			lead.provider,
+			lead.provider === 'codex' ? ['mcp', 'list', '--json'] : ['mcp', 'list'],
+			{ cwd: w.path, env: agentEnv(), timeout: 60000 }
+		);
+		return { memberId: lead.id, servers: parseMcpList(lead.provider, out) };
 	}
 	// What an agent or a Run tab command gets: its workspace's Docker target, ports and env values.
 	workspaceEnv(w, environment) {

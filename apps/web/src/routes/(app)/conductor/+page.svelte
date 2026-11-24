@@ -370,19 +370,22 @@
 					>
 				</div>
 				<div class="flex gap-1">
-					<a
-						href={selected.url}
-						target="_blank"
-						rel="noreferrer"
-						class="btn-icon size-8"
-						aria-label="Open in {selected.provider}"><ExternalLink class="size-4" /></a
-					>
+					{#if selected.url}<a
+							href={selected.url}
+							target="_blank"
+							rel="noreferrer"
+							class="btn-icon size-8"
+							aria-label="Open in {selected.provider}"><ExternalLink class="size-4" /></a
+						>{/if}
 					<button class="btn-icon size-8" aria-label="Close" onclick={() => (selectedId = null)}
 						><X class="size-4" /></button
 					>
 				</div>
 			</div>
 			<div class="flex-1 space-y-4 p-5">
+				{#if selected.body}<p class="text-sm whitespace-pre-wrap text-muted">
+						{selected.body}
+					</p>{/if}
 				{#if selected.kind === 'review'}
 					<section class="card p-4">
 						<h3 class="font-semibold">Review</h3>

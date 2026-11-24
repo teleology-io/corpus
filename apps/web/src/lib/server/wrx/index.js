@@ -19,6 +19,7 @@ import {
 	clientChats,
 	repositoryRoot
 } from './core.js';
+import { optionalEnv } from '@corpus/db';
 import { searchRank } from '../search-matching.js';
 import { Terminals } from './terminal.js';
 
@@ -67,6 +68,11 @@ function host(userId) {
 	const engine = new Engine(store, () => {
 		for (const send of clients) send('event: change\ndata: {}\n\n');
 	});
+	// Agents run on this machine, so a separate address can be set when PUBLIC_APP_URL isn't reachable here.
+	engine.mcpUrl = new URL(
+		'/api/mcp',
+		optionalEnv('CORPUS_MCP_URL') ?? optionalEnv('PUBLIC_APP_URL') ?? 'http://localhost:2222'
+	).href;
 	h = { directory, store, engine, clients, terminals: new Terminals() };
 	hosts.set(userId, h);
 	void probeRuntimes();
@@ -452,7 +458,7 @@ const CLAUDE_MODELS = [
 	['claude-haiku-5-5', 'Claude Haiku 5.5'],
 	['claude-haiku-4-5', 'Claude Haiku 4.5']
 ].map(([value, label]) => ({ value, label }));
-export async function handleWrx({ request, url, route, userId }) {
+export async function handleWrx({ request, url, route, userId, corpusWorkspaceId }) {
 	try {
 		const { store, engine, directory, terminals } = host(userId);
 		const remote = !LOOPBACK.has(url.hostname);
@@ -526,6 +532,8 @@ export async function handleWrx({ request, url, route, userId }) {
 					claude: CLAUDE_MODELS
 				});
 			}
+			if (route === 'mcp-servers')
+				return json(200, await engine.mcpServers(url.searchParams.get('chatId')));
 			if (route === 'state')
 				return json(200, {
 					...store.state,
@@ -655,6 +663,7 @@ export async function handleWrx({ request, url, route, userId }) {
 				break;
 			case 'chats':
 				result = engine.chat(body);
+				result.corpusWorkspaceId = corpusWorkspaceId;
 				break;
 			case 'members':
 				result = engine.addMember(body.chatId, body);
@@ -669,6 +678,8 @@ export async function handleWrx({ request, url, route, userId }) {
 				result = engine.removeMember(body.chatId, body.memberId);
 				break;
 			case 'turn':
+				// Corpus tools act in the workspace the human last wrote from.
+				store.get('chats', body.chatId).corpusWorkspaceId = corpusWorkspaceId;
 				result = engine.turn(body.chatId, body.text, body.attachments ?? body.images);
 				break;
 			case 'cancel':
@@ -775,6 +786,56 @@ if (!globalThis.__wrxProbe) {
 	globalThis.__wrxProbe.unref();
 }
 
+// ----- Corpus MCP bridge (lib/server/mcp) -----
+
+/** The agent holding this token, or null. Only tokens of live agent processes resolve. */
+export function agentForToken(token) {
+	for (const [userId, { engine }] of hosts) {
+		const agent = engine.mcpAgent?.(token);
+		if (agent) return { userId, ...agent };
+	}
+	return null;
+}
+
+/** Projects an agent can start a thread in, with their workspaces. */
+export function knownProjects(userId) {
+	const { projects, workspaces } = host(userId).store.state;
+	return projects.map((p) => ({
+		id: p.id,
+		name: p.name,
+		path: p.path,
+		workspaces: workspaces
+			.filter((w) => w.projectId === p.id)
+			.map((w) => ({ id: w.id, name: w.name, branch: w.branch, primary: w.path === p.path }))
+	}));
+}
+
+const MAX_SPAWNED = 5;
+/**
+ * Starts a one-agent thread for an agent. Only in known workspaces, never with full access, never
+ * from a thread an agent started, and at most MAX_SPAWNED per parent thread.
+ */
+export function spawnThread(userId, parent, { workspaceId, title, prompt, provider, mode }) {
+	const { engine, store } = host(userId);
+	if (parent.spawnedBy) throw new Error('Threads started by an agent cannot start more threads');
+	if (store.state.chats.filter((c) => c.spawnedBy === parent.id).length >= MAX_SPAWNED)
+		throw new Error(`This thread already started ${MAX_SPAWNED} threads`);
+	store.get('workspaces', workspaceId);
+	requireText(prompt, 'Prompt', 20000);
+	const chat = engine.chat({
+		workspaceId,
+		title,
+		members: [{ provider, mode, name: 'Lead' }]
+	});
+	chat.spawnedBy = parent.id;
+	chat.corpusWorkspaceId = parent.corpusWorkspaceId;
+	engine.turn(chat.id, `Started by an agent in the thread “${parent.title}”:\n\n${prompt}`);
+	return {
+		chatId: chat.id,
+		href: `/workbench?${new URLSearchParams({ workspace: workspaceId, tab: 'agents', chat: chat.id })}`
+	};
+}
+
 // ----- Conductor bridge -----
 // Conductor (lib/server/conductor.ts) hands tickets to Workbench: a worktree in each chosen repository
 // and one agent thread (in the first; the rest are added as writable directories), then reads the
@@ -856,6 +917,8 @@ export async function conductorStart(
 		title: title.slice(0, 200),
 		members: team
 	});
+	// Ticket agents read text other people wrote, so they don't get the user's calendar, notes or board.
+	chat.corpusTools = false;
 	if (workspaces.length > 1) chat.extraDirs = workspaces.slice(1).map((w) => w.path);
 	engine.turn(chat.id, prompt);
 	return { chatId: chat.id, repos };

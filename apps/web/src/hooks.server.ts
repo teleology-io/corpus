@@ -13,6 +13,8 @@ const PUBLIC_PATHS = [
 	'/uploads/',
 	'/api/auth/',
 	'/calendar/feed/',
+	// Agents authenticate with their own bearer token
+	'/api/mcp',
 	'/manifest.webmanifest',
 	'/favicon.svg',
 	'/sw.js'

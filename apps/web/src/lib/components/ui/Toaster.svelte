@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { linkTarget } from '#lib/links.js';
 	import { fly } from 'svelte/transition';
 	import { Bell, CircleCheck, CircleAlert, X } from '@lucide/svelte';
 	import { dismiss, dismissAll, toasts } from '#lib/stores/toast.svelte.js';
@@ -39,6 +40,7 @@
 				{#if t.href}
 					<a
 						href={t.href}
+						{...linkTarget(t.href)}
 						class="text-sm font-semibold text-ink hover:underline"
 						onclick={() => dismiss(t.id)}>{t.title}</a
 					>

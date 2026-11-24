@@ -5,6 +5,7 @@
 	import { api } from '#lib/api.js';
 	import { live } from '#lib/stores/live.svelte.js';
 	import type { NotificationDTO } from '#lib/types.js';
+	import { linkTarget } from '#lib/links.js';
 
 	let open = $state(false);
 	let loading = $state(false);
@@ -63,6 +64,7 @@
 					{#each live.latest as n (n.id)}
 						<a
 							href={n.href ?? '#'}
+							{...linkTarget(n.href)}
 							onclick={() => openItem(n)}
 							class="flex gap-3 border-b border-line/70 px-4 py-3 last:border-0 hover:bg-canvas"
 						>

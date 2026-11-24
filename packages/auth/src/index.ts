@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 import { db, env, optionalEnv, schema } from '@corpus/db';
 import { onUserCreated, initialWorkspaceId, seedWorkspace } from './workspace';
 
-export { resolveWorkspace } from './workspace';
+export { initialWorkspaceId, isMember, resolveWorkspace } from './workspace';
 import { sendInvitation } from './email';
 import os from 'node:os';
 

@@ -391,7 +391,12 @@ export function mountWrx(root, { onSidebar } = {}) {
 		['/new', 'Start a new thread'],
 		['/stop', 'Stop running agents and clear the queue'],
 		['/lead', 'Make an agent the thread lead', '@agent'],
-		['/auto', 'Toggle auto handoffs (no pause after many agent turns)', '[on|off]']
+		['/auto', 'Toggle auto handoffs (no pause after many agent turns)', '[on|off]'],
+		['/mcp', "Choose which of the lead's account MCP servers it can use"],
+		['/event', 'Have an agent add or change a calendar event', '<what and when>'],
+		['/note', 'Have an agent write a note', '<what about>'],
+		['/task', 'Have an agent find or create a task, or change its state', '<task>'],
+		['/spawn', 'Have an agent start a thread in another project', '<project and work>']
 	];
 	const openKeys = new Set();
 	let menu = null,
@@ -1004,6 +1009,30 @@ export function mountWrx(root, { onSidebar } = {}) {
 		drafts.set(chatId, box.value);
 		updateMenu();
 	}
+	// Commands that ask an agent (the lead, unless the text @mentions another) to use Corpus's tools.
+	const TOOL_COMMANDS = {
+		'/event': 'Use the corpus calendar tools for this:',
+		'/note': 'Use the corpus note tools for this:',
+		'/task':
+			'Use the corpus Conductor tools (or the task tools if Conductor is off) for this. Look for an existing card or task first; create one only if there is none:',
+		'/spawn': 'Use the corpus list_projects and start_thread tools for this:'
+	};
+	async function mcpDialog(chat) {
+		const lead = member(chat, chat.leadId);
+		toast(`Checking @${lead.handle}'s MCP servers…`);
+		const { memberId, servers } = await api(`mcp-servers?chatId=${encodeURIComponent(chat.id)}`);
+		const on = new Set(lead.mcp || []);
+		const writes = lead.mode === 'implement' || lead.fullAccess;
+		const locked = lead.status !== 'idle';
+		modal(
+			`MCP servers for ${esc(lead.name)}`,
+			`From the ${lead.provider === 'codex' ? 'Codex' : 'Claude Code'} account on this computer. Enabled servers run without asking, including anything they can write or send.${writes ? '' : ' They apply once this agent has write access.'}${lead.fullAccess ? ' Full access already allows every server.' : ''}`,
+			`${servers.length ? servers.map((s) => `<label class="check"><input type="checkbox" name="mcp" value="${esc(s.name)}" ${on.has(s.name) ? 'checked' : ''} ${locked ? 'disabled' : ''}> ${esc(s.name)} <small>${esc(s.status)}</small></label>`).join('') : '<p class="muted">No MCP servers on this account.</p>'}${locked ? '<small>Stop this agent to change its MCP servers.</small>' : ''}`,
+			locked ? 'Close' : 'Save',
+			(_body, form) =>
+				locked ? null : api('member', { chatId: chat.id, memberId, mcp: form.getAll('mcp') })
+		);
+	}
 	async function slashCommand(text) {
 		const [name, ...rest] = text.trim().split(/\s+/);
 		const arg = rest.join(' ').replace(/^@/, '').toLowerCase();
@@ -1019,6 +1048,25 @@ export function mountWrx(root, { onSidebar } = {}) {
 		if (name === '/stop') {
 			await api('cancel', { chatId });
 			await refresh();
+			return true;
+		}
+		if (name === '/mcp') {
+			await mcpDialog(chat);
+			return true;
+		}
+		if (TOOL_COMMANDS[name]) {
+			const request = text.trim().slice(name.length).trim();
+			if (!request) throw new Error(`Usage: ${name} ${SLASH.find(([n]) => n === name)[2]}`);
+			await api('turn', {
+				chatId,
+				text: `${TOOL_COMMANDS[name]}\n\n${request}`,
+				attachments: (attachments.get(chatId) || []).map(({ name, type, data }) => ({
+					name,
+					type,
+					data
+				}))
+			});
+			attachments.delete(chatId);
 			return true;
 		}
 		if (name === '/auto') {
@@ -1123,7 +1171,7 @@ export function mountWrx(root, { onSidebar } = {}) {
 		modal(
 			`${esc(m.name)} <span class="muted">@${esc(m.handle)}</span>`,
 			`${esc(m.provider === 'codex' ? 'Codex' : 'Claude Code')} · ${m.sessionId ? `session ${esc(m.sessionId.slice(0, 8))}` : 'not started yet'}${m.costUsd ? ` · ${money(m.costUsd)} so far` : ''}${m.activeModel ? ` · ${esc(m.activeModel)}` : ''}`,
-			`${select('Purpose', 'mode', modeOptions(m.mode))}<label class="check"><input type="checkbox" id="member-write" ${m.mode === 'implement' ? 'checked' : ''} ${m.status !== 'idle' ? 'disabled' : ''}> Allow workspace writes</label><small>${m.status !== 'idle' ? 'Stop this agent to change permissions.' : 'Write access selects Implement; read-only selects Assess. Changes start a fresh session with thread context.'}</small><label class="check"><input type="checkbox" id="member-full" name="fullAccess" ${m.fullAccess ? 'checked' : ''} ${m.status !== 'idle' ? 'disabled' : ''}> Full access — skip all permission prompts</label><small>Runs shell commands, network and MCP tools without asking (Claude: bypassPermissions · Codex: danger-full-access). Use only in workspaces you trust.</small>${select('Model', 'model', modelOptions)}<label id="custom-model-label" ${customModel ? '' : 'hidden'}>Custom model<input name="customModel" value="${esc(customModel ? m.model : '')}" placeholder="Model ID"></label><small>${m.status !== 'idle' ? 'Stop this agent to change models.' : 'Model changes apply on the next turn with a fresh session and thread context.'}</small><label>Instructions<textarea name="role" rows="5">${esc(m.role)}</textarea></label><label class="check"><input type="checkbox" name="lead" ${m.id === chat.leadId ? 'checked disabled' : ''}> Thread lead — receives messages that don't @mention anyone</label>${chat.members.length > 1 ? `<button type="button" class="danger-link" id="remove-member">Remove ${esc(m.name)} from thread</button>` : ''}`,
+			`${select('Purpose', 'mode', modeOptions(m.mode))}<label class="check"><input type="checkbox" id="member-write" ${m.mode === 'implement' ? 'checked' : ''} ${m.status !== 'idle' ? 'disabled' : ''}> Allow workspace writes</label><small>${m.status !== 'idle' ? 'Stop this agent to change permissions.' : 'Write access selects Implement; read-only selects Assess. Also decides whether Corpus tools (calendar, notes, tasks, threads) can change things. Changes start a fresh session with thread context.'}</small><label class="check"><input type="checkbox" id="member-full" name="fullAccess" ${m.fullAccess ? 'checked' : ''} ${m.status !== 'idle' ? 'disabled' : ''}> Full access — skip all permission prompts</label><small>Runs shell commands, network and MCP tools without asking (Claude: bypassPermissions · Codex: danger-full-access). Use only in workspaces you trust.</small>${select('Model', 'model', modelOptions)}<label id="custom-model-label" ${customModel ? '' : 'hidden'}>Custom model<input name="customModel" value="${esc(customModel ? m.model : '')}" placeholder="Model ID"></label><small>${m.status !== 'idle' ? 'Stop this agent to change models.' : 'Model changes apply on the next turn with a fresh session and thread context.'}</small><label>Instructions<textarea name="role" rows="5">${esc(m.role)}</textarea></label><label class="check"><input type="checkbox" name="lead" ${m.id === chat.leadId ? 'checked disabled' : ''}> Thread lead — receives messages that don't @mention anyone</label>${chat.members.length > 1 ? `<button type="button" class="danger-link" id="remove-member">Remove ${esc(m.name)} from thread</button>` : ''}`,
 			'Save',
 			(body) =>
 				api('member', {
@@ -1152,6 +1200,8 @@ export function mountWrx(root, { onSidebar } = {}) {
 		purpose.disabled = m.status !== 'idle';
 		purpose.onchange = () => {
 			write.checked = purpose.value === 'implement';
+			// Full access writes whatever the purpose says, so a read-only purpose turns it off.
+			if (!write.checked) full.checked = false;
 		};
 		const full = $('#member-full');
 		write.onchange = () => {
@@ -3133,9 +3183,7 @@ export function mountWrx(root, { onSidebar } = {}) {
 		try {
 			if (text.startsWith('/') && !text.startsWith('//')) {
 				if (!(await slashCommand(text)))
-					throw new Error(
-						`Unknown command ${text.split(/\s/)[0]}. Try /add, /new, /stop or /lead.`
-					);
+					throw new Error(`Unknown command ${text.split(/\s/)[0]}. Type / to see them.`);
 			} else {
 				await api('turn', {
 					chatId,

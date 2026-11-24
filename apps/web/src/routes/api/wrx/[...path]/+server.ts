@@ -9,7 +9,13 @@ const handle: RequestHandler = ({ locals, request, url, params }) => {
 	const ctx = requireCtx(locals);
 	if (!workbenchAllowed(ctx.user.email))
 		return json({ error: 'Workbench is not enabled for this account' }, { status: 403 });
-	return handleWrx({ request, url, route: params.path, userId: ctx.userId });
+	return handleWrx({
+		request,
+		url,
+		route: params.path,
+		userId: ctx.userId,
+		corpusWorkspaceId: ctx.workspaceId
+	});
 };
 
 export const GET = handle;

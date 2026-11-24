@@ -27,11 +27,16 @@ self.addEventListener('notificationclick', (event) => {
 	const url = new URL(href, self.location.origin).href;
 	event.waitUntil(
 		(async () => {
+			// External targets (GitHub PRs, etc.) open in a new window so Corpus stays put.
+			if (new URL(url).origin !== self.location.origin) {
+				await self.clients.openWindow(url);
+				return;
+			}
 			const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
 			for (const client of windows) {
 				if (new URL(client.url).origin === self.location.origin) {
 					await client.focus();
-					if (url.startsWith(self.location.origin)) client.navigate(url);
+					client.navigate(url);
 					return;
 				}
 			}

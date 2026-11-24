@@ -26,6 +26,11 @@ import {
 const { conductorCard: card, conductorEvent: event, integrationItem: item } = schema;
 const conn = schema.integrationConnection;
 
+// Cards made in Corpus have no integration item: their own title, no link.
+const cardTitle = sql<string>`coalesce(${item.title}, ${card.title}, '')`;
+const cardUrl = sql<string>`coalesce(${item.url}, '')`;
+const cardProvider = sql<string>`coalesce(${conn.provider}, 'corpus')`;
+
 export const COLUMNS = ['inbox', 'today', 'working', 'ready', 'done'] as const;
 export type Column = (typeof COLUMNS)[number];
 
@@ -326,10 +331,10 @@ function watch(userId: string) {
 async function syncWorking(userId: string) {
 	const { readyWhen } = await conductorSettings(userId);
 	const rows = await db
-		.select({ card, title: item.title, url: item.url, provider: conn.provider })
+		.select({ card, title: cardTitle, url: cardUrl, provider: cardProvider })
 		.from(card)
-		.innerJoin(item, eq(card.itemId, item.id))
-		.innerJoin(conn, eq(item.connectionId, conn.id))
+		.leftJoin(item, eq(card.itemId, item.id))
+		.leftJoin(conn, eq(item.connectionId, conn.id))
 		.where(
 			and(
 				eq(card.userId, userId),
@@ -373,27 +378,36 @@ export async function board(userId: string) {
 			card,
 			item: {
 				id: item.id,
-				title: item.title,
 				subtitle: item.subtitle,
-				url: item.url,
 				state: item.state,
-				kind: item.kind,
 				updatedAt: item.externalUpdatedAt,
 				resolvedAt: item.resolvedAt,
 				payload: item.payload
 			},
-			provider: conn.provider
+			title: cardTitle,
+			url: cardUrl,
+			provider: cardProvider
 		})
 		.from(card)
-		.innerJoin(item, eq(card.itemId, item.id))
-		.innerJoin(conn, eq(item.connectionId, conn.id))
+		.leftJoin(item, eq(card.itemId, item.id))
+		.leftJoin(conn, eq(item.connectionId, conn.id))
 		.where(eq(card.userId, userId))
 		.orderBy(desc(card.updatedAt));
 
 	const byItem = new Map(reviews.map((r) => [r.id, r]));
 	const moves: { id: string; column: Column; text: string }[] = [];
-	const cards = rows.flatMap(({ card: c, item: i, provider }) => {
-		const r = c.kind === 'review' ? byItem.get(i.id) : undefined;
+	const cards = rows.flatMap(({ card: c, item: linked, title, url, provider }) => {
+		const i = {
+			id: linked?.id ?? null,
+			subtitle: linked?.subtitle ?? null,
+			state: linked?.state ?? null,
+			updatedAt: linked?.updatedAt ?? null,
+			resolvedAt: linked?.resolvedAt ?? null,
+			payload: linked?.payload ?? null,
+			title,
+			url
+		};
+		const r = c.kind === 'review' && i.id ? byItem.get(i.id) : undefined;
 		let column = c.column as Column;
 		// A review only moves forward on its own; the user can still drag it anywhere.
 		const derived = c.kind === 'review' ? reviewColumn(r) : null;
@@ -422,6 +436,7 @@ export async function board(userId: string) {
 				title: i.title,
 				subtitle: i.subtitle,
 				url: i.url,
+				body: c.body,
 				state: i.state,
 				ref: ref(provider, i),
 				author: (i.payload as { author?: string } | null)?.author ?? null,
@@ -611,7 +626,7 @@ async function prDescription(input: {
 	related: string[];
 }) {
 	const footer = [
-		`Ticket: ${input.ticket.url}`,
+		input.ticket.url ? `Ticket: ${input.ticket.url}` : '',
 		input.related.length ? `Related PRs:\n${input.related.join('\n')}` : '',
 		'_Opened by Conductor._'
 	]
@@ -663,7 +678,8 @@ async function prDescription(input: {
 			input.ticket.title,
 			'',
 			'## Why',
-			input.ticketBody?.trim().slice(0, 2000) || `See ${input.ticket.url}.`,
+			input.ticketBody?.trim().slice(0, 2000) ||
+				(input.ticket.url ? `See ${input.ticket.url}.` : input.ticket.title),
 			'',
 			'## How',
 			input.diff.stat.trim() ? '```\n' + input.diff.stat.trim() + '\n```' : 'See the diff.'
@@ -797,14 +813,13 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 	const [row] = await db
 		.select({
 			card,
-			title: item.title,
-			url: item.url,
-			subtitle: item.subtitle,
-			provider: conn.provider
+			title: cardTitle,
+			url: cardUrl,
+			provider: cardProvider
 		})
 		.from(card)
-		.innerJoin(item, eq(card.itemId, item.id))
-		.innerJoin(conn, eq(item.connectionId, conn.id))
+		.leftJoin(item, eq(card.itemId, item.id))
+		.leftJoin(conn, eq(item.connectionId, conn.id))
 		.where(and(eq(card.id, cardId), eq(card.userId, userId)))
 		.limit(1);
 	if (!row) error(404, 'Card not found');
@@ -826,9 +841,11 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 		if (chosen.some((p) => !allowed.has(p))) error(400, 'Unknown repository');
 	}
 	const prs = previous.flatMap((r) => (r.pr ? [`${r.pr.repo}#${r.pr.number}`] : []));
-	const description = await itemPreview(userId, row.card.itemId)
-		.then((p) => p?.body ?? '')
-		.catch(() => '');
+	const description = row.card.itemId
+		? await itemPreview(userId, row.card.itemId)
+				.then((p) => p?.body ?? '')
+				.catch(() => '')
+		: (row.card.body ?? '');
 	// What each repository is, so the agent knows where a change belongs.
 	const repoLines = (previous.length ? previous.map((r) => r.path).filter(Boolean) : chosen).map(
 		(p) => {
@@ -839,7 +856,7 @@ export async function startTicket(userId: string, cardId: string, repoPaths: str
 	);
 	const prompt = [
 		`Work this ticket${tref ? ` (${tref})` : ''}: ${row.title}`,
-		row.url,
+		...(row.url ? [row.url] : []),
 		// Workbench wakes every @handle in a message; a ticket mentioning someone must not start an agent.
 		...(description ? ['', 'Description:', noMentions(description.slice(0, 20000))] : []),
 		...(repoLines.length
@@ -961,6 +978,7 @@ export const LABEL: Record<Column, string> = {
 
 /** A short id for the card header: ENG-123 for Linear, #42 for GitHub. */
 function ref(provider: string, i: { url: string }) {
+	if (!i.url) return null;
 	if (provider === 'linear') return i.url.match(/\/issue\/([A-Z]+-\d+)/)?.[1] ?? null;
 	const n = i.url.match(/\/(?:pull|issues)\/(\d+)/)?.[1];
 	return n ? `#${n}` : null;
@@ -975,7 +993,7 @@ async function activity(userId: string, limit = 30) {
 			text: event.text,
 			actor: event.actor,
 			at: event.at,
-			title: item.title
+			title: sql<string | null>`coalesce(${item.title}, ${card.title})`
 		})
 		.from(event)
 		.leftJoin(card, eq(event.cardId, card.id))
@@ -996,7 +1014,7 @@ async function ownCards(userId: string, ids: string[]) {
 }
 
 /** Moves one card. Records who did it so the rail reads as a timeline. */
-export async function moveCard(userId: string, cardId: string, column: Column) {
+export async function moveCard(userId: string, cardId: string, column: Column, actor = 'you') {
 	const [c] = await ownCards(userId, [cardId]);
 	if (c!.column === column) return;
 	await db.update(card).set({ column, clearedAt: null }).where(eq(card.id, cardId));
@@ -1005,8 +1023,33 @@ export async function moveCard(userId: string, cardId: string, column: Column) {
 		cardId,
 		column === 'done' ? 'shipped' : 'moved',
 		`Moved to ${LABEL[column]}`,
-		'you'
+		actor
 	);
+}
+
+/** Makes a ticket that lives only in Corpus, unless a card on the board already has the title. */
+export async function createCard(
+	userId: string,
+	input: { title: string; body: string; column: Column },
+	actor = 'you'
+) {
+	const same = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+	const existing = (await board(userId)).cards.find(
+		(c) => c.column !== 'done' && same(c.title) === same(input.title)
+	);
+	if (existing) return { id: existing.id, column: existing.column, created: false };
+	const [row] = await db
+		.insert(card)
+		.values({
+			userId,
+			kind: 'ticket',
+			title: input.title,
+			body: input.body || null,
+			column: input.column
+		})
+		.returning({ id: card.id });
+	await log(userId, row!.id, 'created', `Created in ${LABEL[input.column]}`, actor);
+	return { id: row!.id, column: input.column, created: true };
 }
 
 /**
